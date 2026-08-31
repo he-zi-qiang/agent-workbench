@@ -1,4 +1,5 @@
 {
+  "corpus_digest": "c5c0d003c37594da",
   "gold_digest": "55ec24c7d2b86062",
   "index_identity": "BAAI/bge-m3@main+approx-word-v1-512-64+BAAI/bge-m3@main-sparse via llama_index+hybrid",
   "question_count": 52,
@@ -7,6 +8,6 @@
     "mrr": 0.9198717948717949,
     "recall_at_1": 0.8846153846153846,
     "recall_at_3": 0.9615384615384616,
-    "retrieval_latency_ms": 37006.30533300864
+    "retrieval_latency_ms": 64480.92443749192
   }
 }

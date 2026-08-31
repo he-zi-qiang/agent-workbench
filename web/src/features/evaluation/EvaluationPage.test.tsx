@@ -116,8 +116,19 @@ describe("EvaluationPage", () => {
     // `RAG_VIEWS`, not `VIEWS`: the triage report carries a `gold_digest` of
     // its own and is not a retrieval report, so counting it here would demand a
     // fifth retrieval table that should not exist.
+    //
+    // Keyed on the corpus digest as well, because that is what the page groups
+    // on since 2026-08-31 — two reports over two different corpora are not
+    // comparable however much their gold digests agree, and the corpus edit
+    // that made this real was one this repository owed (the old corpus taught
+    // a fusion this system no longer performs).
     const digests = new Set(
-      RAG_VIEWS.map((view) => String(view.payload.gold_digest)),
+      RAG_VIEWS.map((view) => {
+        const corpus = view.payload.corpus_digest;
+        return `${String(view.payload.gold_digest)}:${
+          typeof corpus === "string" ? corpus : ""
+        }`;
+      }),
     );
 
     // One table per question set. Four rows under one heading read as a
@@ -191,6 +202,65 @@ describe("EvaluationPage", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("table", { name: /题库 a26070043b0ffde1/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("splits the table when the same questions were asked of two corpora", async () => {
+    // The other half of comparability, and the one that was missing until
+    // 2026-08-31: a report used to record which *questions* produced it and
+    // not which *corpus*. So an edited corpus — and this repository owed one,
+    // because the old text taught a fusion ADR-033 had already moved — left
+    // two incomparable reports carrying the same gold digest, side by side
+    // under one heading, which reads as a ranking.
+    vi.mocked(getEvaluationReports).mockResolvedValue({
+      reports: [
+        {
+          suite: "rag",
+          name: "hybrid-reference",
+          payload: { ...hybridReference, corpus_digest: "1111111111111111" },
+        },
+        {
+          suite: "rag",
+          name: "hybrid-llama_index",
+          payload: { ...hybridLlamaIndex, corpus_digest: "2222222222222222" },
+        },
+      ],
+      runs_enabled: false,
+      how_to_run: {},
+    });
+
+    await loaded();
+
+    expect(screen.getAllByRole("table", { name: /检索评测结果/ })).toHaveLength(2);
+    expect(
+      screen.getByRole("table", { name: /语料 1111111111111111/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("table", { name: /语料 2222222222222222/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so rather than guessing when a report predates the corpus digest", async () => {
+    vi.mocked(getEvaluationReports).mockResolvedValue({
+      reports: [
+        { suite: "rag", name: "hybrid-reference", payload: hybridReference },
+        {
+          suite: "rag",
+          name: "hybrid-llama_index",
+          payload: { ...hybridLlamaIndex, corpus_digest: "2222222222222222" },
+        },
+      ],
+      runs_enabled: false,
+      how_to_run: {},
+    });
+
+    await loaded();
+
+    // Not "unknown corpus" and not a guess at the current one: a report with
+    // no key was written before the fingerprint existed, and that is a
+    // coherent thing to say.
+    expect(
+      screen.getByRole("table", { name: /语料 未记录/ }),
     ).toBeInTheDocument();
   });
 

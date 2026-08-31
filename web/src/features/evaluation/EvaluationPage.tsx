@@ -258,11 +258,15 @@ export function EvaluationPage() {
         )}
 
         {goldSets.map((group) => (
-          <div className="aw-eval-group" key={group.digest}>
+          <div
+            className="aw-eval-group"
+            key={`${group.digest}:${group.corpusDigest ?? "pre-corpus-digest"}`}
+          >
             {comparable ? null : (
               <p className="aw-page-note">
-                题库指纹 {group.digest} · 共 {group.questionCount} 道题 ·
-                只有这一组内部可以互相比较
+                题库指纹 {group.digest} · 语料指纹{" "}
+                {group.corpusDigest ?? "（这份报告早于语料指纹）"} · 共{" "}
+                {group.questionCount} 道题 · 只有这一组内部可以互相比较
               </p>
             )}
             <div
@@ -271,7 +275,7 @@ export function EvaluationPage() {
               aria-label={
                 comparable
                   ? "检索评测结果"
-                  : `检索评测结果（题库 ${group.digest}）`
+                  : `检索评测结果（题库 ${group.digest} · 语料 ${group.corpusDigest ?? "未记录"}）`
               }
             >
               <div className="aw-eval-row is-heading" role="row">

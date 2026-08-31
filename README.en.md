@@ -459,7 +459,7 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-The four rows were measured on `main`, **2026-08-31**, after batch 56. Three sets were
+The four rows were measured on `main`, **2026-08-31**, after batch 63. Five sets were
 taken that day and the differences mean something:
 
 | Point | Real services | Offline | Five dirs | Frontend |
@@ -467,12 +467,31 @@ taken that day and the differences mean something:
 | `a3619f9` (before the closing scan) | 3981 | 3193 | 1376 | 826 |
 | Batch 55 (the ADR-097 wiring) | 3989 | 3201 | 1376 | 826 |
 | Batch 56 (the C-05 diagnostic) | 3993 | 3205 | 1376 | 828 |
-| Batch 57 (the boundary tests, this table) | 3993 | **3207** | **1376** | **828** |
+| Batch 57 (the boundary tests) | 3993 | 3207 | 1376 | 828 |
+| Batches 58–63 (the closing pass, this table) | **4013** | **3225** | **1376** | **842** |
 
-The backend gains of 8 and 4 are exactly the new `test_candidate_funnel.py` and
-`test_task_failure_detail.py`; the frontend gain of 2 likewise. **The five-directory row
-did not move either time**, because neither batch added tests there — whether they pass
-is covered by the full-suite row above.
+The last row's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
+(`test_api_runtime_ceilings.py`), four config-leaf reader guards
+(`test_config_leaves_have_readers.py`), one asserting every ownership owner is an
+importable module, seven for the corpus and its digest
+(`test_corpus_agrees_with_the_system.py` plus one in `test_runner.py`); the
+real-services column carries two more that only run against a real database.
+On the frontend, eight for the quick switcher (`navigation.test.ts` — 52 test files
+had **zero** coverage of `QUICK_DESTINATIONS` before it) and six for the evaluation
+page. **The five-directory row did not move**, because none of these batches added
+tests there — whether they pass is covered by the full-suite row above.
+
+> **The real-services column was measured twice and the first one was red, which is
+> worth writing down.** The first (40m20s) ran *concurrently* with a 2h30m RAG
+> ablation re-run, and
+> `tests/apps/test_sandbox_isolation.py::test_the_process_ceiling_holds` reported
+> "the sandbox container did not finish within 35 seconds". On an idle machine that
+> same test passes in **6.62 seconds** and the whole file is 14 passed. The table
+> records the second run (16m13s, 4013 passed / 12 skipped / **0 failed**). This is
+> not "re-run until green": these batches did not touch the sandbox at all
+> (`git diff 52809db..HEAD --stat | grep -i sandbox` finds nothing), and that
+> assertion measures whether a container can report its own process ceiling within
+> 35 seconds — starved of CPU, it measures how busy the machine is.
 
 That note records *the tree the measurement ran on*; it is not a promise that "the
 current baseline" always matches. **The previous edition of this sentence said `main`
@@ -482,10 +501,10 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3993 passed / 12 skipped` |
-| Backend, no external services (local) | `3207 passed / 800 skipped` |
+| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4013 passed / 12 skipped` |
+| Backend, no external services (local) | `3225 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
-| Frontend Vitest (local, 52 files) | `828 passed` |
+| Frontend Vitest (local, 53 files) | `842 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -514,14 +533,14 @@ previously said the cause was "the earlier record was taken in a shell that did
 not set `AGENT_WORKBENCH_TEST_DSN`", and the one after it said `tests/e2e` was
 still not in CI. Both were false, and both were written the **day after** the
 real cause had been found and fixed: without the DSN those tests skip rather
-than fail (they are inside the 787 skips of the second row), so they were red
+than fail (they are inside the 800 skips of the second row), so they were red
 *with* the services. Whoever wrote it did not read the commit that fixed them
 and filled in a plausible-sounding mechanism from a stale impression — which is
 the class of error this document keeps having to correct.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 826 above is also a **local** run, but **a different node ran it**: the
+installed on this machine. The 842 above is also a **local** run, but **a different node ran it**: the
 v24.8.0 kept in the repository's own `var/toolchain`, not the system `26.7.0`. The
 previous edition's note about `NODE_OPTIONS=--no-experimental-webstorage` therefore
 **does not describe this measurement** — it records the workaround needed when the
@@ -532,19 +551,20 @@ number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (618 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (621 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 80,542 lines of Python, 97,925 lines of tests, 50,613 lines of frontend
-TypeScript; 84 files under `docs/adr/`, numbered 0012–0097 — **with gaps**: 0050
-and 0053 were claimed by the block reservation of 2026-08-13 and have never been
-written (the last section of `docs/adr/README.md` records that reservation). This
-line previously read "0012–0083 without gaps"; both halves were wrong, and the
-edition after that ("82 files, 0012–0095") was left behind by ADR-096, and the one
-after that ("83 files, 0012–0096") by ADR-097. **More test code than source
-code is deliberate** — the rule is that a test must first be shown red, and **a
+Scale: 80,685 lines of Python across 320 files, 98,456 lines of tests across 256
+files, 51,064 lines of frontend TypeScript across 139 files; 85 files under
+`docs/adr/`, numbered 0012–0098 — **with gaps**: 0050 and 0053 were claimed by the
+block reservation of 2026-08-13 and have never been written (the last section of
+`docs/adr/README.md` records that reservation). This line previously read
+"0012–0083 without gaps"; both halves were wrong, and the edition after that
+("82 files, 0012–0095") was left behind by ADR-096, the one after that
+("83 files, 0012–0096") by ADR-097, and the one after that ("84 files, 0012–0097")
+by ADR-098. **More test code than source code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 
 ---

@@ -71,7 +71,11 @@ from agent_workbench.application.ingestion import (
     IngestionRequest,
     IngestionService,
 )
-from agent_workbench.evaluation import evaluate_retrieval, load_gold_set
+from agent_workbench.evaluation import (
+    digest_corpus,
+    evaluate_retrieval,
+    load_gold_set,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "evals/rag/corpus"
@@ -216,6 +220,10 @@ async def _measure(
                 # reports cannot be mistaken for two runs of one path.
                 index_identity=f"{service.index_identity} via {retriever.mode}",
                 retrieve=retrieve,
+                # What the questions were asked *against*. The gold digest says
+                # which questions; without this, an edited corpus produced a
+                # report that looked comparable to the ones before it.
+                corpus_digest=digest_corpus(CORPUS),
             )
         return reports
     finally:

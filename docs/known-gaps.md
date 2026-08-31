@@ -66,6 +66,8 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-09 | 账本自己的状态没有任何守卫 | **口径不实** |
 | A-10 | Task benchmark 整条链不存在，而配置指着它 | 未实现 |
 | A-11 | 图谱检索臂从未被任何服务进程装配 | **口径不实** |
+| A-12 | ADR-081 的上下文压缩没有任何 profile 打开过 | 已知代价 |
+| A-13 | 评测语料仍在教一个被 ADR-033 推翻的架构 | ~~口径不实~~ **已关闭**（2026-08-31） |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -113,17 +115,31 @@ chunk 版本、两套 parser 版本可以并存而无人发现。摄取仍然只
 **判据（当时写的）**：一次运行内产出 Reference / LlamaIndex 两侧四份报告，
 digest 一致，写入 `evals/rag/reports/` 并在 [status.md](./status.md) 记录。
 
-**判据已全部满足**（复核于 2026-08-31）：
+**判据已全部满足**（`b9aa057` 当时的四份报告，`gold_digest` 全为 `55ec24c7d2b86062`、
+`question_count` 全为 52、同臂两条路径逐位相同；`git show --stat b9aa057` 确认四份
+同一提交更新，提交信息自己写着「ADR-017 第 2 步的等价性证据到齐了」）。
 
-| 报告 | `gold_digest` | `question_count` | `mrr` / `recall@1` / `recall@3` |
-|---|---|---:|---|
-| `dense-reference` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
-| `dense-llama_index` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
-| `hybrid-reference` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
-| `hybrid-llama_index` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
+**2026-08-31 又重跑了一次，因为语料改了**（见 A-13）。四份报告现在是：
 
-同臂两条路径**逐位相同**；`git show --stat b9aa057` 确认四份报告同一提交更新，
-提交信息自己写着「ADR-017 第 2 步的等价性证据到齐了」。
+| 报告 | `corpus_digest` | `gold_digest` | 题 | `mrr` / `recall@1` / `recall@3` / `full_cov@3` |
+|---|---|---|---:|---|
+| `dense-reference` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.8654 / 0.8077 / 0.9423 / 0.8462 |
+| `dense-llama_index` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.8654 / 0.8077 / 0.9423 / 0.8462 |
+| `hybrid-reference` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 / 0.8269 |
+| `hybrid-llama_index` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 / 0.8269 |
+
+**同臂两条路径仍然逐位相同**——等价性在新语料上重新成立，不是沿用旧结论。
+两处变化都要说清楚：
+
+- **hybrid 臂四个指标一个字没变。** 改的两篇文档正是 hybrid 最擅长的那类（含
+  `RRF`、`reciprocal rank fusion` 这些字面 token），而它本来就把它们排在第一位。
+- **dense 臂 `recall@1` 0.7885 → 0.8077**，正好一题：「what performs the fusion」
+  此前把 `doc_component-retrieval-service` 排在 `doc_fusion` 前面，新的 `fusion.md`
+  把「谁执行融合」写得更直接，于是 `doc_fusion` 升到第一位。**语料写清楚一点，
+  语义检索就答对一点**——这是一次意料之中的改善，不是评测装置的变化。
+- **延迟不可比**：这次重跑与一次真实服务全套测试并行，hybrid 臂的
+  `retrieval_latency_ms` 因此从 ~38 s 涨到 52–64 s。质量指标不受 CPU 争抢影响，
+  延迟受。要用延迟数就得在空机器上重测。
 
 **它为什么在这里多开了二十天，是本次扫描的一条主要发现**：
 本文档、`docs/adr/0017` 的进度表、`HIGHLIGHTS.md` §4 与
@@ -422,6 +438,76 @@ answer_context_k = 8
 要么 `retrieval_factory` 长出第三条分支并有一次消融证据，
 要么在 `rag.graph.enabled` 旁边写明「本开关只影响入库，检索侧尚未接入」，
 并把两个 arm limit 从 schema 里删掉。
+
+### A-12 ADR-081 的上下文压缩没有任何 profile 打开过 —— 已知代价
+
+**分类**：已知代价（2026-08-31 全仓扫描新登记）。**默认关**是一个已登记的设计决定
+（ADR-081：一个还没见过真实 `context_limit` 的部署没有东西可以据以调参）。
+这里登记的是一条**更强、且此前没人写下来的事实**。
+
+**证据**：`grep -n "context_compaction_enabled" config/*.toml` 只有一处命中——
+`config.default.toml:276` 的 `false`。**十个 profile 里没有任何一个打开过它。**
+
+而 `context_window_tokens` 只有两个 profile 声明：
+`config.code-local.toml:125` 与 `config.demo-local.toml:110`，各 1000000。
+压缩**只有在声明了窗口的 profile 旁边才有意义**（没有窗口就没有可取比例的东西）
+——也就是说，**唯二有条件压缩的两个 profile，恰好都不压缩**。
+
+**为什么写下来**：这不是"关着"和"打开"的差别，是"这条路径一次都没被走过"。
+`runtime/compaction.py` 与它的测试证明的是**机制**；
+关于**效果**——一次真的被压缩的会话读起来是什么样、`[model.compact]` 那个模型
+在这件事上够不够用——这个仓库一个字的证据都没有。
+
+**做完了算什么样**：在 `code-local` 或 `demo-local` 上打开一次、跑一段真的越过
+`context_soft_limit_ratio` 的会话，并把那次会话的事件流记进 status.md。
+在那之前，这条能力在能力阶梯上**不应高于 Tested**。
+
+### A-13 评测语料仍在教一个被 ADR-033 推翻的架构 —— **已关闭**（2026-08-31）
+
+**留在正文而不是删掉**，因为它的论证解释了两件仍然要用的东西：报告为什么从这一天起
+分成两批，以及 `corpus_digest` 这个字段为什么存在。
+
+**当时的缺口**：`evals/rag/corpus/fusion.md` 写着 Agent Workbench
+「fuses the two exactly once, **inside Qdrant's Query API**」，
+`abbreviations.md` 写着 RRF 是「**the method Qdrant applies** when combining
+dense and sparse candidate lists」。而 [ADR-033](./adr/0033-fusion-ranks-are-ours.md)
+已经把那一次融合搬进本进程，并明文取代 ADR-016。
+
+**为什么它比一份过期文档严重**：`evals/chat/gold.jsonl` 三道题的
+`must_contain` 是 `["qdrant"]`——于是一个**把本系统架构答错**的回答拿满分。
+`chat-hybrid-180s.json` 的转录里，模型答的原话是
+"Qdrant's Query API performs the hybrid fusion using reciprocal rank fusion"，
+并规规矩矩地引了两个 chunk。**它照着语料答对了，而语料是错的。**
+这是本仓库唯一一处**评测在给错误答案打满分**。
+
+**而它就长在防止这件事的机制旁边**：`settings.py` 的 `fusion_owner` 是单值
+`Literal["application"]`，注释专门写着「It read 'qdrant' for a while after the code
+had already moved -- which is exactly the drift this field exists to make
+impossible」。**那个 `Literal` 守住了配置，守不住语料。**
+
+**处置**：
+
+1. 两篇语料改写。`fusion.md` 现在说融合在本进程、两臂各自按
+   `(-score, chunk_id)` 定序、Qdrant 只服务单臂；**并保留一段说明旧设计为什么被换掉**
+   ——删掉全部提及会连同「这里曾经是什么」一起删掉。
+2. chat gold set 三道题的期望从 `qdrant` 改为 `application`。
+3. [`tests/evaluation/test_corpus_agrees_with_the_system.py`](../tests/evaluation/test_corpus_agrees_with_the_system.py)
+   —— 语料里不许出现「Qdrant 执行融合」的**肯定句**（否定句与「旧设计」段落仍合法），
+   chat gold set 里不许有 `must_contain` 含 `qdrant` 的题，外加**一条对照组**
+   （语料仍然答得出这个问题，否则前两条断言可以靠删内容通过）。
+4. **报告新增 `corpus_digest`**。此前报告记 index identity、gold digest 与题量，
+   **唯独不记语料**——`runner.py` 自己的模块 docstring 说「a number without those is
+   not comparable to anything」，而语料不在 those 里面。于是两次跑在不同语料上的结果
+   看起来完全可比。控制台的评测页据此分组：同一题库、不同语料的两份报告不再并排。
+5. **52 题 gold set 全量重跑**（2h30m，本机）。四份报告见 A-03——
+   **同臂两条路径仍然逐位相同**，hybrid 臂四个指标一个字没变，dense 臂 `recall@1`
+   涨了正好一题。
+
+**留下的一条代价**：`evals/chat/reports/chat-hybrid-180s.json` 与
+`evals/chat/REPORT.md` **没有重跑**（chat 评测要真实 provider 与模型调用）。
+它们答的是改动前的那份 gold set，已在 `REPORT.md` 顶部写明不要与以后的跑比较。
+**报告本身原样保留**：它记录的是一次真实测量，而一次测量不会因为被测的题目后来
+改了就变成假的——它只是不再可比。
 
 ---
 
@@ -1244,9 +1330,14 @@ id；或把这一类不相等**升级成可纠正**（它今天不是 framing �
 
 ### D-01 真正的 Chat 轮次级附件与 Task 输入 Artifact 附件
 
-**当前事实**：`routes/uploads.py` 只有 `POST ""` 与 `POST /{upload_id}/complete`
-两个端点。上传能力在，但"这一轮对话带这几个文件"和"这个 Task 以这份文件为输入"
-两条产品语义没有接上。
+**当前事实**（2026-08-31 更正计数）：`routes/uploads.py` 有**三条**端点——
+`POST ""`（declare）、**`PUT /{upload_id}/content`（raw PUT）**、
+`POST /{upload_id}/complete`。上传能力在，但"这一轮对话带这几个文件"和
+"这个 Task 以这份文件为输入"两条产品语义没有接上。
+
+> 原文只列了 declare 与 complete 两条，**漏掉的正是三步流程的中间那一步**
+> ——字节实际走的那一步。一份描述上传能力的条目漏掉传字节的端点，
+> 会让读者以为这条流程比它实际的更不完整。
 
 **Code 那一条已经有了，而且走的是另一条路**（ADR-057 那次改动顺带）：
 `PUT /v1/code/sessions/{id}/workspace/{name}` 把一份人给的文件直接写进会话工作区，
@@ -1775,13 +1866,25 @@ production build 四步，**没有覆盖率那一步**。
 
 ### F-20 跨产品归属的三处数据没人再读写 —— 已知代价
 
-**证据**：[models.py](../src/agent_workbench/adapters/persistence/models.py) 里
+**证据**（2026-08-31 更正，原文说少了一条端点，也说错了"没人读写"）：
+[models.py](../src/agent_workbench/adapters/persistence/models.py) 里
 `conversation_sessions.project_id`、`task_runs.project_id` 与
 `project_knowledge_bases` 三处仍在；
-[routes/projects.py](../src/agent_workbench/apps/api/routes/projects.py) 的
-`PATCH /v1/chat/sessions/{id}/project` 与 `PATCH /v1/tasks/{id}/project` 仍在。
-但 [ADR-074](./adr/0074-a-project-is-where-code-happens.md) 之后没有任何界面读写
-它们——Chat 头部那个归属选择器已经下线，独立的项目页已删除。
+[routes/projects.py](../src/agent_workbench/apps/api/routes/projects.py) 的归属端点是
+**三条**——`PATCH /v1/chat/sessions/{id}/project`、`PATCH /v1/tasks/{id}/project`
+与 `PATCH /v1/code/sessions/{id}/project`。
+
+**第三条有界面在读写，而且是两条真实路径**：`CodePage.tsx` 调
+`setCodeSessionProject`——一次在切换项目时，一次在新建会话之后把归属写在那一行上
+（`:359` 与 `:768`）；`CodeSessionService` 还按它收窄会话列表。
+
+> 原文写的是「两个端点、没有任何界面读写」。**两处都不准**，而第二处更要紧：
+> 一条"没人读写因此可以删"的记录，实际上是产品今天正在用的那条路。
+
+**因此本条收窄为前两条**：Chat 与 Task 的归属端点仍然存在而没有界面读写它们
+——Chat 头部那个归属选择器已经下线，独立的项目页已删除。
+`conversation_sessions.project_id` 与 `task_runs.project_id` 两列同理；
+`project_knowledge_bases` 也没有界面。
 
 **为什么保留**：那些行里存着人做过的判断。ADR-071 §2.2 立下的规矩是「删掉标注不该
 删掉被标注的东西」，而一次产品形状的改变顺手删一列数据，是同一种破坏换了个名义。
