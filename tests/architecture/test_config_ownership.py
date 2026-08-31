@@ -1,5 +1,25 @@
+"""The ownership manifest describes something real, or it describes nothing.
+
+Every settings leaf carries an ``owner`` and a ``lifecycle`` here, and a reader
+takes that as evidence the field is consumed by the module named. It was not:
+41 of the 58 owners were not importable module paths at all. Some were package
+names that had been renamed years of commits ago (``qdrant`` for ``vector``,
+``model`` for ``models``, ``observability`` for ``telemetry``, ``reranker`` for
+``reranking``, ``langchain`` for ``langgraph``); others named packages that
+never existed (``application.knowledge.*``, ``application.policy.*``).
+
+That is worse than an empty manifest. A fictional owner is exactly the cover a
+field needs to sit unread for months -- which is what
+``test_config_leaves_have_readers.py`` next door found about thirty of.
+
+So ``test_every_owner_is_an_importable_module`` is the load-bearing test in
+this file. The others check the manifest's shape; that one checks it is about
+this repository.
+"""
+
 from __future__ import annotations
 
+import importlib
 import json
 import re
 from collections import Counter
@@ -218,17 +238,48 @@ def test_high_risk_fields_keep_their_narrow_owners() -> None:
 
     assert (
         owner_by_field["database.guard_disconnect_action"]
-        == "adapters.persistence.guard_runner"
+        == "adapters.persistence.execution_guard"
     )
     assert (
         owner_by_field["database.listener_healthcheck_seconds"]
-        == "adapters.persistence.event_listener"
+        == "adapters.persistence.notifications"
     )
     assert (
         owner_by_field["coordination.tool_execution_ledger_enabled"]
-        == "adapters.persistence.tool_execution_ledger"
+        == "adapters.persistence.tool_executions"
     )
     assert (
         owner_by_field["testing.allowed_failpoints"]
         == "adapters.testing.fault_injector"
+    )
+
+
+def test_every_owner_is_an_importable_module() -> None:
+    """An owner names a module in this package, or it names nothing at all.
+
+    Importing rather than checking for a file, because a path that resolves to
+    a directory without ``__init__.py`` is not a module either -- and because
+    the failure this catches is a *renamed* package, which leaves the old
+    directory gone and the manifest still confidently pointing at it.
+
+    ``bootstrap.settings`` is a legitimate owner and appears several times: it
+    is the honest answer for a group whose only consumer is configuration load
+    itself -- the frozen single-valued invariants, and the capability flags
+    a validator pins off because the capability does not exist. Those fields
+    have no runtime reader *by design*, which is a different statement from
+    the one next door is about.
+    """
+
+    manifest = _load_manifest()
+
+    unimportable: list[tuple[str, str]] = []
+    for owner in sorted({group["owner"] for group in manifest["groups"]}):
+        try:
+            importlib.import_module(f"agent_workbench.{owner}")
+        except ImportError as error:  # pragma: no cover - the failure message
+            unimportable.append((owner, str(error)))
+
+    assert not unimportable, (
+        "ownership.yaml names owners that are not modules of this package: "
+        + "; ".join(f"{owner} ({reason})" for owner, reason in unimportable)
     )

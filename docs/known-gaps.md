@@ -53,6 +53,7 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-05 | `ragas_enabled = true` 虚假启用 | **口径不实（本次已修）** |
 | A-06 | 评测只判检索，不判答案 | 未实现 |
 | A-07 | 候选漏斗无人读 | ~~口径不实~~ **部分关闭**（4/5 已接线，ADR-097）|
+| A-08 | 约 40 个配置叶子在 `src/` 里零读者 | **口径不实** |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -208,6 +209,65 @@ answer_context_k = 8
    `top_k` 上限是 `MAX_TOP_K = 20`，而出厂 `rerank_top_k = 8`——模型可以合法地要 20、
    拿回 8，且没有任何地方告诉它为什么。修法不止一种且都不小（见
    [ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md) §4.2），所以登记而不顺手改。
+
+### A-08 约 40 个配置叶子被校验、被归属、被文档解释，然后没有任何人读 —— 口径不实
+
+**分类**：口径不实（2026-08-31 全仓扫描新登记）。
+
+**这是 A-07 与 F-26 的母题，而不是它们的又一个实例。** 那两条各自接了一个字段就关了，
+两次都靠人工读 `settings.py` 发现，两次都没有留下任何会失败的机制。第三次全仓扫描
+数出约 30 个同形的，于是本条登记的**不是那些字段**，是"没有守门人"这件事本身。
+
+**证据**。311 个 `Settings` 叶子里，按字段名在 `src/` 与 `scripts/` 全文搜索
+（排除 `settings.py` 自身）**零命中**的有 111 个。其中：
+
+| 类别 | 条数 | 是不是缺口 |
+|---|---:|---|
+| 单值 `Literal` 的固化不变量（`fusion_owner`、`runtime_loop_owner` 一类） | 58 | **不是**。字段本身就是断言，配置载入是它唯一该有的消费者 |
+| `test_only` / `lab` 生命周期 | 11 | **不是**。前者被测试消费，后者被 validator 钉死为 false |
+| **其余** | **42** | **是**，见下 |
+
+42 条里三个尤其刺眼：
+
+- `coordination.lease_grace_seconds` / `max_missed_heartbeats` 被校验、被
+  `config.test.toml` 覆盖、被文档解释，然后没有任何运行时读者——到期判定只看
+  `lease_expires_at`。
+- `rag.embedding.dense_vector_name` / `sparse_vector_name`：代码实际用的是
+  [`ports/vector_index.py`](../src/agent_workbench/ports/vector_index.py) 的模块常量。
+  **改 TOML 不会改变建集合、写入或查询的任何一处。**
+- `qdrant.prefer_grpc = true`：三处 `AsyncQdrantClient` 构造只传 url / api_key /
+  timeout，而 url 是 REST 口 6333（gRPC 在 6334）——**这个 `true` 即便被读也不可能成立。**
+
+**为什么它们能长期隐身**：[`config/ownership.yaml`](../config/ownership.yaml) 给每个叶子
+发一张 owner + lifecycle 的身份证，读者据此认为它被消费了。而 58 个 owner 里
+**41 个不是可 import 的模块路径**——有的是改过名的包（`qdrant`／实际 `vector`、
+`model`／`models`、`observability`／`telemetry`、`reranker`／`reranking`、
+`langchain`／`langgraph`），有的是从来不存在的包
+（`application.knowledge.*`、`application.policy.*`）。守门测试的五条里，
+没有一条 import 过 owner 模块或检查过读者，其中三条还把不存在的模块名钉成了字符串断言。
+
+**2026-08-31 处置：补上守门人，并把清单改成真的。**
+
+1. [`tests/architecture/test_config_leaves_have_readers.py`](../tests/architecture/test_config_leaves_have_readers.py)
+   ——每个叶子要么在 `src/`／`scripts/` 里有读者，要么落进三种豁免之一：单值
+   `Literal`、`test_only`／`lab` 生命周期、或 `KNOWN_UNREAD_LEAVES` 里**一条写明理由**
+   的登记。表里每一条都注明了缺口编号或"为什么没有读者才是对的"。
+   配套两条反向测试：**表里不许有已经获得读者的条目**（否则它只会越长越长），
+   以及表里的名字必须是真实存在的叶子。
+2. `ownership.yaml` 的 41 个 owner 全部改成**可 import 的真实模块**，
+   `test_every_owner_is_an_importable_module` 钉住这一条。合并同 owner 同 lifecycle
+   的组之后是 53 组 / 43 owner / 311 叶子。
+   其中几组的诚实答案是 `bootstrap.settings`——一个只被配置载入消费的固化不变量，
+   它的 owner 就该是配置载入本身，而不是一个听起来像适配器的名字。
+
+**为什么不关**：42 条豁免一条都还没被消除。本条从"没有守门人"改为**"守门人已就位，
+豁免表待清空"**——判据是 `KNOWN_UNREAD_LEAVES` 变空，或每一条剩下的都转成
+单值 `Literal`（即承认它是不变量而不是旋钮）。
+
+**已知的一处假阴性，写下来而不是留着**：`rag.retrieval.answer_context_k` 会通过这道门，
+因为它被投影进 `RetrievalConfig` 因而在 `projections.py` 里出现——而没有人读那个投影字段
+（ADR-097 §4.3，A-07 为它开着）。要抓住它得跟踪一个值从 settings 穿过 frozen dataclass
+到解包处，那是另一个工具；用两秒钟的 grep 换一个没人维护得动的静态分析不划算。
 
 ---
 
