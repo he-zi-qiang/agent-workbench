@@ -430,7 +430,7 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 | C-02 | 跨 retry 预算、partial failure、父子取消 | 部分实现（仅 partial failure 未做） |
 | C-03 | 动态 supervisor / spawn / mailbox | 部分实现（spawn 有了，另两项未实现） |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
-| C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现（根因已查清，见正文）|
+| C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 部分关闭（诊断已修，见正文）|
 | C-06 | 面板只认页面握着的事件：深链、刷新保持、"这棵树完不完整" | 部分实现（前两项已关闭） |
 | C-07 | 收窄到一个子运行时，阶段列表仍报全任务的进度 | ~~未实现~~ **已关闭** |
 | C-08 | 委派任务跑不完——`max_output_tokens` 管的是「思考+回答」 | ~~失败中~~ **已关闭** |
@@ -743,7 +743,7 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 08-13 那次观测。所以"契约没说"解释不了这次失败。
 
 **真正的根因是：这条链上的诊断是构造性失明的。**
-[workers/task.py 的 `_status_detail`](../src/agent_workbench/workers/task.py:118)
+[`workers/task.py` 的 `_failure_detail`](../src/agent_workbench/workers/task.py:118)
 认得 `TaskNodeRunFailedError`，却**只读 `error.outcome.error`**：
 
 ```python
@@ -763,14 +763,29 @@ return f"the {error.node} step did not produce usable output during {action}"
 解码失败都产出同一句话**。那次观测**不可能**区分它们，往后每一次也不能——除非先把
 `reason` 露出来。
 
-**做完的判据（本次重写）**：第一步不是补解码契约（它在），而是让
-`_status_detail` 在 `outcome.error is None` 时读 `TaskNodeRunFailedError.reason`
-（外加 `__cause__`），使下一次失败能说出四条里的哪一条。**在那之前，任何关于 C-05
-根因的结论都只能是猜测**——包括本次否掉的那两个假设。此后再按真实理由决定要不要
-改契约、改回边，或都不改。
+**第一步已经做了（2026-08-31）。** `_failure_detail` 现在在 `outcome.error is None`
+时读 `TaskNodeRunFailedError` 身上的具体说法：有 `StructuredOutputError` 作 `__cause__`
+时用它，否则用 `reason`。同一条 critic 失败此前只有一句话，现在四种各不相同：
 
-**本次未改代码**，只把结论写下来：改 `_status_detail` 会改变 Task 的失败文案，属于
-可观测行为，值得单独一次改动。
+```
+改前  the critic step did not produce usable output during start
+改后  … during start: critic ran before synthesis produced a draft
+      … during start: critic output has an invalid shape
+      … during start: critic reviewed a different draft
+      … during start: critic reviewed a different revision
+```
+
+**两条安全性论证，因为"不许引用 provider 文本"这条规矩仍然管着这个函数**：
+`reason` 的六个取值全是 `task_handlers` 里的字面量，零插值；`__cause__` **只读一层**
+——`StructuredOutputError` 自己的消息是仓库写的（唯二插值的两处也都是封闭集：CPython
+只用 `NaN`/`Infinity`/`-Infinity` 调 `parse_constant`，另一处插的是 `TaskNodeId`），
+但**它的** `__cause__` 通常是 pydantic `ValidationError`，那里面引着未通过校验的输入，
+也就是模型输出。[一条测试专门钉住这条边界](../tests/workers/test_task_failure_detail.py)：
+喂一个带模型文本的 `ValidationError` 进去，断言它不出现在结果里。
+
+**剩下的判据**：拿一次真实的 v1 运行，看它现在报的是四条里的哪一条，再据此决定要不要
+改契约、改回边，或都不改。**在那之前，任何关于 C-05 根因的结论仍然只能是猜测**——
+包括本次否掉的那两个假设。这一步只是让下一次观测**有可能**回答问题，它自己不回答。
 
 **顺带记下**：同一次运行里 `critic` 给出的理由是草稿"未提供任何实际内容，仅包含
 任务指令的重复"——即 `synthesize` 那步的产出质量也有问题。这是另一件事，本条不
@@ -1720,7 +1735,9 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 2026-08-13 的实测里，`understand → plan → research_external → synthesize` 全部
 通过，停在 `critic`。上面这份排序问的是"哪一步最能消除不可核查性"，而 C-05 问
 的是"这条链能不能走完一次"。两者不冲突，但如果需要一次 v1 的端到端演示，它是
-唯一的拦路条目；Chat 那条链路不受影响。（此处此前还有一句"B-06 则决定同一条链遇到
+唯一的拦路条目；Chat 那条链路不受影响。**2026-08-31 补：诊断那一半已经修了**——
+下一次同样的失败会说出四条里的哪一条，所以这条现在缺的是**一次真实运行**，
+而不是继续读代码。（此处此前还有一句"B-06 则决定同一条链遇到
 抖动时是不是必然失败"——**B-06 已关闭**，那句连同它描述的风险一起过期了，本次删去
 而不是留着。）
 

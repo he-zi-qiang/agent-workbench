@@ -437,11 +437,19 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-All four rows were measured on the **unmerged** branch `docs/closing-scan-2026-08-31`,
-**2026-08-31**, after the ADR-097 wiring. An earlier run the same day, on `main` at
-`a3619f9`, is the **pre-wiring** set: `3981 / 3193 / 1376 / 826`. Both are recorded here
-because the difference means something — the two backend rows each gain 8, which is
-exactly this batch's new `test_candidate_funnel.py`, absent from the `main` set.
+The four rows were measured on `main`, **2026-08-31**, after batch 56. Three sets were
+taken that day and the differences mean something:
+
+| Point | Real services | Offline | Five dirs | Frontend |
+|---|---|---|---|---|
+| `a3619f9` (before the closing scan) | 3981 | 3193 | 1376 | 826 |
+| Batch 55 (the ADR-097 wiring) | 3989 | 3201 | 1376 | 826 |
+| Batch 56 (the C-05 diagnostic, this table) | **3993** | **3205** | **1376** | **828** |
+
+The backend gains of 8 and 4 are exactly the new `test_candidate_funnel.py` and
+`test_task_failure_detail.py`; the frontend gain of 2 likewise. **The five-directory row
+did not move either time**, because neither batch added tests there — whether they pass
+is covered by the full-suite row above.
 
 That note records *the tree the measurement ran on*; it is not a promise that "the
 current baseline" always matches. **The previous edition of this sentence said `main`
@@ -451,10 +459,10 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3989 passed / 12 skipped` |
-| Backend, no external services (local) | `3201 passed / 800 skipped` |
+| Backend, real PostgreSQL + Qdrant (local) | `3993 passed / 12 skipped` |
+| Backend, no external services (local) | `3205 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
-| Frontend Vitest (local, 52 files) | `826 passed` |
+| Frontend Vitest (local, 52 files) | `828 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -506,7 +514,7 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 80,498 lines of Python, 97,829 lines of tests, 50,555 lines of frontend
+Scale: 80,542 lines of Python, 97,925 lines of tests, 50,613 lines of frontend
 TypeScript; 84 files under `docs/adr/`, numbered 0012–0097 — **with gaps**: 0050
 and 0053 were claimed by the block reservation of 2026-08-13 and have never been
 written (the last section of `docs/adr/README.md` records that reservation). This

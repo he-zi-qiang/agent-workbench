@@ -50,6 +50,40 @@ describe("explainFailure", () => {
     expect(failure?.retryable).toBe(false);
   });
 
+  it("keeps the cause when a structured node could not decode its output", () => {
+    // The console half of known-gaps C-05. Four different decode failures used
+    // to reach the reader as one sentence, and the server fix is only visible
+    // if this branch stops discarding what follows the colon.
+    const details = [
+      "critic ran before synthesis produced a draft",
+      "critic output has an invalid shape",
+      "critic reviewed a different draft",
+      "critic reviewed a different revision",
+    ].map(
+      (cause) =>
+        explainFailure(
+          `the critic step did not produce usable output during start: ${cause}`,
+        )?.text ?? "",
+    );
+
+    expect(new Set(details).size).toBe(4);
+    for (const text of details) expect(text).toContain("检查草稿");
+    expect(details[3]).toContain("reviewed a different revision");
+  });
+
+  it("still reads the older sentence that carries no cause", () => {
+    // The control: the server only appends a cause for TaskNodeRunFailedError,
+    // and every Task that already failed the older way keeps its history
+    // readable.
+    const failure = explainFailure(
+      "the critic step did not produce usable output during start",
+    );
+
+    expect(failure?.text).toBe(
+      "“检查草稿”这一步没有产出可用内容，任务无法继续。",
+    );
+  });
+
   it("shows an unrecognised detail rather than replacing it", () => {
     // A detail this table has not learned is still the most specific thing
     // anyone has; swallowing it would leave the reader with strictly less.
