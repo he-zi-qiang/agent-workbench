@@ -921,11 +921,18 @@ def _assemble_chat(
                 embedder=embedder,
                 index=vector_index,
                 sparse_encoder=sparse_encoder,
+                dense_top_k=config.retrieval.dense_top_k,
+                sparse_top_k=config.retrieval.sparse_top_k,
             ),
             documents=documents,
             telemetry=telemetry,
             reranker=loaded_reranker,
             rerank_timeout_seconds=config.reranker.timeout_seconds,
+            # ADR-097. Until this line the `[rag.retrieval]` funnel was
+            # validated at startup and read by nobody, and the ceiling
+            # `docs/configuration.md` §8 promised was two hardcoded literals.
+            fused_top_k=config.retrieval.fused_top_k,
+            rerank_top_k=config.retrieval.rerank_top_k,
         )
     # The model comes last, and its absence costs only chat. Retrieval is
     # already assembled above and does not need a provider: a deployment with no

@@ -325,6 +325,19 @@ class RetrievalConfig:
     chunk_size_tokens: int
     chunk_overlap_tokens: int
     answer_context_k: int
+    # The candidate funnel, projected so the two composition roots can hand it
+    # to retrieval (ADR-097). Before this, all five numbers were validated
+    # against each other at startup and then read by nobody -- `answer_context_k`
+    # included, which reached this dataclass and stopped here.
+    #
+    # `answer_context_k` still stops here, and ADR-097 §4.3 says why: it is a
+    # *default* rather than a ceiling, and defaults are decided at the request
+    # boundary. It is left in place rather than removed so that the day someone
+    # moves that default, the value is already projected.
+    dense_top_k: int
+    sparse_top_k: int
+    fused_top_k: int
+    rerank_top_k: int
     #: Whether candidates come from the LlamaIndex retriever (ADR-017) or from
     #: the reference path it is replacing. The only one of ``rag.llama_index``'s
     #: five fields projected here, because it is the only one that selects
@@ -907,6 +920,10 @@ def project_task_worker(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            dense_top_k=settings.rag.retrieval.dense_top_k,
+            sparse_top_k=settings.rag.retrieval.sparse_top_k,
+            fused_top_k=settings.rag.retrieval.fused_top_k,
+            rerank_top_k=settings.rag.retrieval.rerank_top_k,
             llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         runtime=AgentRuntimeConfig(
@@ -1207,6 +1224,10 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
             chunk_overlap_tokens=settings.rag.ingestion.chunk_overlap_tokens,
             answer_context_k=settings.rag.retrieval.answer_context_k,
+            dense_top_k=settings.rag.retrieval.dense_top_k,
+            sparse_top_k=settings.rag.retrieval.sparse_top_k,
+            fused_top_k=settings.rag.retrieval.fused_top_k,
+            rerank_top_k=settings.rag.retrieval.rerank_top_k,
             llama_index_enabled=settings.rag.llama_index.enabled,
         ),
         chat=ChatConfig(

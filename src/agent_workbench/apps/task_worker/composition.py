@@ -614,8 +614,16 @@ async def _build_real_handlers(
                 embedder=embedder,
                 index=QdrantVectorIndex(qdrant, collection=config.qdrant.read_alias),
                 sparse_encoder=sparse_encoder,
+                dense_top_k=config.retrieval.dense_top_k,
+                sparse_top_k=config.retrieval.sparse_top_k,
             ),
             documents=documents,
+            # ADR-097, and the Worker gets it for the same reason the API does:
+            # a deployment that narrows retrieval should narrow it on both
+            # sides of the control plane, or `research_internal` and Chat would
+            # answer the same question from differently sized evidence.
+            fused_top_k=config.retrieval.fused_top_k,
+            rerank_top_k=config.retrieval.rerank_top_k,
         )
     evidence = EvidenceStore(artifacts)
     external_search, research_http = _build_external_search(

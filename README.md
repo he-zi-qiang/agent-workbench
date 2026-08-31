@@ -11,7 +11,7 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 | 你是谁 | 从哪读 |
 |---|---|
 | 想看成色与证据 | [**十分钟版本**](docs/HIGHLIGHTS.md)——真实运行的事件流、门禁数字、四个技术判断 |
-| 想立刻跑起来 | [快速开始](#快速开始)，一条命令，不联网、不连数据库 |
+| 想立刻跑起来 | [快速开始](#三快速开始)，一条命令，不联网、不连数据库 |
 | 想知道**没做什么** | [**已知缺口**](docs/known-gaps.md)——四类分类，每条附位置与"做完"的判据 |
 | 想读设计依据 | [文档地图](docs/README.md)、[架构基线](docs/architecture-baseline.md)、[ADR 索引](docs/adr/) |
 
@@ -330,7 +330,7 @@ flowchart TB
 | 模型 | DeepSeek（OpenAI 兼容） | 流式；服务端 `web_search` 不引入第二把 key |
 | 持久化 | PostgreSQL 16 + Alembic | 会话、任务、事件、checkpoint、outbox |
 | 工具协议 | MCP SDK v2 | Streamable HTTP，启动时冻结成本地 binding |
-| 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 |
+| 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 / 用量 |
 | 可观测 | OpenTelemetry | Port + OTLP Adapter，核心层不导入 SDK |
 
 配置为**单一 schema（当前 `1.18`）**，跨域校验在启动时完成；声称的能力与代码不符

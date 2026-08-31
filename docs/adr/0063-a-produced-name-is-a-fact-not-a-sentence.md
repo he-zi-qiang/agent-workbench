@@ -145,7 +145,7 @@ ADR-061 已经决定了**哪些界面显示摘录**（它明确记下 Chat 不�
 
 ## 6. 版本与兼容：不抬版本，但方向不对称
 
-**不抬 `DOMAIN_SCHEMA_VERSION`，先例是 [ADR-035](./0035-event-schema-and-upcasters.md) §4**，
+**不抬 `DOMAIN_SCHEMA_VERSION`，先例是 [ADR-035](./0035-an-answer-is-not-a-preview.md) §4**，
 不是 ADR-042 或 ADR-061——那两份记的都是 `config_schema_version`，是另一个版本号。
 ADR-035 给的还不止是先例，是机制：`VersionedModel.reject_unsupported_schema_version`
 要求**严格相等**，所以抬版本会让**每一条历史 payload 立刻读不出来**，直到为每个

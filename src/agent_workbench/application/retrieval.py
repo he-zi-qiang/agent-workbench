@@ -127,6 +127,22 @@ class RetrievalService:
     reranker: RerankerPort | None = None
     rerank_timeout_seconds: float = DEFAULT_RERANK_TIMEOUT_SECONDS
     candidate_multiplier: int = DEFAULT_CANDIDATE_MULTIPLIER
+    # The candidate funnel from `[rag.retrieval]` (ADR-097). Both are optional
+    # and both mean the same thing when absent: keep the behaviour this class
+    # had before the funnel was wired. That is what lets every in-memory double
+    # and all seven test construction sites stay untouched, while the two
+    # production sites read the configured values.
+    #
+    # `None` is "the deployment said nothing", not "the deployment said zero".
+    # The second is a config error and `validate_candidate_funnel` already
+    # refuses it (`ge=1`), so this field never has to represent it.
+    #: Ceiling on the candidate pool asked of the retriever. Absent, the
+    #: historical heuristic applies: `top_k * candidate_multiplier`.
+    fused_top_k: int | None = None
+    #: The most a request may be shown. Absent, a request gets what it asked
+    #: for. Present, it is the ceiling `docs/configuration.md` §8 has always
+    #: described and nothing has ever enforced.
+    rerank_top_k: int | None = None
     # Records nothing unless a process supplies a collector.
     telemetry: Telemetry = field(default_factory=NullTelemetry)
 
@@ -158,8 +174,45 @@ class RetrievalService:
             tenant_id=request.tenant_id,
             principal_id=request.principal_id,
             knowledge_base_id=request.knowledge_base_id,
-            limit=request.top_k * self.candidate_multiplier,
+            limit=self._candidate_limit(request.top_k),
         )
+
+    def _candidate_limit(self, top_k: int) -> int:
+        """How many to ask the index for.
+
+        Configured, the funnel decides and the number no longer moves with the
+        request: a deployment that says 40 means 40 whether the caller wanted 3
+        passages or 30. Unconfigured, the multiplier heuristic stands.
+        """
+
+        if self.fused_top_k is not None:
+            return self.fused_top_k
+        return top_k * self.candidate_multiplier
+
+    def _shown(self, top_k: int) -> int:
+        """How many the caller may actually be shown.
+
+        A request narrows; it does not widen. This is the one line that makes
+        `docs/configuration.md` §8 true -- before it, `rerank_top_k` was a
+        number nothing read, and the only ceilings a request met were the
+        hardcoded `le=50` on the chat route and `MAX_TOP_K` on the search tool.
+        Those stay: they bound a malformed request at the transport, which is a
+        different job from bounding a well-formed one at the deployment.
+
+        **Why this can never show more than was asked of the index**: the pair
+        is safe because `validate_candidate_funnel` refuses a config where
+        `rerank_top_k > fused_top_k`, so `shown <= rerank_top_k <= fused_top_k`
+        -- the candidate limit. The guarantee lives in the config layer, not
+        here, and this class deliberately does not re-derive it: two places
+        enforcing one invariant is how they come to disagree. A process that
+        sets `fused_top_k` alone is outside that guarantee and simply gets
+        fewer results than it asked for, which is the same thing an
+        under-populated index does.
+        """
+
+        if self.rerank_top_k is None:
+            return top_k
+        return min(top_k, self.rerank_top_k)
 
     async def retrieve(self, request: RetrievalRequest) -> AuthorizedContext:
         """Find, authorize, then build. In that order, and not another."""
@@ -206,14 +259,16 @@ class RetrievalService:
         # overturn it, and that is not the thing being evaluated.
         ranked, relevance = await self._rerank(request.query, authorized)
         reranked = relevance is not None
-        selected = ranked[: request.top_k]
+        # Computed once and used for both the cut and the score below: two
+        # separate `[: request.top_k]` slices are two chances to disagree about
+        # what "shown" means, and the score is supposed to describe the cut.
+        shown = self._shown(request.top_k)
+        selected = ranked[:shown]
         # The best score among what survived the cut, not among everything
         # scored: a highly relevant passage the caller will never be shown
         # should not vouch for the context it is absent from.
         top_relevance = (
-            max(relevance[: request.top_k], default=None)
-            if relevance is not None
-            else None
+            max(relevance[:shown], default=None) if relevance is not None else None
         )
 
         # Both counts, because the interesting number is the gap: candidates

@@ -1445,6 +1445,33 @@ ADR-001～011 定义基线本身。实施过程中做出的决定编号连续，
 
 ## 17. 实现证据状态
 
+> **2026-08-31 过时声明（本次扫描补记，未重排阶梯）。** 本节正文自称"截至
+> 2026-08-11"，而基线此后又走了二十六份 ADR（当前号到
+> [ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md)）。
+> 下表因此**不再是"能力处在哪一级"的可信读法**：它漏的不是细节，是整块产品面。
+>
+> 逐条核对过、**表里连一行都没有**的已发布产品面（每一条都同时有实现与测试，
+> 括号内是命中文件数，用 `grep -rl` 于 `src/` 与 `tests/` 量得，2026-08-31）：
+>
+> | 产品面 | 相关 ADR | 实现 | 测试 |
+> |---|---|:---:|:---:|
+> | computer use（屏幕闸门、窗口授权） | 0070、0090–0092、0095 | 4 | 7 |
+> | 项目（project：成员关系、目录、文件语言） | 0071–0074 | 15 | 10 |
+> | 用量与花费面板（`routes/usage.py`） | — | 1 | 2 |
+> | 工具投影（会话可收窄到被给出工具的子集） | 0096 | 10 | 41 |
+> | 计划模式（`plan_only`） | 0079 | `application/code_session.py` | 3 |
+>
+> **另有一行是低估而不是缺失**：表末的「动态 supervisor / agent spawn / 持久
+> mailbox」整行只勾了 Planned，但三件事里 **spawn 已经落地**——委派/子代理在
+> `src/` 有 8 个文件、`tests/` 有 6 个（ADR-082、083、089），
+> [已知缺口 C-03](./known-gaps.md) 也写着"spawn 有了，另两项未实现"。把三件事
+> 绑在一行里，是这处低估能存在的原因。
+>
+> **本次没有重排阶梯，是有意的**：往上挪一格需要逐条给出可链接的测试或演示证据
+> （见 [CLAUDE.md](../CLAUDE.md) 的能力阶梯规则），那是一件比补一条声明大得多的
+> 工作，而把它做成"看起来做完了"比现在这样更坏。上面这张表给的是**下一次重排该
+> 从哪里下手**，不是新的阶梯读数。
+
 具体工作包、PR 顺序、迁移、配置所有权和发布门禁见
 [Agent Workbench 代码实施计划 v1.0](./implementation-plan.md)。
 
@@ -1460,9 +1487,11 @@ WP15 全部五个阶段（ADR-027～031），以及 2026-08-11 的两批缺口�
 [实施状态](./status.md)，本节只保证描述的是当前代码。
 
 **框架口径（[ADR-017](./adr/0017-llamaindex-primary-rag.md)）：自研 Runtime +
-LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 38 题 gold set
-证据（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
-baseline，不是取消框架集成的最终决定。LlamaIndex **检索** Adapter 的代码和契约测试
+LangGraph + LlamaIndex + RAGAS。** 当前自研 ingestion/retrieval 已有 gold set 证据
+（MRR 0.960 / recall@1 0.947 / 61ms），但它是 LlamaIndex 迁移的 reference
+baseline，不是取消框架集成的最终决定。**那三个数量于当时那份 38 题的 gold set**——
+[evals/rag/gold.jsonl](../evals/rag/gold.jsonl) 此后已扩到 **52 题**，这三个数没有
+在新题集上重跑过（见 A-03）。LlamaIndex **检索** Adapter 的代码和契约测试
 此后已经落地（`adapters/llama_index/`，PR #72），但表里仍记 Planned——理由换了：
 不再是"代码没写"，而是 `rag.llama_index.enabled = false`、ingestion 未迁移、
 RAGAS runner 不存在。适配器存在不等于框架集成完成。

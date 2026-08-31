@@ -23,7 +23,7 @@
   工具欠读者一个活着的信号——本 ADR 是它的下半段，用的是它建好的 `ToolProgress`
   通道，一个字段都没加）、[ADR-029](./0029-ephemeral-sandbox.md)（一次性沙箱：
   `--network=none`、无 tty、一次性容器——§2 里「为什么必须是容器的 stderr」整段
-  由它推出）、[ADR-028](./0028-a-truncated-stream-is-a-broken-stream.md)（截断的
+  由它推出）、[ADR-028](./0028-task-workspace.md)（截断的
   流是坏掉的流——本 ADR 的预览**不是**流，所以它可以被截断，§4）
 
 ## 1. 背景：ADR-068 记下的那条缺口，和它其实没那么远

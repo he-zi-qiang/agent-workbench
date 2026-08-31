@@ -16,7 +16,7 @@
   前端 `workTimeline.ts` / `WorkPage.tsx`
 - 关联：[ADR-063](./0063-a-produced-name-is-a-fact-not-a-sentence.md)（名字是事实）、
   [ADR-086](./0086-a-produced-file-is-not-answerable-to-which-store-it-landed-in.md)
-  （同一形状，另一个 store）、[ADR-028](./0028-a-working-set-is-a-pinned-version.md)
+  （同一形状，另一个 store）、[ADR-028](./0028-task-workspace.md)
 
 ---
 

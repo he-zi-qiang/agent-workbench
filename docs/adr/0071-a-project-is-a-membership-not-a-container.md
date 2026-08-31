@@ -12,7 +12,7 @@
   `adapters/persistence/projects.py`、新 `adapters/memory/projects.py`、新
   `application/projects.py`、新 `apps/api/routes/projects.py`、新迁移
   `0030_projects`；`conversation_sessions` 与 `task_runs` 各加一列
-- 依赖：[ADR-047](./0047-a-session-is-named-by-its-first-instruction.md)（会话由
+- 依赖：[ADR-047](./0047-a-session-is-named-by-its-first-sentence.md)（会话由
   第一句指令命名——Project 不改这条，它只是多一层归属）、
   [ADR-044](./0044-no-remote-no-production-identity.md)（没有远端就没有生产身份——
   owner-private 的边界靠它成立，本 ADR 不新增身份概念）

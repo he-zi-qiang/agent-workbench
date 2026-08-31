@@ -13,7 +13,7 @@ doing its own segment, and none takes over the core loop.
 | If you are | Start here |
 |---|---|
 | Judging the substance | [**The ten-minute version**](docs/HIGHLIGHTS.md) (Chinese) — a real event stream, gate numbers, four engineering judgements |
-| Trying to run it | [Quick start](#quick-start) — one command, no network, no database |
+| Trying to run it | [Quick start](#3-quick-start) — one command, no network, no database |
 | Asking what is **missing** | [**Known gaps**](docs/known-gaps.md) — four categories, each with a location and a criterion for "done" |
 | Reading the rationale | [Documentation map](docs/README.md), [architecture baseline](docs/architecture-baseline.md), [ADR index](docs/adr/) |
 
@@ -360,7 +360,7 @@ A child writes into its **parent's own event stream** under its own `run_id`, so
 | Model | DeepSeek (OpenAI-compatible) | Streaming; server-side `web_search` introduces no second key |
 | Persistence | PostgreSQL 16 + Alembic | Sessions, tasks, events, checkpoints, outbox |
 | Tool protocol | MCP SDK v2 | Streamable HTTP, frozen into local bindings at startup |
-| Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System |
+| Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System / Usage |
 | Observability | OpenTelemetry | Port + OTLP adapter; core imports no SDK |
 
 Configuration is a **single schema (currently `1.18`)** validated across domains
@@ -437,16 +437,24 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-All four rows were measured on a working branch off `main`, 2026-08-29 (after the
-ADR-093, 094 and 095 batches, not yet merged); that note records *the tree the
-measurement ran on*, not "the current baseline".
+All four rows were measured on the **unmerged** branch `docs/closing-scan-2026-08-31`,
+**2026-08-31**, after the ADR-097 wiring. An earlier run the same day, on `main` at
+`a3619f9`, is the **pre-wiring** set: `3981 / 3193 / 1376 / 826`. Both are recorded here
+because the difference means something — the two backend rows each gain 8, which is
+exactly this batch's new `test_candidate_funnel.py`, absent from the `main` set.
+
+That note records *the tree the measurement ran on*; it is not a promise that "the
+current baseline" always matches. **The previous edition of this sentence said `main`
+itself, and stopped being true the same day it was written** — not a slip, but another
+instance of the thing this section keeps having to correct: a number and its provenance
+go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3935 passed / 12 skipped` |
-| Backend, no external services (local) | `3160 passed / 787 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1352 passed / 2 skipped` |
-| Frontend Vitest (local, 43 files) | `719 passed` |
+| Backend, real PostgreSQL + Qdrant (local) | `3989 passed / 12 skipped` |
+| Backend, no external services (local) | `3201 passed / 800 skipped` |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
+| Frontend Vitest (local, 52 files) | `826 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -482,24 +490,29 @@ the class of error this document keeps having to correct.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 719 above is a **local** run: the system node is
-now `26.7.0`, and with `NODE_OPTIONS=--no-experimental-webstorage` the whole
-suite passes (26.x defines `localStorage` as a global getter evaluating to
-`undefined`, and jsdom installs its own only when that global is *absent*). So it
-is a local number and must not be cited as a CI one; Playwright was not run this
+installed on this machine. The 826 above is also a **local** run, but **a different node ran it**: the
+v24.8.0 kept in the repository's own `var/toolchain`, not the system `26.7.0`. The
+previous edition's note about `NODE_OPTIONS=--no-experimental-webstorage` therefore
+**does not describe this measurement** — it records the workaround needed when the
+system 26.x runs the suite (26.x defines `localStorage` as a global getter evaluating
+to `undefined`, and jsdom installs its own only when that global is *absent*). Both
+routes pass; do not read that note as how this row was produced. It is still a local
+number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (612 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (618 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 78,773 lines of Python, 95,090 lines of tests, 43,121 lines of frontend
-TypeScript; 82 files under `docs/adr/`, numbered 0012–0095 — **with gaps**: 0050
+Scale: 80,498 lines of Python, 97,829 lines of tests, 50,555 lines of frontend
+TypeScript; 84 files under `docs/adr/`, numbered 0012–0097 — **with gaps**: 0050
 and 0053 were claimed by the block reservation of 2026-08-13 and have never been
 written (the last section of `docs/adr/README.md` records that reservation). This
-line previously read "0012–0083 without gaps"; both halves were wrong. **More test code than source
+line previously read "0012–0083 without gaps"; both halves were wrong, and the
+edition after that ("82 files, 0012–0095") was left behind by ADR-096, and the one
+after that ("83 files, 0012–0096") by ADR-097. **More test code than source
 code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 
