@@ -25,20 +25,29 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 "故意不做"和"以为做了其实没有"。这三种缺口的处理方式完全不同：第一种排期，
 第二种要在代码里留下拒绝的痕迹，第三种是缺陷，必须立刻修。
 
-所以本文档给每一条缺口标注**四种分类之一**，并要求每条都附上仓库里的位置。
+所以本文档给每一条缺口标注**五种分类之一**，并要求每条都附上仓库里的位置。
 没有位置的条目不许写进来：那是印象，不是缺口。
 
-### 四种分类
+### 五种分类
 
 | 分类 | 含义 | 处理方式 |
 |---|---|---|
 | **拒绝** | 不做是设计决定，代码里有显式拒绝并写明理由 | 不进路线图。若要改，先写 ADR |
 | **未接线** | 能力建成并测过，但生产路径不走它，或默认关着 | 排期，且要先补"凭什么可以打开"的证据 |
 | **未实现** | 仓库里没有对应代码 | 排期 |
+| **已知代价** | 一个**做了的**决定带来的、已知且被接受的副作用 | 不排期。写下来是为了让它别被当成 bug 反复重查 |
 | **口径不实** | 配置或文档声称的，与仓库事实不符 | **缺陷**，立刻修，不排期 |
 
 "口径不实"单独成一类，是因为它和其余三类的危害不同。未实现的东西读者看得见；
 声称已实现的未实现的东西，读者看不见——它把一个缺口伪装成一个能力。
+
+> **2026-08-31：这张表从"四种"改成"五种"，因为它一直在说谎。**
+> 正文与分组表实际用过的标签有二十来种，而**数量第二多的「已知代价」（13 条）
+> 在定义表里根本没有**。剩下那些是这五种的组合与状态后缀
+> （「口径不实（本次已修）」「部分关闭」「已关闭」「触发已修，暴露仍在」），
+> 它们是**分类 + 状态**两个维度写在一格里，不是新的分类——
+> 一条条目的分类说的是"它是哪一类问题"，状态说的是"它现在开着还是关着"。
+> 这条区分此前没有写下来，于是每次有人要表达状态就顺手发明一个标签。
 
 ---
 
@@ -46,14 +55,17 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
-| A-01 | LlamaIndex 检索 Adapter 默认关闭 | 未接线 |
+| A-01 | LlamaIndex 检索 Adapter 默认关闭（阻塞理由已改：缺的是一份 ADR，不是证据） | 未接线 |
 | A-02 | LlamaIndex ingestion 未接入 | **拒绝** |
-| A-03 | ADR-033 之后未重跑等价评测 | 未实现 |
+| A-03 | ADR-033 之后未重跑等价评测 | **已关闭**（`b9aa057`，2026-08-11） |
 | A-04 | RAGAS 全链缺失 | 未实现 |
 | A-05 | `ragas_enabled = true` 虚假启用 | **口径不实（本次已修）** |
-| A-06 | 评测只判检索，不判答案 | 未实现 |
+| A-06 | 缺模型在环的 judge（确定性答案打分已有） | 未实现 |
 | A-07 | 候选漏斗无人读 | ~~口径不实~~ **部分关闭**（4/5 已接线，ADR-097）|
 | A-08 | 约 40 个配置叶子在 `src/` 里零读者 | **口径不实** |
+| A-09 | 账本自己的状态没有任何守卫 | **口径不实** |
+| A-10 | Task benchmark 整条链不存在，而配置指着它 | 未实现 |
+| A-11 | 图谱检索臂从未被任何服务进程装配 | **口径不实** |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -61,12 +73,21 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 段 `enabled = false`，注释写明关闭理由；Adapter 代码与契约测试在
 `src/agent_workbench/adapters/llama_index/`。
 
-**为什么**：[ADR-017](./adr/0017-llamaindex-primary-rag.md) 第 3 步要求，切换前
-必须有一个**能把两条检索路径区分开**的度量。这不是流程洁癖：两条路径都能返回
-"看起来对"的结果，缺的是判定它们是否等价的手段。适配器存在不等于框架集成完成。
+**为什么**（2026-08-31 改写）：**挡住它的已经不是度量了。**
+[ADR-017](./adr/0017-llamaindex-primary-rag.md) 第 3 步要的那份度量在
+`b9aa057`（2026-08-11）已经拿到：四份报告同一个 `gold_digest`、同为 52 题，
+同臂两条路径的排序指标逐位相同（见已关闭的 A-03）。
 
-**做完的判据**：同一份 52 题 gold set、同一次运行、同一份代码下，Reference 与
-LlamaIndex 两条路径各出一份报告，差异落在可解释范围内（见 A-03）。
+剩下的阻塞是一个**决定**，不是一份证据：`rag.llama_index.enabled` 在
+`task_snapshot` 生命周期里，翻它会改动 **Task 语义指纹**，也就是改动一条冻结边界——
+按本仓库的规矩，那要一份单独的 ADR 说清楚已在跑的 Task 怎么办、回滚长什么样。
+
+> 这条的原文写着「缺的是判定它们是否等价的手段」，而那句话在被读的二十天里
+> 一直指向一件已经做完的事。**一条阻塞理由过期，比一条缺口过期更贵**——
+> 它会让人去重做已经做过的工作。
+
+**做完的判据**：一份决定切换的 ADR 落地，且默认配置改为 `enabled = true`
+并有一次跑过五个服务型目录的证据。
 
 ### A-02 LlamaIndex ingestion 未接入，`add` / `delete` 显式拒绝
 
@@ -79,20 +100,36 @@ chunk 版本、两套 parser 版本可以并存而无人发现。摄取仍然只
 
 **做完的判据**：不适用。要改，先改 ADR-017 的迁移规则。
 
-### A-03 ADR-033 修复排序后，未用同一份 gold set 重跑等价评测
+### A-03 ADR-033 修复排序后，未用同一份 gold set 重跑等价评测 —— **已关闭**（2026-08-11，`b9aa057`）
 
-**证据**：[evals/rag/gold.jsonl](../evals/rag/gold.jsonl) 52 题。
-`evals/rag/reports/` 下 `dense-reference.json` 与 `hybrid-reference.json` 的
-时间戳是 2026-08-10 20:05，而 `hybrid-llama_index.json` 是 2026-08-03 07:20、
-`dense-llama_index.json` 是 2026-08-10 12:33。
+**留在正文而不是删掉**，因为它的论证仍在被 ADR-017、A-01 与"两条路径可比不可比"
+这个问题引用。
 
-**为什么这是缺口**：[ADR-033](./adr/0033-fusion-ranks-are-ours.md) 改了融合排序。
-LlamaIndex 侧的两份报告产生于那次修复**之前或之间**，因此现有的四份报告不构成
-一次等价比较——它们不是同一份代码下的同一次测量。runner 本身要求报告记录
-index identity 与 gold set digest 正是为了让这种不可比性能被看出来。
+**当时的缺口**：[ADR-033](./adr/0033-fusion-ranks-are-ours.md) 改了融合排序，
+而 LlamaIndex 侧的两份报告产生于那次修复**之前或之间**，因此四份报告不构成一次
+等价比较——它们不是同一份代码下的同一次测量。runner 要求报告记录 index identity
+与 gold set digest，正是为了让这种不可比性能被看出来。
 
-**做完的判据**：一次运行内产出 Reference / LlamaIndex 两侧四份报告，digest 一致，
-写入 `evals/rag/reports/` 并在 [status.md](./status.md) 记录。整轮约 30–70 分钟。
+**判据（当时写的）**：一次运行内产出 Reference / LlamaIndex 两侧四份报告，
+digest 一致，写入 `evals/rag/reports/` 并在 [status.md](./status.md) 记录。
+
+**判据已全部满足**（复核于 2026-08-31）：
+
+| 报告 | `gold_digest` | `question_count` | `mrr` / `recall@1` / `recall@3` |
+|---|---|---:|---|
+| `dense-reference` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
+| `dense-llama_index` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
+| `hybrid-reference` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
+| `hybrid-llama_index` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
+
+同臂两条路径**逐位相同**；`git show --stat b9aa057` 确认四份报告同一提交更新，
+提交信息自己写着「ADR-017 第 2 步的等价性证据到齐了」。
+
+**它为什么在这里多开了二十天，是本次扫描的一条主要发现**：
+本文档、`docs/adr/0017` 的进度表、`HIGHLIGHTS.md` §4 与
+`settings.py` 的 `llama_index.enabled` 注释**四处**都还在说没跑，其中三处引用的
+还是 9-10/38 那组**旧题库**的数字。没有任何机制会因为一条已被修掉的缺口仍开着而失败
+——见 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
 
 ### A-04 RAGAS 依赖、runner、judge calibration、报告均不存在
 
@@ -111,11 +148,23 @@ A-05 的 flag 重新打开。
 判断能力边界的一手材料，这一行让它说了假话。
 
 **修复**：值改为 `false`，且
-[settings.py](../src/agent_workbench/bootstrap/settings.py) 里的类型从
-`bool` 收窄为 `Literal[False]`——与相邻的 `ragas_offline_only: Literal[True]`、
-`online_judge_in_ci: Literal[False]` 同一体例。收窄类型而不是只改默认值，是因为
-`bool` 允许任何 overlay 把它设回 `true`，那样这条缺陷会以另一个文件的形式复发；
-`Literal[False]` 让它**构造期就失败**。
+[settings.py:1197](../src/agent_workbench/bootstrap/settings.py:1197) 加了一个
+`@field_validator("ragas_enabled")`，把 `true` 变成一个**带解释的载入期错误**——
+不是只改默认值，因为 `bool` 允许任何 overlay 把它设回 `true`，那样这条缺陷会以
+另一个文件的形式复发。
+
+> **2026-08-31 更正。** 这一段原先写的是「类型从 `bool` 收窄为 `Literal[False]`
+> ——与相邻的 `ragas_offline_only: Literal[True]`、`online_judge_in_ci:
+> Literal[False]` 同一体例」。**类型至今是 `ragas_enabled: bool = False`**，
+> 挡住 `true` 的是上面那个 validator。
+> 行为等价（都在构造期失败），但那段论证描述的是一段不存在的代码——
+> **而这是本文档用来示范「口径不实，本次已修」的样板条目**，它自己不实这件事，
+> 比它示范的那条缺陷更值得记下来。
+>
+> 两种写法并不等价的地方也写清楚：validator 能在报错里**说出缺什么**
+> （"no RAGAS dependency, runner or judge calibration set"），
+> 而 `Literal[False]` 只会给出一句 pydantic 的类型不匹配。选 validator 是对的，
+> 只是没人回来改这段话。
 
 **测试**：`tests/config/test_settings.py::test_ragas_cannot_be_enabled_while_no_runner_exists`。
 三条断言，第三条才是有牙的那条——它断言 `pyproject.toml` 里**没有** ragas 依赖。
@@ -123,16 +172,30 @@ A-05 的 flag 重新打开。
 忘记重开 flag 的那一天失败。两个对照组实测：改回 `true` 红，加一条
 `ragas>=0.2` 依赖也红。
 
-### A-06 现有评测只判检索，不判最终答案
+### A-06 答案打分是确定性的，缺的是模型在环的 judge
 
-**证据**：[metrics.py:136](../src/agent_workbench/evaluation/metrics.py:136)
+**标题 2026-08-31 改写。** 原标题是「现有评测只判检索，不判最终答案」，
+**对 `evaluation/` 这个包成立，对全仓不成立**——照它读会得出"这个仓库从不评价答案"，
+而那是假的。
+
+**对包成立的那半**：[metrics.py:136](../src/agent_workbench/evaluation/metrics.py:136)
 `RETRIEVAL_METRICS` 恰好五项——`recall_at_1`、`recall_at_3`、
 `full_coverage_at_3`、`mrr`、`retrieval_latency_ms`。
 [runner.py:13](../src/agent_workbench/evaluation/runner.py:13) 的模块 docstring
 自己写明："Nothing here judges an answer."
 
-**这一条是有意的分离**，但缺口是真的：忠实度与引用准确性需要模型在环，属于另一个
-runner 和另一套证据。混进来会让检索回归和生成回归长得一样。
+**全仓不成立**：`scripts/run_chat_eval.py` 一直在算**确定性的答案分数**——
+`fact_recall`、`citation_precision`、`citation_recall`、`clean_abstentions`、
+`fabricated_citations`，报告就在 `evals/chat/reports/` 下，控制台的评测页
+2026-08-31 起把它渲染出来。最后那一项是**绝对计数**而不是比率：一条编造的引用
+就够坏，化成百分比会让它消失。
+
+**真正缺的**：**模型在环的评委**。确定性核对答不出"这句改写忠不忠于原文""语气有没有
+越界"这类问题，那需要另一个 runner、一份 judge 校准集和一套自己的证据（见 A-04）。
+混进 `evaluation/` 包会让检索回归和生成回归长得一样，所以分离本身是有意的。
+
+**做完的判据**：一个模型在环的 judge runner，配一份校准集，
+且它的报告能被评测页读出来（页面已经有能力渲染第三类报告）。
 
 ---
 
@@ -269,6 +332,97 @@ answer_context_k = 8
 （ADR-097 §4.3，A-07 为它开着）。要抓住它得跟踪一个值从 settings 穿过 frozen dataclass
 到解包处，那是另一个工具；用两秒钟的 grep 换一个没人维护得动的静态分析不划算。
 
+### A-09 账本自己的状态没有任何守卫 —— 口径不实
+
+**分类**：口径不实（2026-08-31 全仓扫描新登记）。
+
+**证据**。链接层面这份文档是干净的：620 条相对链接零死链。**状态层面查出五条反向不实**
+——本文档说还开着、而实际已被别的改动修掉的条目：
+
+| 条目 | 实际什么时候被修掉的 | 是什么改动修掉的 |
+|---|---|---|
+| A-03 | 2026-08-11 | `b9aa057` 用同一份 52 题 gold set 重跑了两条路径 |
+| D-02 | 2026-08-20 | `4c40474` 加了 list / rename / delete 三条路由，提交信息里点名说自己在做 D-02 |
+| E-07 | 2026-08-28 | `014de9e` 把 `tests/e2e` 加进 CI 的服务型 job |
+| B-05（一半） | 2026-08-12 | Chat 界面开始显示被隔离的位点，措辞正好是判据要的那句 |
+| B-02（分类） | ADR-041 落地时 | 判据已被 §6/§7 逐条拒绝，且替代机制 `abort_lag_seconds` 已在跑 |
+
+**为什么没有任何东西发现**：[E-04](#e-04-evidence-manifest-有工具有产物但没有消费者)
+是本文档唯一的防复发机制，而它的判据被收敛成了**「门禁数字由 manifest 生成」**
+——**这条判据按定义不覆盖状态**。一个数字过期它管得着，一条缺口被修掉而条目还开着，
+它一个字都说不出来。上面那五条正是这个空洞的直接产物。
+
+**这比数字过期贵，理由要写清楚**：数字过期误导的是判断；
+**状态过期误导的是行动**——它会让人去重做已经做过的工作。本文档的
+[优先级建议](#优先级建议)第 2/3/4/5 位曾经全部建立在这五条之上。
+
+**做完的判据**（三条里至少要有第一条）：
+
+1. **一条会失败的检查**，把本文档的"已关闭/仍开着"和某个可执行事实绑起来。
+   最小可行版本：每条标着"仍开着"的条目在正文里写下**一条可执行的证伪命令**
+   （一次 grep、一条路由存在性断言、一个文件是否存在），CI 跑它们，
+   **命令成功即条目应关闭**。这和 A-08 的守门测试是同一种形状：
+   把"我认为它还开着"变成"有东西会因为它其实已经关了而失败"。
+2. 分组表与正文条目集合的一致性检查（见[维护规则](#维护规则)）。
+3. 编号唯一性检查，包括退休编号。
+
+**没有立刻做第 1 条的理由，写下来而不是留空**：不是每条缺口都有一句可执行的证伪。
+"知识库没有 ACL 管理 UI"能写成"这四条路由不存在"，
+"缺模型在环的 judge"写不成一行 grep。所以这条判据要么接受**部分覆盖**
+（能写出证伪的条目必须写，写不出的要说明为什么），要么根本落不了地——
+而部分覆盖仍然能抓住上表五条里的**四条**。
+
+### A-10 Task benchmark 整条链不存在，而配置指着它 —— 未实现
+
+**分类**：未实现（2026-08-31 全仓扫描新登记）。A-04 只覆盖 RAGAS / judge 那条链。
+
+**证据**：
+
+- [config.default.toml](../config/config.default.toml) 的
+  `task_benchmark_path = "./evals/tasks/cases.yaml"` 是一个
+  **`Field(min_length=1)` 的必填字段**，而 `evals/` 下只有 `chat` / `rag` / `triage`，
+  **没有 `tasks/` 目录，也没有 runner**。`scripts/` 下三个 runner
+  （`run_chat_eval.py` / `run_rag_eval.py` / `run_triage_eval.py`）都不读它。
+- 三份 metrics 清单**全都没有读者**：runner 直接遍历代码里的 `RETRIEVAL_METRICS`，
+  配置的 `rag_metrics` 不参与计算；`task_metrics` 与 `multi_agent_metrics`
+  连 validator 都没有（登记在 [A-08](#a-08-约-40-个配置叶子被校验被归属被文档解释然后没有任何人读--口径不实) 的豁免表里）。
+- [tests/config/test_settings.py:124](../tests/config/test_settings.py:124) 还在钉
+  `task_metrics` 的子集——**等于给一组未实现的名字上锁**：这些名字今天改不动，
+  而改不动的理由不是它们被使用，是一条测试记得它们。
+
+**顺带量下来的 gold set 规模**（不是缺口，是尺度）：chat 13 题、triage 24 题、rag 52 题。
+
+**做完的判据**：`evals/tasks/cases.yaml`、一个 `scripts/run_task_eval.py`、
+一份可复现报告，以及 `task_metrics` 真的被那个 runner 读。在那之前，
+把 `task_benchmark_path` 改成可选、或删掉它与两份 metrics 清单，都是比现状诚实的选择。
+
+### A-11 图谱检索臂从未被任何服务进程装配 —— 口径不实
+
+**分类**：口径不实（2026-08-31 全仓扫描新登记）。**入库那半是真的，检索那半没接。**
+
+**证据**：
+
+- `SeedExpansionRetriever` 只在两个地方被构造：`scripts/run_graph_ablation.py`
+  与 `tests/vector/test_seed_expansion.py`。**没有第三处。**
+- API 与 Task Worker 唯一的候选检索器工厂
+  [bootstrap/retrieval_factory.py](../src/agent_workbench/bootstrap/retrieval_factory.py)
+  只有两条分支：LlamaIndex 与 Reference。
+- `projections.py` 只把 `rag.graph.*` 投进**入库侧**（`GraphExtractionConfig`）。
+
+**后果，说成一句话**：把 `rag.graph.enabled` 设成 `true`，买到的是**入库时每个 chunk
+一次模型调用的成本**，加上**零检索收益**——而配置里没有一句提示这件事。
+`entity_arm_limit` 与 `relation_arm_limit` 两个参数因此也没有读者
+（登记在 [A-08](#a-08-约-40-个配置叶子被校验被归属被文档解释然后没有任何人读--口径不实) 里）。
+
+**为什么算口径不实而不是未接线**：[status.md](./status.md) 记的是
+「基础设施建成且有测试」，**没有一处说检索侧未接进服务进程**。
+一个读那段的人会认为打开开关就能用上图谱检索。
+
+**做完的判据**（二选一，都要有一句写下来的话）：
+要么 `retrieval_factory` 长出第三条分支并有一次消融证据，
+要么在 `rag.graph.enabled` 旁边写明「本开关只影响入库，检索侧尚未接入」，
+并把两个 arm limit 从 schema 里删掉。
+
 ---
 
 ## B. Reliable Core
@@ -276,12 +430,15 @@ answer_context_k = 8
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
 | B-01 | SSE 回放仍在轮询（Task Worker 那半已接上） | 未接线 |
-| B-02 | Watchdog 只有 warn 一半，且未装进 Task Worker | 未实现 |
+| B-02 | Watchdog 的 abort 半 | **拒绝**（ADR-041 §6/§7；替代机制 `abort_lag_seconds` 已在跑） |
 | B-03 | 七点故障矩阵只覆盖四点 | 未实现 |
-| B-05 | 生产 upcaster 注册表为空，Chat 侧不披露隔离 | 未接线 |
+| B-05 | 生产 upcaster 注册表为空（Chat 披露那半 2026-08-12 已关闭） | 未接线 |
 | B-06 | 失败标着 `retryable` 却没有任何重试路径 | **已关闭** |
 | B-07 | tool 参数读不出来时，说不出是被截断还是真的坏 | 未实现 |
 | B-08 | 一个 MCP 服务器死掉，曾杀死整个 Worker（触发**本次已修**）；回收仍系于 Worker 存活 | 未实现 |
+| B-09 | Hook Bus 有完整实现与 15+ 测试，但没有任何注册面 | 未接线 |
+| B-10 | 核心层与契约里的八处死符号 | **口径不实** |
+| B-11 | 核心层的第三方依赖守卫是黑名单，不是白名单 | **口径不实** |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
 > 按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
@@ -310,20 +467,32 @@ answer_context_k = 8
 **做完的判据**：SSE 回放路径也由 LISTEN 唤醒，且有一条"监听端完全丢通知，cursor
 catch-up 仍完整"的测试对着真 PostgreSQL 跑。
 
-### B-02 Watchdog 只做了 warn 一半，且没装进 Task Worker
+### B-02 Watchdog 的 abort 半 —— **拒绝**（ADR-041），且替代机制已在跑
 
-**这一条已经关闭了一半。** `EventLoopLagWatchdog` 已实现
+**2026-08-31 改判。** 这一条此前分类是**未实现**并排在优先级第 5 位。
+它陈述的两件事都没错，但**它要的东西已经被逐条拒绝过了**，而拒绝和"还没做"
+是本文档专门要区分的两类。
+
+**已落地的那半**：`EventLoopLagWatchdog`
 （[event_loop_lag.py](../src/agent_workbench/adapters/telemetry/event_loop_lag.py)，
-测试 [test_event_loop_lag.py](../tests/adapters/test_event_loop_lag.py)），并已装进
+测试 [test_event_loop_lag.py](../tests/adapters/test_event_loop_lag.py)）已装进
 API 进程（[apps/api/main.py:160](../src/agent_workbench/apps/api/main.py:160)）：
 周期性量测事件循环滞后，超阈值上报指标并打一条**带实测数值**的日志。
 
-**仍然缺的是两件事**：（1）实施计划要求的 **abort 半**——标记 unhealthy、停止 claim、
-取消进行中的 run——未实现，超阈值只会 warn；（2）**没有装到 Task Worker**，
-而 Task Worker 恰是长耗时同步调用最可能堵住事件循环的地方。
+**abort 半是拒绝，不是遗漏**：
+[ADR-041](./adr/0041-a-late-heartbeat-may-not-renew.md) §6 的标题就是
+「本批明确不做 watchdog，这不是打折」，§7 对 abort 的三件事——标记 unhealthy、
+停止 claim、取消进行中的 run——**逐条论证为什么做不到**。
 
-**做完的判据**：Task Worker 进程内同样启动 watchdog；超阈值持续到约定时长后进入
-unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照组测试。
+**替代机制已经在跑，而这是改判的实质理由**：Worker 自查心跳迟到
+（[task.py](../src/agent_workbench/workers/task.py) 的 `abort_lag_seconds`，
+由 [composition.py](../src/agent_workbench/apps/task_worker/composition.py)
+按 `heartbeat_seconds` 注入），正反两条测试在
+[test_task_worker_heartbeat_lateness.py](../tests/workers/test_task_worker_heartbeat_lateness.py)。
+一个迟到到不该再续租的 Worker 会停下来——**这正是 abort 半想要的效果，
+只是由租约而不是由 watchdog 达成**。
+
+**做完的判据**：不适用。要改，先改 ADR-041 §6/§7 的论证。
 
 ### B-03 基线要求七个故障窗口，只覆盖四个
 
@@ -344,7 +513,7 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 
 **做完的判据**：三个新窗口进 `FailpointName`、测试 profile 与负向配置测试同步扩展。
 
-### B-05 生产 upcaster 注册表为空，且 Chat 侧不披露被隔离的位点
+### B-05 生产 upcaster 注册表为空 —— **另一半 2026-08-12 已关闭**
 
 **机制已经落地。**
 [event_log.py](../src/agent_workbench/adapters/persistence/event_log.py) 的
@@ -354,21 +523,23 @@ unhealthy 并停止 claim，且有一条"滞后消失后恢复 claim"的对照�
 回放，**且跳过是可见的**——SSE 发一个独立的 `stream.quarantined` 帧，Task timeline
 返回被跳过的序号。两处调用方都已切过去。
 
-**仍然缺的是两件事**：
+**仍然缺的只剩一件**：**生产注册表还是空的**——
+[event_log.py:166](../src/agent_workbench/adapters/persistence/event_log.py:166)
+的 `DEFAULT_EVENT_UPCASTERS = EventUpcasterRegistry()` 不含任何条目。机制有了，
+还没有真实的历史版本要升。这本身不是缺陷，但它意味着**升级链从未在真实数据上
+走过一次**。
 
-1. **生产注册表还是空的**——[event_log.py:166](../src/agent_workbench/adapters/persistence/event_log.py:166)
-   的 `DEFAULT_EVENT_UPCASTERS = EventUpcasterRegistry()` 不含任何条目。机制有了，
-   还没有真实的历史版本要升。这本身不是缺陷，但它意味着**升级链从未在真实数据上
-   走过一次**。
-2. **界面上 Chat 那一半仍然沉默**——Work 的任务时间线已经把每个没能交付的位点锚定
-   在它确实收到的前后两条事件之间（"#2：在「工具调用已开始：external_search」与
-   「任务成功完成」之间"），措辞是"这些事件仍在日志里，只是这次没能解码"而不是"丢了"。
-   Chat 侧的 `stream.quarantined` 帧**只被用来推游标，界面上不显示**
-   （见 `web/src/features/chat/sessionStream.test.ts`）。
+> **原来的第 2 件事 2026-08-31 删除，因为它已经不成立了。** 那一条写着
+> 「界面上 Chat 那一半仍然沉默……`stream.quarantined` 帧只被用来推游标，
+> 界面上不显示」。Chat 页从 2026-08-12 起就在显示：
+> `ChatPage.tsx` 读 `state.quarantinedSequences`，渲染「这次连接里有 N 个位置
+> 没能交给这个页面」并逐个列出位次，`ChatPage.test.tsx` 里正反两条覆盖
+> （其中一条专门断言不出现「丢了／丢失」字样）——**措辞正好是本条判据要的那句**。
+>
+> 而它一直排在[优先级建议](#优先级建议)第 3 位。见 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
 
-**做完的判据**：（1）第一条真实 upcaster 进 `DEFAULT_EVENT_UPCASTERS`，并有一条
-对着真实旧版本行的升级测试；（2）Chat 界面像 Work 时间线那样披露被隔离的位点，
-带"没能解码"而非"丢了"的措辞。
+**做完的判据**：第一条真实 upcaster 进 `DEFAULT_EVENT_UPCASTERS`，并有一条
+对着真实旧版本行的升级测试。
 
 ### B-06 失败标着 `retryable` 却没有任何重试路径 —— **已关闭**（[ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md)）
 
@@ -479,6 +650,75 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 **做完的判据**：存在一条不依赖 Task Worker 存活的到期处置路径（API 进程定时器
 或独立 sweeper，标记或回收均可），并有一条"杀掉全部 Worker → 租约过期 → 任务
 状态可见地离开 running"的测试。
+
+### B-09 Hook Bus 有完整实现与 15+ 测试，但没有任何注册面 —— 未接线
+
+**分类**：未接线（2026-08-31 全仓扫描新登记）。**这一条与"实现有 bug"完全不同**，
+所以标题要说清楚：实现是好的，缺的是一个装配参数或一个配置面。
+
+**证据**：
+
+- [runtime/hook_bus.py](../src/agent_workbench/runtime/hook_bus.py) 156 行实现完整，
+  [ports/hooks.py](../src/agent_workbench/ports/hooks.py) 定义 `ToolCallHook` Protocol。
+- **`ToolCallHook` 在 `src/` 下零实现类。**
+- **八处 `ToolGateway` 构造无一传 `hooks=`**，于是每一个网关都得到一个空 `HookBus`
+  并在第一行直接短路。
+- `settings.py` 与全部 `config/*.toml` **没有任何 hook 字段**。
+
+也就是说：**不改代码就无法注册一个 hook。**
+
+**为什么它值得登记而不是删掉**：`tool_gateway.py` 的五阶段里，hook 改写参数之后
+**要重新校验**（`:382-387`）——那是一段被认真设计过、被测试覆盖过的语义。
+删掉它等于扔掉一个已经答对的设计问题；留着而不接，等于本仓库的能力阶梯上
+有一格永远到不了 Demonstrated。
+
+**做完的判据**：一个部署可以在**不改 `src/` 的前提下**注册一个 hook——
+无论是装配参数还是配置面——并有一条端到端测试证明它的改写被重新校验过。
+
+### B-10 核心层与契约里的八处死符号 —— 口径不实
+
+**分类**：口径不实（2026-08-31 全仓扫描新登记）。它们不是"没用到的常量"，
+每一处都在**声称一件不成立的事**。
+
+| 符号 | 它声称的 | 实际 |
+|---|---|---|
+| `WORKSPACE_WRITE_SCOPE` | 四个 adapter 共用一个 scope 常量 | 全仓零引用；四个 adapter 各写字面量 `workspace:write`。**"共用"靠四处字面量巧合相同**，改动任一处不会有东西报错 |
+| `TERMINAL_RUN_STATES` | 终态集合 | 与 `runtime/state.py` 的 `TERMINAL_STATES` 重复，只有后者被用 |
+| `domain/identifiers.py` 的四个 id 铸造器 | id 的前缀由 domain 定义 | 四个全部零引用；domain 声明前缀是 `"thread"`，**实际产出是 `"thr"`** |
+| `ToolSpec.output_schema` | 框架无关契约的一部分，被 golden 冻结 | 全仓无生产者也无消费者；网关只校验 `input_schema` |
+| `TaskStep.depends_on` | 计划里的步骤依赖，被四道校验守着、`_PLAN_CONTRACT` 明确要求模型产出 | 两个读者把依赖关系**原样丢弃** |
+| `ProjectPathSegment` | 带安全理由的段名约束（文件名里的换行能伪造面向行的列表） | 没有任何模型字段用它 |
+| `summarise_children` | docstring 说"用于进度上报与拒绝消息" | 两处都没用 |
+
+**危害不一样，要分开说**：前三个是**冗余**——删掉即可，代价是零。
+后四个是**已经付过设计费的东西没有收到货**：`depends_on` 让模型多产出一个字段、
+让四道校验多跑一遍，然后被丢掉；`ProjectPathSegment` 写下了一条真实的安全推理
+（换行能伪造面向行的列表）却没有任何字段受它保护——**那是一条读起来像防线的空话**。
+
+**做完的判据**：每一处二选一并有一行说明——要么接上（`depends_on` 被排序读到、
+`ProjectPathSegment` 被至少一个字段用上、`output_schema` 被网关校验），
+要么删掉。**不许留在"看起来像被守着"的状态**。
+
+### B-11 核心层的第三方依赖守卫是黑名单，不是白名单 —— 口径不实
+
+**分类**：口径不实（2026-08-31 全仓扫描新登记）。
+
+**证据**：README 中英两版都写着 `domain/` 只依赖标准库与 Pydantic，
+并且这条边界由一条**会让 CI 变红**的测试守着。第一句不成立：
+[domain/workspace.py:34](../src/agent_workbench/domain/workspace.py:34) 是
+`import regex`，`pyproject.toml` 声明了 `regex>=2024.11,<2027`。
+
+**它的存在有正当理由**：`regex` 是带超时的匹配引擎，`GREP_TIMEOUT_SECONDS` 靠它；
+标准库 `re` 没有超时，一个恶意正则可以挂住整个事件循环。
+
+**第二句才是缺口**：`tests/architecture/test_dependency_boundaries.py` 的
+`FORBIDDEN_CORE_IMPORTS` 是**黑名单**。`regex` 不在其中，所以 CI 是绿的——
+**下一个进核心层的第三方包同样不会被拦**。守卫守的是"这几个框架不许进"，
+不是"核心层只许依赖这几样"。
+
+**做完的判据**：`domain/` 与 `ports/` 的第三方 import 改成**白名单**
+（当前应为 `pydantic` 与 `regex` 两项，各附一行理由），
+并让白名单之外的任何第三方 import 让测试失败。README 两版同步改口径。
 
 ---
 
@@ -924,8 +1164,20 @@ swap 已用 14.1/15.4 GB。而 v1 又不能绕过检索——
 `tests/workflows/test_task_handlers.py` 正反两条都有（合法裁决 → 状态、
 解不出 → 失败）。当年观测里的另一个候选原因（`revise` 在 v1 里没有可走的
 回边）已由 [ADR-060](./adr/0060-an-exhausted-reviewer-annotates-not-vetoes.md)
-一并移除：耗尽也有去处了。**还差的只是一次对真实 provider 的复跑**，确认
-2026-08-13 那个形态不再复现——在那之前本条不标关闭。
+一并移除：耗尽也有去处了。
+
+> **2026-08-31：这一段原本以「还差的只是一次对真实 provider 的复跑……在那之前
+> 本条不标关闭」结尾，而上面第几段就写着「本条据此关闭」，C 组的分组表也投「已关闭」。**
+> 同一条条目在自己内部同时说自己关了和没关，且**否定的那句排在最后**——
+> 它是读者看到的最后一句，于是这条实际上读起来是开着的，
+> [优先级建议](#优先级建议)也一直按开放条目讨论它。
+>
+> **本条关闭，以上面那一段为准。** 理由是判据的措辞：C-05 问的是
+> 「合法的结构化输出会不会被判成没有产出」，而那三种真实原因已经查清、
+> 诊断已修、正反测试都在——这是一个**关于代码的**判据，代码半满足即满足。
+> 「对真实 provider 复跑一次确认那个形态不再复现」是一件**值得做的事**，
+> 但它是一次端到端演示的判据，不是本条的；把它挂在这里，等于让一条已经答完的
+> 缺口无限期开着。它已另行记在[优先级建议](#优先级建议)的 v1 端到端那一段里。
 
 ---
 
@@ -978,7 +1230,7 @@ id；或把这一类不相等**升级成可纠正**（它今天不是 framing �
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
 | D-01 | Chat turn-scoped 附件、Task 输入 Artifact 附件 | 未实现 |
-| D-02 | Chat Session 服务端列表与重命名（删除已补上） | 部分关闭 |
+| D-02 | Chat Session 列表 / 重命名 / 删除 | **已关闭**（`4c40474`，2026-08-20） |
 | D-03 | 知识库重命名 / 删除 / 文档删除 / ACL UI | 未实现 |
 | D-04 | Word 读取与不可变编辑 | 未实现 |
 | D-05 | Langfuse、生产身份认证、S3 Artifact、远程部署 | 未实现 |
@@ -1009,24 +1261,29 @@ id；或把这一类不相等**升级成可纠正**（它今天不是 framing �
 已验证（2026-08-16 本地）：传入一个 24 字节的 `rows.csv`，随后一句「读一下，第二列
 加起来是多少」，回合读回文件并答 21。
 
-### D-02 Chat Session 的服务端列表、重命名与完整历史元数据 —— **删除这一半已关闭**
+### D-02 Chat Session 的服务端列表、重命名与完整历史元数据 —— **已关闭**（2026-08-20，`4c40474`）
 
 **已关闭的部分**（ADR-056）：`DELETE /v1/chat/sessions/{id}` 存在，
 `ConversationStore.delete_session` 在内存与 PostgreSQL 两套实现上跑同一份契约
 用例，控制台侧栏每一行都有删除按钮。会话行、消息、chat_turns 与该会话的事件流
 一起消失；工作区 artifact 按 ADR-056 §5 保留为不可达。
 
-**仍然没有的**：列表与改名。[chat.py](../src/agent_workbench/apps/api/routes/chat.py)
-的路由是 `POST /sessions`、`POST /sessions/{id}/messages`、
-`GET /sessions/{id}/messages`、`DELETE /sessions/{id}` —— 没有 list，没有 PATCH。
+**另一半也已关闭，2026-08-20**（`4c40474`，落地提交的信息里点名说自己在做 D-02）：
+[chat.py](../src/agent_workbench/apps/api/routes/chat.py) 现有八条路由，其中
+`GET /sessions`、`GET /sessions/{id}`、`PATCH /sessions/{id}`、
+`DELETE /sessions/{id}` 是这一条要的四条。前端 `client.ts` 在用，
+[tests/api/test_chat_session_management.py](../tests/api/test_chat_session_management.py) 覆盖。
 
-**为什么删除能先做而列表不能**：删除只需要一个 id，而列表要先回答
-`answerMode` 与 `knowledgeBaseId` 属不属于会话本身（见 F-06）。那是产品决定，
-不是接线问题；在它之前切一半列表会得到两份互相矛盾的清单。
+**当年"为什么列表不能先做"的顾虑怎么消解的**：那条顾虑是
+`answerMode` 与 `knowledgeBaseId` 属不属于会话本身。答案是**不属于**——
+它们留在 `localStorage` 里，列表来自服务端，两份清单因此不再互相矛盾：
+一份说有哪些会话，另一份说这台机器上次在这个会话里选了什么。见 F-06。
 
-**当前的后果**：控制台的删除是两处一起做的 —— 服务端行删掉，浏览器本地那行也
-删掉。一个从别的浏览器打开过的会话，服务端已经没有了，而那个浏览器的
-localStorage 里还留着一行指向不存在会话的记录。这是 F-06 的同一笔账。
+> **本条 2026-08-31 才被标成关闭，而它 2026-08-20 就该关了。**
+> 同期还有四处文档在说"没有 list / rename"
+> （`architecture-baseline.md`、`frontend-design.md`、`HIGHLIGHTS.md`、本文档），
+> 其中一处还写着侧栏的可访问名叫「本地 Chat 会话」——那个串前端 grep 零命中。
+> 见 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
 
 ### D-03 知识库重命名、删除、文档删除与共享 / ACL 管理 UI
 
@@ -1050,22 +1307,35 @@ Word 文档读取与编辑，能力表里也不得混为一谈。
 **当前事实**：可观测走 OTel（已落地）；Artifact 存本地文件系统；身份认证在生产
 意义上不存在；部署只有本机 Compose。这四项在架构基线里一直是 Planned。
 
+**2026-08-31 补一句互锁的位置，因为 CI 绿着验 production profile 很容易被读成
+「配置齐了就能上」**：`config.production.toml:11` 强制 `deployment_scope = "remote"`，
+而 [dependencies.py:618](../src/agent_workbench/apps/api/dependencies.py:618) 在
+`deployment_scope == "remote"` 时**直接抛 `InsecureDeploymentError`**（ADR-044：
+唯一存在的身份解析器读请求头，把它摆到一台机器之外就是一个没有访问控制的 API）。
+
+也就是说：**`config.production.toml` 按定义启不了 `agent-api`。** 它通过
+`agent-config-check --profile production` 只证明这份配置**合法**，不证明它**可运行**——
+两件事，而门禁那一行只测第一件。要让这个 profile 真的能起，前提是先有一个不读请求头的
+身份适配器，也就是这一条的第二项。
+
 ---
 
 ## E. 测试与发布证据
 
 | 编号 | 缺口 | 分类 |
 |---|---|:---:|
-| E-01 | Playwright 只验外壳，后端全 mock | 未实现 |
-| E-02 | 缺真实 Word MCP Server 的官方 Client 闭环 | 未实现 |
-| E-03 | ~~CI 不跑 E2E~~ 已进 CI；离线评测 / Compose 仍不跑 | 部分实现 |
-| E-04 | ~~首个 manifest 未生成~~ 已生成过两份；缺的是没有消费者 | **口径不实 + 未接线** |
+| E-01 | Playwright 只验外壳，后端全 mock（6 次执行，计数已刷新） | 未实现 |
+| E-02 | `apps/word_mcp/server.py` 是四个 MCP 服务器里唯一零测试的 | 未实现 |
+| E-03 | ~~CI 不跑 E2E~~ 已进 CI；离线评测 / Compose / `adapters/screen/darwin.py` 仍不跑 | 部分实现 |
+| E-04 | ~~首个 manifest 未生成~~ 本机已有三份；缺的是没有消费者 | **口径不实 + 未接线** |
 | E-05 | 文档中的数字过时 | **口径不实** |
 | E-06 | 前端样式表按领域拆分，做不成一次纯搬运 | 未实现（不排期） |
-| E-07 | ~~崩溃恢复 e2e 三条红~~ 已修；CI 仍不跑 `tests/e2e`（见 E-03） | **部分关闭** |
+| E-07 | ~~崩溃恢复 e2e 三条红~~ 已修，且 `tests/e2e` 已进 CI（`014de9e`） | **已关闭** |
 | E-08 | 能力阶梯落后于已发布的产品面，整块没有行 | **口径不实** |
+| E-09 | 契约参数化与共享 double 的三个洞 | 未实现 |
+| E-10 | 前端没有任何覆盖率工具或门槛 | 未实现 |
 
-### E-07 `test_worker_process_crash_recovery.py` 三条红 —— **已修**（CI 仍不跑它）
+### E-07 `test_worker_process_crash_recovery.py` 三条红 —— **已关闭**（2026-08-28）
 
 > **本条原编号 E-06，与既有的「前端样式表按领域拆分」撞号，本批让号改为 E-07。**
 > 撞号是这条分支引入的：写它的时候只数了表格里的最后一行，而那一节的编号排到 E-06
@@ -1115,24 +1385,47 @@ PostgreSQL）。
 **为什么能猜错这么久**：没有人跑过它。`tests/e2e` 不在任何一个 CI job 里（E-03），所以
 上一版那段推断写下来之后，既没有被证实也没有被证伪。
 
-**仍未关闭的那一半**：`tests/e2e` 进入某个每 PR 都跑的 job。否则下一次变红仍然不会有人
-知道——这一次它红了大概两周。
+**那一半也已经关闭了，2026-08-28**（`014de9e`，同日）：`tests/e2e` 进了 CI 的
+`Migrations, stores and end-to-end recovery` job。该 job 起真 PostgreSQL 16 + Qdrant，
+每个 PR 都先 `alembic upgrade head` 再跑
+`tests/contracts tests/persistence tests/api tests/vector tests/e2e` **五个目录**
+（[ci.yml:244](../.github/workflows/ci.yml:244)），超时也从 15 分钟提到 20——
+它要起 Worker 子进程并等真实的租约过期。
+
+> **本条 2026-08-31 才被标成关闭，而它 2026-08-28 就该关了**，
+> 且标题里那句「CI 仍不跑它」在同一天就不成立了。同一天写下的另一处
+> （`CLAUDE.md` 的「服务型套件是四个目录」）也少数了一个目录。
+> 见 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
 
 ### E-01 Playwright 的四次执行全部 mock 后端
 
-**证据**：[web/e2e/shell.spec.ts](../web/e2e/shell.spec.ts) 122 行，两个 `test(`；
-`playwright.config.ts` 两个 project（`chromium` 与 `mobile`/iPhone 13），
-所以是 **2 个用例 × 2 个 project = 4 次执行**。三处 `page.route(...)` 把
-`/v1/knowledge-bases`、`/v1/knowledge-bases/kb_portfolio/documents`、`/v1/tasks`
-全部拦成固定响应。
+**证据**（计数刷新于 2026-08-31）：[web/e2e/shell.spec.ts](../web/e2e/shell.spec.ts)
+**268 行，三个 `test(`**；`playwright.config.ts` 两个 project（`chromium` 与
+`mobile`/iPhone 13），所以是 **3 个用例 × 2 个 project = 6 次执行**。
+**五处** `page.route(...)` 把后端拦成固定响应。
+
+> **上一版这一行写的是「122 行、2 个 test、4 次执行、3 处 route」——四个数没有一个对。**
+> 这是本文档里**唯一一条带具体计数的登记**，而它全错了；
+> 一条以"证据要可核查"为主题的条目，自己的证据核查不过。同 [E-05](#e-05-文档中的数字过时--口径不实)。
 
 **它验的是**：外壳在桌面与移动布局下可用、知识库能进入 Chat、辅助页面可达。
 **它不验的是**：真实提交 Chat、真实提交 Task、审批、下载。
 
-### E-02 缺少对真实 Word MCP Server 的官方 Client 闭环测试
+### E-02 `apps/word_mcp/server.py` 是四个 MCP 服务器里唯一零测试的
 
-**当前事实**：renderer 与通用 MCP 各自有测试，但没有一条用官方 MCP Client
-连上真实 Word MCP Server 跑完一次 `render_document` 的用例。
+**标题 2026-08-31 放宽，因为原口径偏窄。** 原文说的是「缺少用官方 Client 连上真实
+服务器跑完一次 `render_document` 的闭环测试」——那说的是**测试的种类**，
+而实际情况更简单也更糟：**这个服务器模块一条测试都没有**。
+
+**对照组**（`tests/apps/` 下 `def test_` 计数）：
+`test_computer_mcp_server.py` **25** 条、`test_web_mcp_server.py` **23** 条、
+`test_sandbox_mcp_server.py` **14** 条、`word_mcp` **0** 条。
+渲染器本身有测试（`tests/adapters/test_docx.py`），
+profile 有测试（`tests/config/test_local_word_mcp_profile.py`），
+**服务器那一层没有**——loopback 绑定、工具声明、参数校验、错误映射全部无覆盖。
+
+**做完的判据**：至少与另外三个服务器同一体例的一组服务器级测试；
+其中至少一条是用官方 MCP Client 连上真实进程跑完一次 `render_document` 的闭环。
 
 ### E-03 CI 的覆盖边界
 
@@ -1161,13 +1454,31 @@ inspect` 不到就跳过并把 `pull` 命令写在跳过原因里，RAG 那条�
 runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
 
 **仍然不跑**：离线 RAG 评测（需要 embedding extra，按分层约定 CI 不装——`quality` job
-还专门断言它**没有**被装上）、Compose 启动。这两项是剩下的缺口。
+还专门断言它**没有**被装上）、Compose 启动，
+以及 **[`adapters/screen/darwin.py`](../src/agent_workbench/adapters/screen/darwin.py)
+整个文件（735 行）**。
+
+> **最后那一项 2026-08-31 补进这份清单**，此前漏了。它是**双层跳过**：
+> `tests/apps/test_computer_darwin.py` 顶上是
+> `pytest.mark.skipif`（非 macOS 就跳）加 `pytest.importorskip("Quartz")`（
+> 没装 `computer-use` extra 就跳），而 CI 跑 ubuntu 且按分层约定不装那个 extra。
+> 于是这 735 行——**包含屏幕抓取、合成器过滤与坐标换算，也就是这个仓库里
+> 安全含义最重的一段适配器代码**——在 CI 里一行都不会执行。
+> 它和另两项不同：那两项是"跑不起来"，这一项是"跑得起来但只在一台 mac 上"，
+> 而本仓库的规矩是本机证据必须**被标成本机证据**。
 
 ### E-06 前端样式表按领域拆分，做不成一次纯搬运
 
-**证据**：[web/src/styles/app.css](../web/src/styles/app.css)（5766 行）与
-[web/src/styles/minimal-theme.css](../web/src/styles/minimal-theme.css)（2233 行），
-后者在 [web/src/main.tsx](../web/src/main.tsx) 里后置加载、覆盖前者。
+**证据**（计数刷新于 2026-08-31）：`web/src/styles/` 下是**三份**样式表——
+[app.css](../web/src/styles/app.css)（**9394** 行）、
+[minimal-theme.css](../web/src/styles/minimal-theme.css)（**3007** 行）与
+[tokens.css](../web/src/styles/tokens.css)（**337** 行）；
+后两者的加载顺序在 [web/src/main.tsx](../web/src/main.tsx) 里，`minimal-theme` 后置
+加载、覆盖 `app.css`。
+
+> 上一版写的是「app.css 5766 / minimal-theme 2233」两份。**这条缺口的全部论证正是
+> 「层叠决定编码在源码顺序里」——少算一份样式表会让那个顺序论证站不住**：
+> 一份没被数进去的表，正是"顺序"这件事最容易出问题的地方。
 
 **想做的事**：拆成 `shell.css` / `workspace-sidebar.css` / `components.css` /
 `features/*.css`，让一次改动落在可预测的文件里。
@@ -1213,12 +1524,19 @@ runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
 拒绝：附件不存在就不写；工作树脏就不写，除非显式 `--allow-dirty`。
 
 **2026-08-31 更正：「从没跑过一次」是假的，而这一条此前就是这么写的。**
-`artifacts/evidence/` 下有**两份**已生成的 manifest：
+`artifacts/evidence/` 下**这台机器上有三份**已生成的 manifest：
 
 | gate | 时间 | commit | 脏否 | 附件 |
 |---|---|---|:---:|---|
 | `gap-closure-2026-08-11` | 08-11 08:26 | `bf31815` | 是（`--allow-dirty`） | 1 |
 | `batch3-2026-08-11` | 08-11 21:50 | `cc7d146` | **否** | 5（4 份评测报告 + 真实服务测试报告）|
+| `closing-scan-2026-08-31` | 08-31 03:27 | `b82d674` | **否** | 1（离线 pytest 报告）|
+
+> **第三份是同日写下的，而这一条当时写的是"两份，最后一份停在 08-11"。**
+> 一条以「数字过期」为主题的条目，把自己的计数在几小时内又写过期了一次。
+> 这不是巧合，是这一条自己论证的那件事：**手抄的计数没有守门人**。
+> 这三份仍然都只存在于这台机器上（见下），所以「三份」这个数对读仓库的人依然
+> 不可核查——写在这里是为了让它至少可以被**这台机器**证伪。
 
 第二份是一份**干净树上、带附件**的 manifest，而且
 `agent-evidence verify artifacts/evidence/batch3-2026-08-11/manifest.json`
@@ -1232,8 +1550,10 @@ SHA-256 逐个对得上。**这个机制不但跑过，还往返验证过。**
 - **manifest 不随仓库走**：[.gitignore:44](../.gitignore) 忽略整个
   `artifacts/evidence/`，`git ls-files | grep manifest.json` 命中 **0**。也就是说
   它只存在于**跑过它那台机器**上，读仓库的人看不到。
-- **于是它不会过期，因为没人指望它新**：最后一份停在 2026-08-11、schema `1.14`，
-  而当前是 `1.19`。
+- **于是它不会过期，因为没人指望它新**：写一份不需要任何理由，也没有任何东西会因为
+  没写而失败。第三份（`closing-scan-2026-08-31`）恰好是一次收尾扫描顺手写的，
+  它记着 schema `1.19` 与那次的门禁数字——**而本文档的其他地方仍然手抄同一组数**，
+  两者没有任何联系。
 
 **这解释了 E-05 为什么治不好。** 上一版把 E-04 叫作"E-05 唯一的根治手段"，方向对，
 但机制没接上：manifest 生成之后不进仓库、不进 CI、不被任何文档引用，于是它无法让
@@ -1321,6 +1641,50 @@ spawn / 持久 mailbox」整行只勾 Planned，而 spawn 已落地）。
 演示；且这件事有一条防复发的机制（同 E-04：让"阶梯落后于代码"在 CI 里可检出），否则它
 会以 E-05 的节奏复发。
 
+**2026-08-31 补一格**：「Chat 会话的服务端管理（list / rename / delete）」那一行
+此前只勾 Planned，本批已勾到 Demonstrated（`4c40474`，四条路由 + 前端在用 +
+`tests/api/test_chat_session_management.py`）。**E-08 点名的是五块整块缺行的产品面
+加一行低估，没有点到这一行**——所以这一行是一条**新的**同形实例，而不是 E-08 的一部分。
+
+### E-09 契约参数化与共享 double 的三个洞 —— 未实现
+
+**分类**：未实现（2026-08-31 全仓扫描新登记）。三条都是同一种形状：
+**同一份契约有多个实现，而只有一个被契约套件跑到。**
+
+1. **`ChatExpirationCoordinator` 两个实现两套测试，没进契约参数化。**
+   内存那份与 `PostgresChatExpirationCoordinator` 各自被自己的文件测，
+   而 [tests/contracts/conftest.py](../tests/contracts/conftest.py) 的开头几行
+   **亲自点名了这种反模式**：一份契约要跑所有实现，否则分歧是一次生产惊喜而不是
+   一次失败。这是本仓库最引以为豪的机制之一漏掉的一格。
+2. **`VectorIndexPort` 只有一个真实实现，且没有共享的 in-memory double。**
+   各测试自己 `cast` 一个本地 stub，**没有任何东西保证它们与 `QdrantVectorIndex`
+   语义一致**。契约套件里另外六组 fixture 都有 double，这一组没有。
+3. **`application/session_titles.py` 是核心层唯一没有测试直接 import 的模块。**
+   它只被 `tests/api/test_code_api.py` 间接触到，而那套在缺 `AGENT_WORKBENCH_TEST_DSN`
+   时整体跳过——**也就是说，离线门禁下它零覆盖**，而它决定的是每个 Code 会话叫什么名字。
+
+**做完的判据**：第 1 条进 `tests/contracts` 参数化；第 2 条有一个共享的
+`InMemoryVectorIndex` 并进同一套契约；第 3 条有一个直接 import 它的单元测试文件。
+
+### E-10 前端没有任何覆盖率工具或门槛 —— 未实现
+
+**分类**：未实现（2026-08-31 全仓扫描新登记）。
+
+**证据**：`web/package.json` 与 `web/vitest.config.ts` 里 `coverage` 零命中，
+`@vitest/coverage-v8` 未安装。`pnpm check` 是 ESLint + `tsc -b` + Vitest +
+production build 四步，**没有覆盖率那一步**。
+
+**后果是具体的，不是原则问题**：「哪个 feature 覆盖得薄」今天只能靠数文件。
+两个实例：
+
+- `web/src/features/system/SystemPage.tsx` **242 行，只有 1 条测试**，
+  只覆盖两个探针都成功那条路——**而身份那三行恰恰是这一页区别于设置面板的全部内容**。
+- `web/src/app/navigation.ts` 在 2026-08-31 之前**零覆盖**，而它漏掉 `/usage`
+  的那条三元链就是这么活下来的（本批已修，见 status.md 第六十批）。
+
+**做完的判据**：`pnpm check` 里有一步产出覆盖率，且至少对
+`src/app/` 与 `src/api/` 两个目录设一个不会天天红的下限（先量后定，不要拍脑袋）。
+
 ---
 
 ## F. Code 模式
@@ -1332,7 +1696,7 @@ spawn / 持久 mailbox」整行只勾 Planned，而 spawn 已落地）。
 | F-03 | Code 没有持久幂等 | **拒绝** |
 | F-04 | 同一 principal 跨会话的工作区不隔离 | **拒绝** |
 | F-05 | ~~没有工具会触发审批~~ `sandbox_run` 接上了，闸门在用 | **已关闭** |
-| F-06 | Chat 的侧栏仍是本地列表（Code 那半已关闭） | 部分关闭 |
+| F-06 | Chat 的 `answerMode` / `knowledgeBaseId` 仍在浏览器里（列表已在服务端） | 已知代价 |
 | F-07 | 步骤最快也要等一个轮询周期才出现（默认 10s） | 已知代价 |
 | F-08 | 重新开启导出闸门的部署没有跨任务收件箱 | 已知代价 |
 | F-09 | 评测和 Code 抢同一块内存，没有跨子系统准入控制 | 已知代价 |
@@ -1350,9 +1714,35 @@ spawn / 持久 mailbox」整行只勾 Planned，而 spawn 已落地）。
 | F-24 | 项目目录的回合没有容器可用 | **拒绝** |
 | F-25 | 读写回执喂不满：三条路径绕过工具改动目录 | 已知代价 |
 | F-26 | `policy.write_tools_require_approval` 读起来像保证，src/ 里没有读者 | **口径不实** |
+| F-27 | ~~项目目录一侧只看得了文本~~ | **已关闭**（2026-08-27） |
+| F-28 | ~~Code 的文件预览不渲染 Markdown~~ | **已关闭**（2026-08-27） |
 | F-29 | computer use 只能激活已经开着的应用，不能启动应用 | **拒绝** |
+| F-32 | 第一轮没法收窄工具（原 F-31，2026-08-31 改号） | 已知代价 |
+| F-33 | Task 侧完全没有 SSE 端点 | 未实现 |
+| F-34 | computer 页把门禁规则手抄了一遍，无交叉校验 | 已知代价 |
 
-> 编号一经退休不再复用。F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
+> 编号一经退休不再复用。**F-18（合成器过滤是 allowlist 形状，抓屏不是遮盖）
+> 已于 2026-08-28 关闭**，按维护规则从正文删除，落地记录在
+> [status.md](./status.md)「F-18 关掉：allowlist 形状的合成器过滤」一节与
+> [ADR-076](./adr/0076-a-window-nobody-approved-is-not-in-the-picture.md)：
+> `ScreenPort.capture` 的 `exclude_bundle_ids` 换成 `include_bundle_ids`，
+> 抓屏从「CoreGraphics 整帧 + 加黑矩形」换成 `SCContentFilter` 只把批准过的窗口
+> 交给合成器——**没批准的像素从来没有被画出来过**，代价是 22 ms → ~70 ms。
+> **这一条 2026-08-31 才补进本名单**：它此前既不在正文里、也不在任何退休说明里，
+> 而 `pyproject.toml`、`gate.py` 与 `test_computer_gate.py` 三处仍以过去时引用它，
+> 顺着编号找过来的读者会一无所获。
+>
+> **F-31 的编号被复用过一次，这里如实记下。** 旧 F-31（JSX 里折行的中文段落渲染出来
+> 多一个空格）于 2026-08-29 当天登记、当天关闭并退休，退休说明就在下面；
+> **2026-08-30 一条全新的、仍然开着的条目又占用了 F-31**（`722f8ec`，「第一轮没法
+> 收窄工具」）。于是从那天起，`src/` 与 `tests/` 里对旧 F-31 的引用指向一个语义
+> 完全不同的条目。**2026-08-31 已把新条目改号为 F-32**，F-31 保持退休。
+>
+> 这不是笔误：本文档在两个地方各写着「编号一经退休不再复用」，而**没有任何东西
+> 会因为违反它而失败**——同 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
+> 更糟的一层是那条新条目**连分组表里的行都没有**，只读表的读者会完全看不到它。
+>
+> F-23（项目目录的回合被告知自己在一个扁平的、有版本的工作区
 > 里）已于 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在
 > [status.md](./status.md) §1：`CODER_SYSTEM_PROMPT_PROJECT` 由具名替换从基底派生，
 > 由 `_system_prompt_for` 按本回合被提供的工具选中，锚点缺失时在 import 时抛错。
@@ -1418,8 +1808,15 @@ spawn / 持久 mailbox」整行只勾 Planned，而 spawn 已落地）。
 崩溃后没有任何东西需要回收：没有租约、没有 `release_pending`、没有数据库里的活跃槽。
 工作区停在**最后一次成功写入**上（指针是每次写成功就推进的），用户把那句话再说一遍。
 
-**做完的判据**：不适用。要改，先改
-[更正文档](../var/plans/2026-08-14-code-turns-are-not-chat-turns.md) 的结论。
+**做完的判据**：不适用。要改，先改那份更正文档（`var/plans/2026-08-14-code-turns-are-not-chat-turns.md`）
+的结论。
+
+> **2026-08-31：这里原本是一条 Markdown 链接，而对 clone 这个仓库的人它是一条死链**
+> ——`.gitignore:43` 忽略整个 `var/`，所以那份文档只存在于写下它的那台机器上。
+> 改成不带链接的路径，因为**内容确实在那里，只是不在仓库里**；
+> 把它写成一个看得见的路径而不是一个点不开的链接，是这两者之间唯一诚实的选择。
+> `docs/status.md` 说的「167 个 md 零死链，全量校验器扫的」因此有一个**盲区**：
+> 校验器跑在写下它的那台机器上，`var/` 在那里是存在的。这不是笔误，是口径。
 
 ### F-02 每次部署必然砍断在跑的回合 —— 拒绝
 
@@ -1479,7 +1876,7 @@ job 离线运行，所以它只能是本地证据（见 E-03）。
 `code.external_requires_approval` 默认 `false`——`external` 放行、`destructive`
 继续上膛，要旧行为的部署一行配置拿回去。闸门机器仍然一个字没改。
 
-### F-06 Chat 的侧栏仍是本地列表 —— 部分关闭
+### F-06 Chat 的 `answerMode` / `knowledgeBaseId` 仍在浏览器里 —— 已知代价
 
 **Code 那一半已经关闭**（[ADR-047](./adr/0047-a-session-is-named-by-its-first-sentence.md)）：
 `ConversationStore.list_sessions(tenant_id, principal_id, mode)` 存在，第一条指令
@@ -1487,17 +1884,20 @@ job 离线运行，所以它只能是本地证据（见 E-03）。
 这份列表。清掉浏览器存储、换一台机器，列表都还在。
 `web/src/features/code/storage.ts` 随之删除。
 
-**Chat 那一半没关**：`web/src/features/chat/storage.ts` 仍然在 localStorage 里存
-`LocalChatSession`，而那条记录带着 `answerMode` 和 `knowledgeBaseId`——服务端不建模
-这两样。
+**Chat 的列表也已经关闭了**（2026-08-20，`4c40474`，见 D-02）：侧栏来自
+`GET /v1/chat/sessions`，可改名可删除。**标题里原来那句「侧栏仍是本地列表」
+2026-08-31 改掉**——它在四个月的最后二十天里是假的。
 
-**为什么不顺手做掉**：那是合并问题不是接线问题。切一半会得到两份互相矛盾的列表
-（服务端有标题没有 answerMode，本地有 answerMode 但可能少了在别处开的会话），而
-两份列表里总有一份是旧的。先要决定「answer mode 和知识库选择属不属于会话本身」，
-那是产品决定。
+**仍然留在浏览器里的**：`web/src/features/chat/storage.ts` 用 localStorage 存
+`answerMode`、`knowledgeBaseId` 与游标。**这已经是一个答案，不是一个待办**：
+当年问的是「answer mode 和知识库选择属不属于会话本身」，落地时的选择是**不属于**
+——它们是这台机器上次的选择，不是会话的属性。
 
-**做完的判据**：Chat 的侧栏也来自 `list_sessions`，且 `answerMode` /
-`knowledgeBaseId` 要么进了会话行、要么明确定为「每次打开重选」。
+**代价**：换一台机器打开同一个会话，会话在、上次选的知识库不在，要重选一次。
+换来的是服务端不必为一个"上次选了什么"承担会话级的存储与迁移。
+
+**做完了算什么样**：不适用——除非产品决定改成「答题模式属于会话」，
+那时要连带回答一个旧会话在没有这个字段时读出来是什么。
 
 ### F-07 步骤的延迟下限是一个轮询周期 —— 已知代价
 
@@ -1864,41 +2264,44 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 
 按"单位工作量能消除多少不可核查性"排序，而不是按功能大小。
 
-1. **E-04 给 manifest 接一个消费者**。~~生成首份 manifest~~ 已经生成过两份，其中一份
-   干净、带附件、今天仍能 `verify` 通过——**上一版说"从没跑过一次"是不实的**。缺的是
-   它不进版本控制（`artifacts/evidence/` 被 gitignore）、不进 CI、不被任何文档引用，
-   所以它无法让任何一句过期的话失败。**它仍然是 E-05 唯一的根治手段**，但修法是
-   "被消费"，不是"跑一次"。**方向已定：manifest 不进版本控制**，因此 CI verify 那条路
-   被排除，剩下的唯一判据是让 HIGHLIGHTS §2 的数字**由 manifest 生成而不是手抄**。
-2. **A-03 重跑等价评测**。它同时是 A-01 能否打开的前置条件。约 30–70 分钟机器时间。
-3. **B-05 第一条真实 upcaster**。升级链至今没在真实数据上走过一次，机制是否真的
-   接得上仍未被证明。
-4. **A-07 决定候选漏斗的去留**（2026-08-31 新登记）。`[rag.retrieval]` 的四个 `top_k`
-   没有读者，而[配置说明](./configuration.md) §8 把它们写成了生效的上限。口径那一半
-   本次已修，剩下的是二选一：接线，或从 schema 里删掉。两条都要先有 ADR——它们把
-   "配置是契约"往相反方向解释。排在这里是因为它便宜，且**每天都在误导读配置的人**。
-5. **B-02 watchdog 的 abort 半**。warn 半已在 API 进程里跑着，剩下的是判定与停止
-   claim；同时把它装进 Task Worker。
-6. **B-01 SSE 那半消费端**。边界清楚，可对真 PostgreSQL 验证，且不改变正确性论证。
-7. **E-08 重排能力阶梯**（2026-08-31 新登记）。排在末位不是因为不重要，而是因为它
-   **应当在 E-04 之后做**：阶梯要的是逐格可链接的证据，而 evidence manifest 正是产生
-   那种证据的机制。反过来做，等于再手抄一遍会过期的表。
+**2026-08-31 全部重排。上一版的第 2/3/4/5 位全部已不成立**——第 2 位（A-03）的工作
+2026-08-11 就做完了、第 3 位（B-05）的两半里被点名的那半 2026-08-12 就关了、
+第 4 位（A-07）本批已接线四分之四里的四个数、第 5 位（B-02）是一条被 ADR-041 逐条
+拒绝过的事。**一份用来决定"下一步做什么"的清单，四项里有四项推荐已经做完或明确不做的事。**
+这不是巧合，是 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)：本文档的状态没有守卫。
 
-**上一版这份排序自己过期了，登记在此。** 它的第 4 项是"C-01 调用账本，它是 C-02 三项的
-共同前置"，而 C-01 在表里已是**已关闭**，C-02 也已收窄成"仅 partial failure 未做"——
-也就是说，**一份用来决定"下一步做什么"的清单，推荐了一件已经做完的事**。这比数字过期更贵：
-数字过期误导的是判断，排序过期误导的是行动。它与 E-05 同因，也同样只能靠 E-04 治。
+1. **A-09 给账本的状态接一条会失败的检查**。上面那段就是它的理由：排序过期比数字过期贵，
+   因为它误导的是**行动**。最小可行版本在 A-09 里写着，且它对本次查出的五条能覆盖四条。
+   排第一是因为**没有它，这份排序下次还会这样**。
+2. **E-04 给 manifest 接一个消费者**。方向已定：manifest 不进版本控制，
+   所以剩下的唯一判据是让 HIGHLIGHTS §2 的数字**由 manifest 生成而不是手抄**。
+   它治的是 E-05（数字），A-09 治的是状态；**两条都要，因为 E-04 按定义不覆盖状态**。
+3. **A-08 清空 `KNOWN_UNREAD_LEAVES`**。守门测试本批已就位，42 条豁免一条没消除。
+   逐条都便宜，而且每一条都是一个 operator 今天可以改、改了什么也不会发生的旋钮。
+   `qdrant.prefer_grpc` 与两个 `*_vector_name` 排最前——它们**即便被读也不成立**。
+4. **B-05 第一条真实 upcaster**。升级链至今没在真实数据上走过一次，机制是否真的
+   接得上仍未被证明。这是唯一一条从上一版原样留下来的。
+5. **A-01 写那份切换 ADR**。等价证据已经齐了（见已关闭的 A-03），
+   剩下的是一个决定：翻 `rag.llama_index.enabled` 会改 Task 语义指纹。
+   便宜，且它让四份评测报告终于有用武之地。
+6. **B-01 SSE 那半消费端**。边界清楚，可对真 PostgreSQL 验证，且不改变正确性论证。
+7. **E-08 重排能力阶梯**。排在末位不是因为不重要，而是因为它**应当在 E-04 之后做**：
+   阶梯要的是逐格可链接的证据，而 evidence manifest 正是产生那种证据的机制。
+   反过来做，等于再手抄一遍会过期的表。
+
+**更早的一次同样过期，一并留在这里**：那一版的第 4 项是"C-01 调用账本，它是 C-02 三项的
+共同前置"，而 C-01 当时在表里已是**已关闭**。同一种错误至少发生过两次，这是把它
+排到第 1 位的第二个理由。
 
 其余条目（D 组大部分、C-03、C-04、B-03）需要新的 Adapter 或新的产品决策，
 不适合在证据链补齐之前动。
 
-**C-05 不在上面这个排序里，但它挡着一件别的事**：v1 图目前跑不到终点——
-2026-08-13 的实测里，`understand → plan → research_external → synthesize` 全部
-通过，停在 `critic`。上面这份排序问的是"哪一步最能消除不可核查性"，而 C-05 问
-的是"这条链能不能走完一次"。两者不冲突，但如果需要一次 v1 的端到端演示，它是
-唯一的拦路条目；Chat 那条链路不受影响。**2026-08-31 补：诊断那一半已经修了**——
-下一次同样的失败会说出四条里的哪一条，所以这条现在缺的是**一次真实运行**，
-而不是继续读代码。（此处此前还有一句"B-06 则决定同一条链遇到
+**一次 v1 端到端演示仍然欠着，但它已经不是 C-05 了**：2026-08-13 的实测里
+`understand → plan → research_external → synthesize` 全部通过、停在 `critic`。
+那次失败的三种真实原因都已查清并钉住测试，**C-05 据此关闭**（见该条末段的说明）。
+剩下的是**一次对真实 provider 的复跑**，确认那个形态不再复现——那是一次演示的判据，
+不是一条缺口。它不在上面的排序里，因为上面问的是"哪一步最能消除不可核查性"，
+而这一件问的是"这条链能不能走完一次"。Chat 那条链路不受影响。（此处此前还有一句"B-06 则决定同一条链遇到
 抖动时是不是必然失败"——**B-06 已关闭**，那句连同它描述的风险一起过期了，本次删去
 而不是留着。）
 
@@ -1910,10 +2313,31 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 
 ## 维护规则
 
-- 一条缺口关闭时，**从本文档删除**并在 [status.md](./status.md) 记录，不要在这里
-  留"已完成"的条目——那会让本文档退化成第二份状态文档。
+- **一条缺口关闭时怎么处理，看它的论证还有没有人要读**（2026-08-31 写明）：
+  - **删除正文、只在退休名单里留一句**——适用于全部内容就是"这个东西不存在"的条目。
+    留着它等于让本文档退化成第二份状态文档。B-04、D-06、F-18、F-22、F-23、F-30
+    走的是这条。
+  - **留在原地并在标题上标 `— 已关闭`**——适用于论证本身仍在被引用的条目：
+    它记的是"当时为什么认为这是个问题、后来是什么让它不是了"，而那段推理会被
+    ADR、别的缺口或未来的同形问题引用。B-06、C-01、C-08、F-05、F-14、F-15、F-27、
+    F-28、A-03、D-02、E-07 走的是这条。
+
+    这两套做法此前**并存且没有分界说明**，读者会以为其中一套是失误。
+    判据是"论证还有没有人要读"，不是"关得早还是晚"。
+- **编号一经退休不再复用，包括没有正文的退休编号。** 这条本来就写在
+  [B 组的退休说明](#b-reliable-core)里，2026-08-30 还是被违反了一次：
+  一条全新的、仍然开着的条目占用了刚退休的 F-31。**已改号为 F-32**，
+  F-31 保持退休（见 F 组）。
+- **每条正文条目都必须在它那组的分组表里有一行。** 表和正文各写各的时，
+  只读表的读者会完全看不到差集里的条目——F-32 就曾经是这样一条：
+  它开着、有正文、而分组表里没有它。
 - 新增缺口必须带仓库位置。没有位置的条目不许写进来。
 - "口径不实"类不排期。发现即修，修完在本次提交里连带更正本文档。
+- **这几条自己没有守门人。** [E-04](#e-04-evidence-manifest-有工具有产物但没有消费者)
+  的防复发判据是「门禁数字由 manifest 生成」——**它按定义不覆盖状态**，
+  所以一条早已被别的改动修掉的缺口可以在这里开着而不被任何东西发现。
+  2026-08-31 的扫描一次查出五条这样的反向不实（A-03、D-02、E-07、B-05 一半、B-02 分类）。
+  见 [A-09](#a-09-账本自己的状态没有任何守卫--口径不实)。
 
 
 ### F-24 项目目录的回合没有容器可用 —— 拒绝
@@ -2104,7 +2528,7 @@ bundle id」；[darwin.py](../src/agent_workbench/adapters/screen/darwin.py) 只
 ADR 段落），要么维持现状。在人没有被问过这件事之前，实现它就是拿一份为别的问题收来的
 同意去付一件更贵的事。
 
-### F-31 第一轮没法收窄工具 —— 已知代价
+### F-32 第一轮没法收窄工具 —— 已知代价
 
 **证据**：[ComposerMenu.tsx](../web/src/features/code/ComposerMenu.tsx) 里「工具」那一
 栏挂在 `sessionId === undefined ? [] : …` 后面；目录的路由是
@@ -2126,3 +2550,50 @@ ADR-047：第一句话才是给会话命名的东西，一个凭空点出来的�
 **做完的判据**：不是「让起始屏也能勾」，是先回答**它在问谁**。一条按项目寻址的
 `GET /v1/code/projects/{id}/tools` 是可以成立的，但它得先说清自己答的是「一个还不
 存在的会话的下一轮」——那是 ADR-096 §2 那条时态线的第三次划，值一段自己的 ADR。
+
+### F-33 Task 侧完全没有 SSE 端点 —— 未实现
+
+**分类**：未实现（2026-08-31 全仓扫描新登记）。
+
+**证据**：Chat 有 [routes/events.py](../src/agent_workbench/apps/api/routes/events.py)
+的 `/events`，Code 有 [routes/code.py](../src/agent_workbench/apps/api/routes/code.py)
+的 `/events`，而 **[routes/tasks.py](../src/agent_workbench/apps/api/routes/tasks.py)
+546 行 9 条路由里一条都没有**。
+
+后果被写进了两处代码，两处都当成前提接受了：
+
+- [apps/cli/repl.py](../src/agent_workbench/apps/cli/repl.py) 的注释
+  「Tasks have no SSE, so their timeline is polled」；
+- [web/src/features/work/WorkPage.tsx](../web/src/features/work/WorkPage.tsx)
+  的 `refetchInterval: 5_000`。
+
+**它和已有的两条不是一回事，所以要单独登记**：B-01 说的是**既有的 SSE 端点内部
+仍在轮询数据库**，F-07 说的是**轮询周期**——**都不是「Task 根本没有这个端点」**。
+一个读 B-01 的人会以为 Task 有一条 SSE 只是实现得不好。
+
+**做完的判据**：`GET /v1/tasks/{id}/events`，与 Chat 那条同一套游标与鉴权语义，
+且前端的 5 秒轮询退成断线兜底而不是主路径。
+
+### F-34 computer 页把门禁规则手抄了一遍，无交叉校验 —— 已知代价
+
+**分类**：已知代价（2026-08-31 全仓扫描新登记）。
+
+**证据**：`web/src/features/computer/` 里把
+[domain/computer.py](../src/agent_workbench/domain/computer.py) 与
+`apps/computer_mcp/gate.py` 的规则——四道检查、tier 推导、拒绝文案、截图预算——
+**用中文重写了一遍**，两边没有任何交叉校验。页面自己写着这是手抄。
+
+**为什么它比一般的"文档会过期"更该记下来**：**这个失效模式已经翻过两次车了**，
+而且页面自己记着：ADR-091 把工具面从 6 改到 8、把第 3 道检查的含义从「人选了这扇窗」
+改成「模型在人批准的集合里选了一扇」，两次都要人记得回来改这一页。
+**一个翻过两次车的失效模式今天仍然没有守门人。**
+
+**为什么仍然接受**：把规则做成一份可导出的机器可读事实（然后页面渲染它）
+要跨越 ADR-095 刚刚划下的那条线——`apps/api` 只做**只读反代**，不复述门禁语义。
+一条「把 gate 的规则表投影成 HTTP 事实」的路由是可以成立的，但它答的是
+「这个 computer MCP 进程此刻的规则」，而页面要说的是「这套系统的规则」，
+两者在同一台机器上恰好相同、在别处未必——那需要一份自己的 ADR。
+
+**做完了算什么样**：一条会失败的检查，把页面上的四道检查 / tier 表与
+`domain/computer.py` 的常量绑起来（哪怕只是一个从 Python 侧生成的 JSON fixture
+被前端测试读）。在那之前，这一页每次门禁改动都要人手动同步——**这句话本身就是代价**。

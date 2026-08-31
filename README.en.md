@@ -14,7 +14,7 @@ doing its own segment, and none takes over the core loop.
 |---|---|
 | Judging the substance | [**The ten-minute version**](docs/HIGHLIGHTS.md) (Chinese) — a real event stream, gate numbers, four engineering judgements |
 | Trying to run it | [Quick start](#3-quick-start) — one command, no network, no database |
-| Asking what is **missing** | [**Known gaps**](docs/known-gaps.md) — four categories, each with a location and a criterion for "done" |
+| Asking what is **missing** | [**Known gaps**](docs/known-gaps.md) — five categories, each with a location and a criterion for "done" |
 | Reading the rationale | [Documentation map](docs/README.md), [architecture baseline](docs/architecture-baseline.md), [ADR index](docs/adr/) |
 
 ---
@@ -554,7 +554,7 @@ test without a control case does not count**.
 | Document | Purpose |
 |---|---|
 | [The ten-minute version](docs/HIGHLIGHTS.md) | Real event stream, gate numbers, engineering judgements |
-| [Known gaps](docs/known-gaps.md) | **What is not built**, in four categories |
+| [Known gaps](docs/known-gaps.md) | **What is not built**, in five categories |
 | [Implementation status](docs/status.md) | Implementation and test evidence, PR by PR |
 | [Architecture baseline](docs/architecture-baseline.md) | Product boundaries, layering, reliability protocol |
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
