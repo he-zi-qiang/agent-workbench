@@ -65,6 +65,28 @@ PARKED_TASK_STATUSES = frozenset({"waiting_approval", "waiting_migration"})
 #: The Task's verdict. No Worker resumes one of these.
 SETTLED_TASK_STATUSES = frozenset({"succeeded", "failed", "cancelled", "dead_letter"})
 
+#: How many timeline events to read back before counting anything.
+#:
+#: 500 is the route's own ceiling, and the number matters because the counting
+#: below is arithmetic over this window rather than over the run. It used to
+#: ask for 50. A console-profile research run emits ~153 events, so the tally
+#: printed as "4 failed tool calls" over a run that had 7 failures and 16
+#: successes -- a truncated prefix reported in the tense of a total. Reading a
+#: prefix is fine for *printing* the shape of a run; it is not fine for
+#: deciding whether the run worked.
+TIMELINE_LIMIT = 500
+
+#: The tool failures that mean the envelope is wrong rather than the web is.
+#:
+#: These are the ones this walkthrough was written to catch: a Task whose tools
+#: were refused reaches `succeeded` anyway, by answering out of the model's own
+#: memory. One is enough to fail the run -- unlike a page that would not load,
+#: there is no benign reading of the caller holding narrower scopes than the
+#: profile's envelope.
+REFUSAL_ERROR_CODES = frozenset(
+    {"missing_permission_scope", "outside_submitted_envelope", "tool_not_permitted"}
+)
+
 POLL_SECONDS = 2.0
 
 SAMPLE = """The application performs one dense and sparse fusion per query.
@@ -392,46 +414,68 @@ def main(argv: list[str] | None = None) -> int:
         timeline = client.get(
             f"/v1/tasks/{task_id}/timeline",
             headers=_headers(args),
-            params={"limit": 50},
+            params={"limit": TIMELINE_LIMIT},
         )
         timeline.raise_for_status()
         events = timeline.json()["events"]
         kinds = [event["event_type"] for event in events]
-        _fact("timeline", " -> ".join(kinds))
+        # Collapsed, because the window is now the whole run. 153 arrows in
+        # one line is not a shape anybody reads; consecutive repeats carry
+        # their count instead, which is the same information at the length the
+        # truncated version accidentally had.
+        shape: list[str] = []
+        for kind in kinds:
+            if shape and shape[-1].split(" x")[0] == kind:
+                seen = shape[-1]
+                count = int(seen.split(" x")[1]) if " x" in seen else 1
+                shape[-1] = f"{kind} x{count + 1}"
+            else:
+                shape.append(kind)
+        _fact("timeline", " -> ".join(shape))
         # A settled Task is not a working one. `succeeded` is about the graph
         # reaching its end, and a run whose every tool call was refused reaches
         # it too -- by writing an answer out of the model's own memory. That is
         # the one thing this walkthrough exists to not print a green line for,
         # and it is what it printed before the scopes above were sent.
+        # The rule the comment above states, rather than the one that was
+        # written. "Every tool call was refused" is the failure this exists to
+        # catch; "some pages did not load" is Tuesday on the open web, and a
+        # check that fires on both fires on every console-profile run -- at
+        # which point it has stopped being a check. So: any refusal at all is
+        # a failure, and so is a run where nothing worked; anything else is
+        # reported and walked past.
         refused = kinds.count("ToolFailed")
+        worked = kinds.count("ToolCompleted")
+        codes: dict[str, int] = {}
+        for event in events:
+            if event["event_type"] != "ToolFailed":
+                continue
+            payload = event.get("payload") or {}
+            error = payload.get("error") or {}
+            code = str(error.get("code") or "unknown")
+            codes[code] = codes.get(code, 0) + 1
+        envelope_refusals = sum(
+            count for code, count in codes.items() if code in REFUSAL_ERROR_CODES
+        )
         if refused:
-            # The codes themselves, counted, rather than a sentence guessing at
-            # one of them. This used to name `missing_permission_scope` as the
-            # thing to go and check, which is the failure this guard was
-            # written for -- and on the console profile the ordinary answer is
-            # `tool_failed` from `fetch_page`, because the open web is full of
-            # pages that do not come back. Sending the reader to widen
-            # `--scopes` over a page that 403'd is the same wrong turn the
-            # Task-status branch above used to send them on.
-            codes: dict[str, int] = {}
-            for event in events:
-                if event["event_type"] != "ToolFailed":
-                    continue
-                payload = event.get("payload") or {}
-                error = payload.get("error") or {}
-                code = str(error.get("code") or "unknown")
-                codes[code] = codes.get(code, 0) + 1
-            _fact("tool calls that failed", refused)
+            _fact("tool calls", f"{worked} ok, {refused} failed")
             _fact(
                 "their error codes",
                 ", ".join(f"{code} x{count}" for code, count in sorted(codes.items())),
             )
+        if envelope_refusals or (refused and worked == 0):
+            if envelope_refusals:
+                return _fail(
+                    f"{envelope_refusals} tool call(s) were refused by the "
+                    "envelope, not by the tool",
+                    "--scopes is narrower than this profile's envelope; widen it "
+                    "or submit with the scopes the console sends",
+                )
             return _fail(
-                f"the Task settled {task.get('status')!r} with {refused} failed "
-                "tool calls",
-                "`missing_permission_scope` means --scopes is narrower than this "
-                "profile's envelope; `tool_failed` is the tool's own refusal and "
-                "for `fetch_page` usually means the page did not come back",
+                "every tool call in this run failed, so the answer came out of "
+                "the model's own memory rather than out of the tools",
+                f"GET /v1/tasks/{task_id}/timeline and read the ToolFailed "
+                "errors; this is the state the walkthrough exists to catch",
             )
 
         chat_served = _chat_is_served(client)
