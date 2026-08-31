@@ -444,7 +444,8 @@ taken that day and the differences mean something:
 |---|---|---|---|---|
 | `a3619f9` (before the closing scan) | 3981 | 3193 | 1376 | 826 |
 | Batch 55 (the ADR-097 wiring) | 3989 | 3201 | 1376 | 826 |
-| Batch 56 (the C-05 diagnostic, this table) | **3993** | **3205** | **1376** | **828** |
+| Batch 56 (the C-05 diagnostic) | 3993 | 3205 | 1376 | 828 |
+| Batch 57 (the boundary tests, this table) | 3993 | **3207** | **1376** | **828** |
 
 The backend gains of 8 and 4 are exactly the new `test_candidate_funnel.py` and
 `test_task_failure_detail.py`; the frontend gain of 2 likewise. **The five-directory row
@@ -460,7 +461,7 @@ go stale together, and a stale provenance is the harder one to notice.
 | Environment | Result |
 |---|---|
 | Backend, real PostgreSQL + Qdrant (local) | `3993 passed / 12 skipped` |
-| Backend, no external services (local) | `3205 passed / 800 skipped` |
+| Backend, no external services (local) | `3207 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
 | Frontend Vitest (local, 52 files) | `828 passed` |
 
