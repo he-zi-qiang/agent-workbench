@@ -8926,18 +8926,34 @@ p.aw-code-step-thought {
    靠 `top: 1px` 加一条同色的背景盖住 `border-bottom` 那条线。这一像素的重叠
    就是「这一枚是下面那片内容的把手」这句话的全部——去掉它，一排标签会重新读
    成一排按钮。 */
+/* 外层只管那条分隔线和底色。它是选中标签要盖住的东西，所以它必须待在滚动容器
+   *外面*：`.aw-panel-tab` 用 `top: 1px` 往下探一格去盖它，而一个 `overflow` 不是
+   visible 的盒子会把那一格裁掉。 */
 .aw-panel-tabs {
   display: flex;
   align-items: flex-end;
   padding: 0 6px;
-  gap: 2px;
   border-bottom: 1px solid var(--aw-border);
   background: var(--aw-canvas);
+}
+
+/* 标签自己那一行，也就是 `role="tablist"` 落在的那个元素。它裹住的正好是一排
+   `tab`，不多不少——ARIA 只允许 `tab` 做 tablist 的子孙，而预览栏往这条 strip 上
+   放了一颗真按钮。那颗按钮现在是这个元素的兄弟，不是它的孩子。
+
+   横向滚动也在这里而不在外层：标签多到溢出时该滚的是标签，「收起」不该跟着滚
+   出屏幕——它不是标签，它是这一栏的控件。 */
+.aw-panel-tabs-strip {
+  display: flex;
+  align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
-.aw-panel-tabs::-webkit-scrollbar {
+.aw-panel-tabs-strip::-webkit-scrollbar {
   display: none;
 }
 
@@ -8988,7 +9004,10 @@ p.aw-code-step-thought {
 .aw-panel-tabs-trailing {
   display: flex;
   align-items: center;
-  margin-left: auto;
+  /* `flex: none` 而不是原来的 `margin-left: auto`：顶到右边这件事现在由
+     `.aw-panel-tabs-strip` 的 `flex: 1` 做，而这里要说的是另一件事——标签挤不下
+     的时候，被压缩的应该是会滚动的那一半，不是这颗按钮。 */
+  flex: none;
   padding-bottom: 3px;
   padding-left: 6px;
   gap: 4px;
