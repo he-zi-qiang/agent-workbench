@@ -8,7 +8,7 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PanelTabs, type PanelTabEntry } from "./PanelTabs";
 
@@ -183,5 +183,65 @@ describe("无障碍的接线", () => {
     );
     const [first, second] = screen.getAllByRole("tabpanel");
     expect(first?.id).not.toEqual(second?.id);
+  });
+});
+
+describe("放不下的时候", () => {
+  /**
+   * jsdom 没有排版，`scrollWidth`/`clientWidth`/`scrollLeft` 一律是 0——也就是
+   * 「永远不溢出」。这三个量正是这段逻辑唯一读的东西，所以直接换掉它们的 getter，
+   * 换出来的是这个零件在真浏览器里会遇到的三种位置。
+   */
+  function layout(scrollWidth: number, clientWidth: number, scrollLeft: number) {
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(
+      scrollWidth,
+    );
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(
+      clientWidth,
+    );
+    vi.spyOn(Element.prototype, "scrollLeft", "get").mockReturnValue(scrollLeft);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("放得下的时候什么都不标", () => {
+    layout(280, 280, 0);
+    mount();
+    expect(screen.getByRole("tablist")).not.toHaveAttribute("data-overflow");
+  });
+
+  it("右边还有的时候标 end", () => {
+    // 实测的那一组数：300px 的右栏里，五枚标签 306px 对 286px 的可见宽度，最后
+    // 那一枚的计数徽章被切掉一半——而滚动条是藏起来的，屏幕上没有任何东西说这里
+    // 还能往右。
+    layout(306, 286, 0);
+    mount();
+    expect(screen.getByRole("tablist")).toHaveAttribute("data-overflow", "end");
+  });
+
+  it("滚到底之后改标 start——该淡的换成左边那一头", () => {
+    layout(306, 286, 20);
+    mount();
+    expect(screen.getByRole("tablist")).toHaveAttribute(
+      "data-overflow",
+      "start",
+    );
+  });
+
+  it("两头都还有的时候标 both", () => {
+    layout(400, 286, 50);
+    mount();
+    expect(screen.getByRole("tablist")).toHaveAttribute("data-overflow", "both");
+  });
+
+  it("差一个像素不算溢出", () => {
+    // 小数宽度和页面缩放会让一条并没有溢出的标签条稳定量出半个像素的差。没有这
+    // 条容差，最后一枚标签会常年蒙着一层淡出——那层灰于是不再是「这边还有」，而
+    // 是一圈没人看得懂的装饰。
+    layout(287, 286, 0);
+    mount();
+    expect(screen.getByRole("tablist")).not.toHaveAttribute("data-overflow");
   });
 });

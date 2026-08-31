@@ -12,7 +12,6 @@ import {
   FileDown,
   LoaderCircle,
   PanelLeft,
-  Paperclip,
   RefreshCw,
   Trash2,
   X,
@@ -1608,6 +1607,7 @@ export function WorkPage() {
                     onOpenAgents={() => {
                       setAgentsOpen(true);
                     }}
+                    outputCount={artifacts.length}
                     roots={runTree}
                     stages={contextStages}
                     outputs={
@@ -2055,11 +2055,12 @@ function ArtifactRail({
 }) {
   return (
     <aside className="aw-artifacts" aria-label="产出文件">
-      <div className="aw-artifacts-head">
-        <Paperclip aria-hidden="true" size={14} />
-        <span>产出文件</span>
-        {artifacts.length === 0 ? null : <em>{artifacts.length}</em>}
-      </div>
+      {/* 这一条现在是两组文件里的**第一组的小标题**，不是这块面的标题——那个位
+          置由「产物」那枚标签占着（`TaskContextPanel`）。所以别针图标和右端那个
+          计数都拿掉了：图标是给一块面开头用的，而计数已经挂在标签上，和「子代
+          理 4」「事件 12」同一种写法。同一个数在同一条栏里出现两次、还是两种长
+          相，读者要先确认它们说的是不是同一件事。 */}
+      <h3 className="aw-artifacts-head">产出文件</h3>
       {artifacts.length === 0 ? (
         // Narrowed, because it is no longer the only thing this rail knows
         // about. "这个任务还没有产生文件" would be false on a Task whose stages
