@@ -390,11 +390,12 @@ sparse_vector_name = "sparse"
 # re-index. Changing this needs an ADR, not an edit here.
 fusion_owner = "application"
 fusion_method = "rrf"
-# Of the five numbers below, only `answer_context_k` currently reaches the
-# retrieval path (`bootstrap/projections.py`). The other four are validated
-# against each other at startup -- `rerank_top_k <= fused_top_k <= dense_top_k +
-# sparse_top_k` -- and then read by nobody: `RetrievalService` is constructed
-# without them, and what actually bounds a search is
+# None of the five numbers below reaches retrieval. They are validated against
+# each other at startup -- `rerank_top_k <= fused_top_k <= dense_top_k +
+# sparse_top_k` -- and then read by nobody. `answer_context_k` looks like the
+# exception because it is projected into `RetrievalConfig`, but that field has
+# no consumer either: `RetrievalService` is constructed without any of them,
+# and what actually bounds a search is
 # `request.top_k * candidate_multiplier`, both dataclass defaults. Lowering
 # `rerank_top_k` here does NOT lower what a request may ask for; that ceiling is
 # the hardcoded `le=50` in `routes/chat.py` and `MAX_TOP_K = 20` in

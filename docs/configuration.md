@@ -393,9 +393,9 @@ answer_context_k <= rerank_top_k
 fused_top_k <= dense_top_k + sparse_top_k
 ```
 
-**这三条校验是真的会跑的，但它们校验的五个数里有四个没有读者。** 这一组里只有
-`answer_context_k` 被 `bootstrap/projections.py` 读走并生效；`dense_top_k`、
-`sparse_top_k`、`fused_top_k`、`rerank_top_k` 校验完就没人再看了，检索实际用的是
+**这三条校验是真的会跑的，但它们校验的五个数没有一个有读者。** `dense_top_k`、
+`sparse_top_k`、`fused_top_k`、`rerank_top_k` 校验完就没人再看；`answer_context_k`
+被投影进 `RetrievalConfig`，**但那个字段同样没有任何消费者**。检索实际用的是
 `request.top_k * candidate_multiplier`（两者都是代码里的默认值）。详见
 [已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)。
 

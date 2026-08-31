@@ -52,7 +52,7 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-04 | RAGAS 全链缺失 | 未实现 |
 | A-05 | `ragas_enabled = true` 虚假启用 | **口径不实（本次已修）** |
 | A-06 | 评测只判检索，不判答案 | 未实现 |
-| A-07 | `[rag.retrieval]` 的候选漏斗四个参数没有任何读者 | **口径不实** |
+| A-07 | `[rag.retrieval]` 的候选漏斗五个参数全都没有读者 | **口径不实** |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -155,8 +155,14 @@ answer_context_k = 8
 （`rerank_top_k <= fused_top_k <= dense_top_k + sparse_top_k`），
 [test_settings.py:245](../tests/config/test_settings.py:245) 还钉着这条校验。
 
-**但五个里只有 `answer_context_k` 有读者**（[projections.py:909](../src/agent_workbench/bootstrap/projections.py:909)
-与 `:1209`）。另外四个在 `src/` 里除定义与互相校验之外**零命中**。
+**五个数全部没有读者，一个都没有。** `dense_top_k` / `sparse_top_k` / `fused_top_k` /
+`rerank_top_k` 在 `src/` 里除定义与互相校验之外零命中。`answer_context_k` 看起来是例外
+——它被投影进 [`RetrievalConfig`](../src/agent_workbench/bootstrap/projections.py:327)
+（`:909` 与 `:1209`）——**但那只是投影，不是消费**：全仓 `answer_context_k` 共 6 处命中，
+全在 `bootstrap/` 内（1 处定义、2 处校验、2 处投影、1 处字段声明），
+`RetrievalConfig.answer_context_k` **没有任何读者**。同一个 dataclass 里的
+`chunk_size_tokens` 有 1 个消费者、`llama_index_enabled` 有 2 个，所以这不是投影层的
+常态，是这一个字段的例外。
 `RetrievalService` 的两处构造点——[dependencies.py:918](../src/agent_workbench/apps/api/dependencies.py:918)
 与 [composition.py:611](../src/agent_workbench/apps/task_worker/composition.py:611)——
 传进去的是 `candidate_retriever` / `documents` / `telemetry` / `reranker` /
@@ -174,12 +180,12 @@ answer_context_k = 8
 一个请求照样可以要 50。** 这正是 F-26 的形状（读起来像保证，`src/` 里没有读者），区别
 在于 F-26 那个字段是单值 `Literal`、改不动，而这四个数看起来**就是给人调的**。
 
-**本次已修的是口径那一半**：[configuration.md](./configuration.md) §8 不再把这四个数
+**本次已修的是口径那一半**：[configuration.md](./configuration.md) §8 不再把这些数
 说成生效的上限，`config.default.toml` 的 `[rag.retrieval]` 段加了注释说明哪些有读者。
 **没有动的是行为**：把漏斗接进 `RetrievalService` 会改变检索实际返回多少候选，那是一次
 需要 ADR 与一轮评测的变更（同一份 52 题 gold set 上重跑，见 A-03），不是一次收尾清理。
 
-**做完的判据**：要么四个参数各自有一条从配置到 `RetrievalService` 的读取路径，并有一条
+**做完的判据**：要么五个参数各自有一条从配置到 `RetrievalService` 的读取路径，并有一条
 测试证明改配置能改变返回的候选数；要么它们从 schema 里删掉，配置不再声明一条不存在的闸。
 两条路都要先有 ADR——它们分别把"配置是契约"往两个相反的方向解释。
 
@@ -404,7 +410,7 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 | C-02 | 跨 retry 预算、partial failure、父子取消 | 部分实现（仅 partial failure 未做） |
 | C-03 | 动态 supervisor / spawn / mailbox | 部分实现（spawn 有了，另两项未实现） |
 | C-04 | CrewAI Adapter 与对比 benchmark | 未实现 |
-| C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现 |
+| C-05 | `critic` 的合法结构化输出被判成"没有可用产出" | 未实现（根因已查清，见正文）|
 | C-06 | 面板只认页面握着的事件：深链、刷新保持、"这棵树完不完整" | 部分实现（前两项已关闭） |
 | C-07 | 收窄到一个子运行时，阶段列表仍报全任务的进度 | ~~未实现~~ **已关闭** |
 | C-08 | 委派任务跑不完——`max_output_tokens` 管的是「思考+回答」 | ~~失败中~~ **已关闭** |
@@ -699,8 +705,52 @@ contract and are deliberately not in this module yet"。缺的正是这份解码
 完成但没有产出 artifact——这正是把一个**结构化解码节点**当成**artifact 产出节点**
 来判定的后果。
 
-**尚未查清**：是解码契约缺失本身，还是 `decision: "revise"` 在 `revision_number: 0`
-时没有可走的修订回边。两者都会以同一条消息收场，本次没有继续区分。
+**~~尚未查清~~ 2026-08-31 已查清，而结论是：上面这条"尚未查清"问错了问题。**
+
+**先否掉本条自己的诊断。** 本条开头写着"缺的正是这份解码契约"——**它不缺**。
+`plan`/`critic`/`review` 三个结构化节点自 2026-07-31（`13136e7`）起就跑在
+[task_handlers.py 的 `_decoded`](../src/agent_workbench/workflows/task_handlers.py:632)
+上，那正是 [ADR-034](./adr/0034-a-structured-node-asks-once-more.md) 的"再问一次"纠正轮；
+[`_decode_review`](../src/agent_workbench/workflows/task_handlers.py:1183) 会把结果绑到
+当前草稿与修订号上，并给出**四条各不相同**的拒绝理由（跑在合成之前 / 形状非法 /
+评的是另一份草稿 / 评的是另一个修订）。契约在失败发生**之前**就已经在了。
+`agent_nodes.py` 顶部那句"`plan` 与 `critic` …… 尚无解码契约，故意不在本模块"
+只描述**该模块**收谁，被本条读成了"全仓没有契约"。
+
+**也否掉第二个假设。** "`revise` 配空 `issues`"确实会被
+[`ReviewResult.validate_decision`](../src/agent_workbench/domain/tasks.py:151) 拒绝，
+但那条规则（"空列表只对 pass 合法"）是 **2026-08-11 的 `e808b34`** 加进契约的，早于
+08-13 那次观测。所以"契约没说"解释不了这次失败。
+
+**真正的根因是：这条链上的诊断是构造性失明的。**
+[workers/task.py 的 `_status_detail`](../src/agent_workbench/workers/task.py:118)
+认得 `TaskNodeRunFailedError`，却**只读 `error.outcome.error`**：
+
+```python
+info = error.outcome.error
+if info is not None:
+    return f"the {error.node} step failed with {info.code} ..."
+return f"the {error.node} step did not produce usable output during {action}"
+```
+
+而结构化节点的解码失败，**按定义** `outcome.error is None`——模型跑完了、没报错，
+只是输出不满足 schema。于是它**永远**落到那句通用兜底上。同时
+`TaskNodeRunFailedError` 身上挂着两份更具体的说法：`self.reason`
+（如"critic JSON did not satisfy the review schema"）与 `__cause__`（那四条之一），
+**两份都没有任何读者**。
+
+所以本条问的"是 A 还是 B"没法回答，不是因为没继续查，而是因为**A、B 以及其余每一种
+解码失败都产出同一句话**。那次观测**不可能**区分它们，往后每一次也不能——除非先把
+`reason` 露出来。
+
+**做完的判据（本次重写）**：第一步不是补解码契约（它在），而是让
+`_status_detail` 在 `outcome.error is None` 时读 `TaskNodeRunFailedError.reason`
+（外加 `__cause__`），使下一次失败能说出四条里的哪一条。**在那之前，任何关于 C-05
+根因的结论都只能是猜测**——包括本次否掉的那两个假设。此后再按真实理由决定要不要
+改契约、改回边，或都不改。
+
+**本次未改代码**，只把结论写下来：改 `_status_detail` 会改变 Task 的失败文案，属于
+可观测行为，值得单独一次改动。
 
 **顺带记下**：同一次运行里 `critic` 给出的理由是草稿"未提供任何实际内容，仅包含
 任务指令的重复"——即 `synthesize` 那步的产出质量也有问题。这是另一件事，本条不
@@ -996,10 +1046,21 @@ SHA-256 逐个对得上。**这个机制不但跑过，还往返验证过。**
 于是仓库里所有数字仍以散文形式存在——状态文档里的测试计数、README 里的评测数字——
 每一条都为真，每一条都不可核查。
 
-**做完的判据（本次重写）**：不再是"生成首份 manifest"（已完成）。而是三条里至少一条
-成立：manifest 进入版本控制并被文档按路径引用；或 CI 有一步跑 `agent-evidence verify`
-并在失配时失败；或门禁数字由 manifest 生成而不是手抄。前两条都是小改动，第三条才是
-E-05 的终局。
+**做完的判据（2026-08-31 重写，并已定下方向）**：不再是"生成首份 manifest"（早已完成）。
+
+**已决定：manifest 保持本地产物，不进版本控制**，只在发布时手动生成。这排除了
+"提交 manifest + CI verify"那条路——`artifacts/evidence/` 继续被 [.gitignore](../.gitignore) 忽略，
+CI 也就没有可 verify 的对象。**这是一个取舍而不是遗漏**：它换来的是仓库里不堆积
+per-gate 的 JSON，代价是"过期在 CI 里失败"这条机制在本仓库不成立。
+
+于是判据收敛成**唯一一条**：**门禁数字由 manifest 生成，而不是手抄。**
+[HIGHLIGHTS §2](./HIGHLIGHTS.md#2-门禁与规模) 那四行与规模行，应当来自一次
+`agent-evidence write` 的产物，而不是有人跑完测试再把数字誊进 Markdown。
+
+**这条路更难，要说清楚。** 上面被排除的那条是"让机器发现过期"；剩下这条是"让人不再
+有机会抄错"。前者能在 CI 里失败，后者不能——所以只要数字还靠人往文档里搬，E-05 就仍会
+复发，只是复发面积从"任何数字"缩小到"生成与粘贴之间"。本文档 2026-08-31 这一版已经
+第三次记录 E-05 复发；把这条判据做完之前，应当默认它还会有第四次。
 
 ### E-05 文档中的数字过时 —— 口径不实
 
@@ -1611,7 +1672,8 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
    干净、带附件、今天仍能 `verify` 通过——**上一版说"从没跑过一次"是不实的**。缺的是
    它不进版本控制（`artifacts/evidence/` 被 gitignore）、不进 CI、不被任何文档引用，
    所以它无法让任何一句过期的话失败。**它仍然是 E-05 唯一的根治手段**，但修法是
-   "被消费"，不是"跑一次"：最小一步是把 `agent-evidence verify` 加进 CI。
+   "被消费"，不是"跑一次"。**方向已定：manifest 不进版本控制**，因此 CI verify 那条路
+   被排除，剩下的唯一判据是让 HIGHLIGHTS §2 的数字**由 manifest 生成而不是手抄**。
 2. **A-03 重跑等价评测**。它同时是 A-01 能否打开的前置条件。约 30–70 分钟机器时间。
 3. **B-05 第一条真实 upcaster**。升级链至今没在真实数据上走过一次，机制是否真的
    接得上仍未被证明。
