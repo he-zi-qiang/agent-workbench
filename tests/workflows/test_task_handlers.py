@@ -14,6 +14,7 @@ below.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
@@ -323,6 +324,39 @@ def test_critic_binds_its_decision_to_the_current_draft_and_revision() -> None:
             decode_review_output(invalid, state=state)
 
 
+def test_a_verdict_missing_a_required_key_is_refused() -> None:
+    """The 2026-08-13 failure, at the decoder rather than at the prompt.
+
+    A critic returned a complete, correct verdict -- `decision`, the right
+    draft, the right revision, a summary and eight issues -- and omitted
+    `score`, which the template then showed *after* the variable-length array.
+    `finish_reason` was `stop` and the answer was 255 tokens, so nothing was
+    truncated: the model simply stopped before the last key.
+
+    `test_no_required_review_field_is_shown_behind_the_variable_length_array`
+    keeps the template from inviting it again. This keeps the decoder refusing
+    it, which is the half that still matters when a model omits a key the
+    template did show -- and no case in the tuple above removes a required key
+    at all: they change one, add one, or contradict one.
+    """
+
+    state = _state(draft_ref="draft_1", revision_count=0)
+    complete = (
+        '{"decision":"revise","reviewed_draft_ref":"draft_1",'
+        '"revision_number":0,"summary":"The draft repeats the objective.",'
+        '"score":10,"issues":["Write the body."]}'
+    )
+    # The control, and it has to come first: if this did not decode, the
+    # assertion below would pass on a decoder that refuses everything.
+    assert decode_review_output(complete, state=state).decision == "revise"
+
+    for missing in ("score", "summary", "revision_number", "reviewed_draft_ref"):
+        without = json.loads(complete)
+        del without[missing]
+        with pytest.raises(StructuredOutputError):
+            decode_review_output(json.dumps(without), state=state)
+
+
 @dataclass
 class _SequencedExecutor:
     """Replies to a node in order, so its second run can differ from its first.
@@ -436,6 +470,50 @@ def test_a_critic_that_reviewed_the_wrong_draft_is_not_asked_again() -> None:
 
     assert len(wrong.requests) == 1
     assert len(narrated.requests) == 2
+
+
+def test_a_narration_that_survives_the_correction_turn_fails_the_node() -> None:
+    """The other half of the test above, and a shape that really happened.
+
+    That one proves the corrective turn *works*: narration in front of the
+    object is asked once more and the second answer decodes. It does not say
+    what happens when the second answer is no better -- and in a measured v2
+    failure (`task_9a595830...`) it was worse: the reviewer explained the empty
+    workspace in prose, was asked for the object alone, and answered with prose
+    again and no JSON at all.
+
+    Two things are pinned here, and the second is the one with a distant
+    reader. The node asks **exactly twice** -- ADR-034 grants one restatement,
+    not a loop that argues. And the raised error keeps the decoder's own
+    complaint as its ``__cause__``: `workers/task.py` reads exactly one link of
+    that chain to say *which* decode failed, so a `raise` that dropped the
+    `from error` would silently return every structured failure to the one
+    undifferentiated sentence known-gaps C-05 is about.
+    """
+
+    async def scenario() -> tuple[_SequencedExecutor, BaseException]:
+        state = _state(draft_ref="draft_1", revision_count=0)
+        executor = _SequencedExecutor(
+            {
+                "critic": [
+                    "The draft looks thin to me.",
+                    "As I said, it is thin. I stand by that.",
+                ]
+            }
+        )
+        handlers = build_task_v1_handlers(
+            executor=cast(Any, executor),
+            artifacts=InMemoryArtifactStore(),
+            invocations=_provider(_Registry(_task())),
+        )
+        with pytest.raises(TaskNodeRunFailedError) as raised:
+            await handlers["critic"](state)
+        return executor, raised.value
+
+    executor, error = _run(scenario)
+
+    assert len(executor.requests) == 2, "one restatement, not a negotiation"
+    assert isinstance(error.__cause__, StructuredOutputError)
 
 
 def test_a_report_longer_than_a_preview_reaches_its_artifact_whole() -> None:
