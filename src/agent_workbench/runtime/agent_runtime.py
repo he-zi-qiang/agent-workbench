@@ -13,10 +13,19 @@ cancellation mid-batch: each of them produces a result rather than a gap,
 because the model is waiting on the id either way and a missing answer is a
 conversation that can never continue.
 
-And results are submitted in the model's own call order. Execution is serial
-here, so the two orders happen to coincide; the alignment is applied anyway,
-because the parallel scheduler that arrives later must not be able to change
-what the model sees by finishing one tool sooner than another.
+And results are submitted in the model's own call order. **Execution is not
+serial**: one step's calls are grouped by ``plan_tool_batches`` and a group of
+read-only tools is awaited with ``asyncio.gather``, so completion order and call
+order genuinely differ. The alignment is what makes that invisible to the model
+-- it sees its own order regardless of which tool finished first.
+
+This paragraph read "Execution is serial here, so the two orders happen to
+coincide; the alignment is applied anyway, because the parallel scheduler that
+arrives later must not be able to change what the model sees" until 2026-08-31.
+That scheduler arrived in PR-009 and the sentence did not follow it, which left
+the first thing this file tells a reader describing a runtime that no longer
+existed -- and by this repository's own convention a comment is part of the
+specification, not a gloss on it.
 """
 
 from __future__ import annotations

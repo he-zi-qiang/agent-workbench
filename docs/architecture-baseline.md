@@ -1580,7 +1580,7 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 | Code 模式：编码会话、工作区指针与循环内审批（`in_api_process`） | ✓ | ✓ | ✓ |  |
 | 动态 supervisor / agent spawn / 持久 mailbox | ✓ |  |  |  |
 | Chat 历史压缩（token window / compaction） | ✓ |  |  |  |
-| Chat 会话的服务端管理（list / rename / delete） | ✓ |  |  |  |
+| Chat 会话的服务端管理（list / rename / delete） | ✓ | ✓ | ✓ | ✓ |
 | 知识库管理（重命名 / 删除 / 重建索引 / ACL 管理） | ✓ |  |  |  |
 | 逐条消息的临时附件 | ✓ |  |  |  |
 | Word 文档的读取与编辑（现有的是只读文字预览与 MCP 渲染） | ✓ |  |  |  |
@@ -1614,8 +1614,12 @@ CI 的算数**——本机装不到 `web/package.json` 的 `engines` 钉死的 n
 
 - **知识库管理**：目前只能创建与上传。重命名、删除、重建索引与 ACL 管理都没有 API，
   控制台上也没有入口。
-- **Chat 会话的服务端管理**：会话列表只活在浏览器里（侧栏的可访问名就叫"本地 Chat 会话"），
-  服务端持有的是 `chat_turns` 与会话消息，但没有 list/rename/delete 这组管理接口。
+- ~~**Chat 会话的服务端管理**~~：**2026-08-31 更正——这一条已经不成立了。**
+  `routes/chat.py` 现有八条路由，其中 `GET /sessions`、`GET /sessions/{id}`、
+  `PATCH /sessions/{id}`、`DELETE /sessions/{id}` 自 4c40474（2026-08-20）起在服务，
+  前端 `client.ts` 在用，`tests/api/test_chat_session_management.py` 覆盖。
+  原文还写着「侧栏的可访问名就叫『本地 Chat 会话』」——那个串在前端已经 grep 不到。
+  上面能力阶梯里对应的一行已一并勾到 Demonstrated。
 - **逐条消息的临时附件**：不存在。输入框旁的上传把文件放进所选知识库并永久保留，按钮的
   可访问名因此是"上传文件到知识库"——旧标签"添加附件"描述的是一个这套系统没有的东西。
 - **Word 文档的读取与编辑**：现有的两样都不是它。一是 `GET /v1/artifacts/{id}/preview`

@@ -41,21 +41,26 @@ precision/recall 等确定性指标。RAGAS 不进入在线请求，也不成为
    和数据集 revision，并记录与人工评分的一致性；
 5. 在上述证据落地前，能力表只能写 Planned，不能写 Implemented。
 
-### 迁移进度（2026-08-03 更新）
+### 迁移进度（2026-08-31 更新）
 
 | 步骤 | 状态 | 证据 |
 |---|---|---|
 | 1 检索 Adapter + contract tests | **完成（仅检索）** | `adapters/llama_index/`；`tests/vector/test_authorized_retrieval.py` 按 `CandidateRetrieverPort` 参数化，两条路径跑同一套 ACL/revision/引用断言 |
-| 2 同 gold set 等价评测 | **已执行，未通过——测量分辨不了** | dense 臂两条路径逐位相同；hybrid 臂**无法判定**：并列融合分数次序不稳定，每个检索器与自己不一致 9-10/38 题，宽于路径间差异。报告见 `evals/rag/reports/<arm>-<path>.json` |
-| 3 默认流量切换 + reference 降级 | **未做，且被第 2 条挡住** | `rag.llama_index.enabled = false`；reference 仍是默认路径 |
+| 2 同 gold set 等价评测 | **已通过**（2026-08-11，`b9aa057`） | 四份报告的 `gold_digest` 全为 `55ec24c7d2b86062`、`question_count` 全为 **52**；同臂两条路径的 `mrr` / `recall_at_1` / `recall_at_3` / `full_coverage_at_3` **逐位相同**。报告见 `evals/rag/reports/<arm>-<path>.json` |
+| 3 默认流量切换 + reference 降级 | **未做，但挡住它的已经不是第 2 条** | `rag.llama_index.enabled = false`；翻开关会改动 Task 语义指纹与一条冻结边界，该由一份单独的 ADR 决定 |
 | 4 RAGAS 离线 runner | 未开始 | — |
 | 5 能力表口径 | **整体仍是 Planned** | 适配器存在不等于框架集成完成；见 README 能力边界 |
 
-**第 2 条挡住第 3 条，这正是这些规则存在的理由。** 结论不是"两条路径不一致"，而是
-"这套测量装置分辨不了它们"——并列名次没有定义好的次序，于是同一个检索器重复同一个查询
-都会给出不同排列。要让第 2 条能给出结论，必须先让并列项有确定性次序（按
-`(-score, chunk_id)` 在适配器边界定序），那是一项独立的行为变化。在那之前，
-第 3 条不能靠"看起来差不多"推进。
+**第 2 条曾经挡住第 3 条，这正是这些规则存在的理由。** 当时的结论不是"两条路径不一致"，
+而是"这套测量装置分辨不了它们"——并列名次没有定义好的次序，于是同一个检索器重复同一个
+查询都会给出不同排列。让并列项有确定性次序（按 `(-score, chunk_id)` 在适配器边界定序）
+是一项独立的行为变化，它由 [ADR-033](./0033-fusion-ranks-are-ours.md) 做掉；
+`b9aa057` 在修好的检索器上用同一份 52 题 gold set 重跑，两条路径这才**可比且相同**。
+
+> **2026-08-31 更正。** 这张表的第 2 行在 `b9aa057` 之后二十天里仍写着「已执行，未通过
+> ——测量分辨不了」，还挂着 9-10/38 那组**旧题库**的数字。第 3 行的阻塞理由也因此错了一层：
+> 挡住它的从来是"没有可比的测量"，现在测量有了，剩下的是一个**决定**。
+> 已知缺口 A-03 据此关闭、A-01 的阻塞理由据此改写。
 
 **步骤 1 只覆盖了检索。** ADR 的决策段把 ingestion 和 retrieval 一起交给 LlamaIndex，
 本轮只做了后者：Document/Node 映射与 Retriever Adapter 已经存在，

@@ -10,14 +10,23 @@ Python 3.12 + `uv` for the backend; React + TypeScript + Vite + pnpm for `web/`.
 
 ## Commands
 
-### Backend gate (mirrors the CI `quality` job)
+### Backend gate (a subset of the CI `quality` job)
 
 ```bash
+cp .env.example .env          # first time only, and the gate's first line fails without it
 uv sync --frozen --group dev --no-editable
 uv run agent-config-check --profile development && \
   uv run ruff format --check . && uv run ruff check . && \
   uv run pyright && uv run pytest
 ```
+
+- **`.env` is not optional.** `database.dsn`, `guard_dsn` and `listen_dsn` are in
+  `FORBIDDEN_TOML_PATHS`, so they can only come from the environment. Without them
+  `agent-config-check` — the *first* command above — stops at
+  `3 validation errors for LoadedSettings`, which reads like a broken checkout and is not one.
+- **A subset, not a mirror.** The CI job also runs `uv lock --check --offline`, the `test`
+  and `production` profiles, the `agent-cli demo` golden diff, `pip-licenses`, and the
+  assertion that the `embedding` extra is *absent*. Six steps this line does not have.
 
 - **`pyright` must be run bare.** `include` is pinned to `src` in `pyproject.toml`; passing a path overrides it and produces thousands of false errors from `.venv` and `tests`.
 - **Export `NO_PROXY=localhost,127.0.0.1,::1` before `pytest`** on a machine with a system proxy, or `tests/vector` and other loopback suites fail for reasons that have nothing to do with the code. Telemetry export through a proxy also stalls the suite; keep OTLP off locally.
@@ -25,13 +34,13 @@ uv run agent-config-check --profile development && \
 
 ### Service-backed suites
 
-`tests/contracts tests/persistence tests/api tests/vector` skip themselves unless two variables point at real servers. The PostgreSQL harness truncates between scenarios and **refuses any database whose name does not end in `_test`**.
+`tests/contracts tests/persistence tests/api tests/vector tests/e2e` skip themselves unless two variables point at real servers — **five directories**, and `tests/e2e` is the one people leave out (it joined the CI line on 2026-08-28, and it is where the killed-Worker recovery tests live). The PostgreSQL harness truncates between scenarios and **refuses any database whose name does not end in `_test`**.
 
 ```bash
 scripts/dev.sh services   # PostgreSQL on 127.0.0.1:5433, Qdrant on 6333
 AGENT_WORKBENCH_TEST_DSN=postgresql+asyncpg://agent:ci-only@127.0.0.1:5433/agent_workbench_test \
 AGENT_WORKBENCH_TEST_QDRANT_URL=http://127.0.0.1:6333 \
-  uv run pytest tests/contracts tests/persistence tests/api tests/vector
+  uv run pytest tests/contracts tests/persistence tests/api tests/vector tests/e2e
 ```
 
 Port 5433, not 5432 — a locally installed PostgreSQL usually shadows the container otherwise. These variables sit outside the `AW_` namespace deliberately: settings reject unknown `AW_*` variables.
@@ -47,7 +56,9 @@ pnpm --dir web test:e2e       # Playwright, needs `playwright install chromium`
 
 Node **24.x** is what `engines` pins (24.14.0), and CI uses it. A working copy can live at `var/toolchain/node`; `.claude/run-web.sh` puts it on PATH.
 
-**26.x needs one flag, not a different Node.** It defines `localStorage` as a global getter that evaluates to `undefined` unless `--localstorage-file` is passed, and jsdom installs its own only when that global is *absent* — so 62 tests fail on `localStorage.clear()`. Export `NODE_OPTIONS=--no-experimental-webstorage` and the suite is 458/458. 22.x red-herrings a few others.
+**26.x needs one flag, not a different Node.** It defines `localStorage` as a global getter that evaluates to `undefined` unless `--localstorage-file` is passed, and jsdom installs its own only when that global is *absent* — so 62 tests fail on `localStorage.clear()`. Export `NODE_OPTIONS=--no-experimental-webstorage` and the suite is green. 22.x red-herrings a few others.
+
+The current count lives in [HIGHLIGHTS.md §2](docs/HIGHLIGHTS.md#2-门禁与规模), not here — this line said `458/458` for months after the suite had passed 800, because a number written beside an unrelated fact has nothing that fails when it goes stale.
 
 ### Running it locally
 
@@ -69,7 +80,9 @@ The provider key is read from `AW_SECRETS__DEEPSEEK_API_KEY`, falling back to `A
 
 ### Config profiles
 
-`config/config.<name>.toml`, selected by `AW_CONFIG_FILE`. `local` (no MCP), `word-local`, `web-local`, `code-local`, `demo-local` (the union, what the console runs), plus `default`/`test`/`production`. The profiles are deliberately separate files: each freezes its own tool names into every Task authorization envelope at submission, so a wider profile widens every Task.
+`config/config.<name>.toml`, selected by `AW_CONFIG_FILE`. **Ten of them**: `local` (no MCP), `word-local`, `web-local`, `code-local`, `computer-local`, `sandbox-local`, `demo-local` (the union, what the console runs), plus `default`/`test`/`production`. The profiles are deliberately separate files: each freezes its own tool names into every Task authorization envelope at submission, so a wider profile widens every Task.
+
+`agent-config-check --profile` accepts only three names — `development`, `test`, `production`. The other seven are checked with `--config config/config.<name>.toml`.
 
 ## Architecture
 
@@ -85,7 +98,9 @@ core (no framework imports, ever)     ports/ (Protocol contracts, the only seam)
 outer (frameworks live only here): adapters/ apps/ bootstrap/ workers/ _config/ ────┘
 ```
 
-`tests/architecture/test_dependency_boundaries.py` fails CI on any core module importing a framework — and it forbids **method calls** into those packages too, not just imports. Adding a new integration means editing `OUTER_BOUNDARY_PACKAGES`/`FORBIDDEN_CORE_IMPORTS` consciously, not discovering it leaked in.
+`tests/architecture/test_dependency_boundaries.py` fails CI on any core module importing a framework. Adding a new integration means editing `OUTER_BOUNDARY_PACKAGES`/`FORBIDDEN_CORE_IMPORTS` consciously, not discovering it leaked in.
+
+The method-call guard is **narrow and worth knowing the shape of**: it is two hard-coded attribute names, `as_query_engine` and `as_chat_engine`, because those hang off the `VectorStoreIndex` this project does build and therefore need no new import. Everything else is import-shaped. And `FORBIDDEN_CORE_IMPORTS` is a **denylist**, so a third-party package nobody listed enters core without a red build — `domain/workspace.py` imports `regex` today for a good reason, and nothing stopped it.
 
 A corollary the same test enforces: LlamaIndex's agent executor, query engines and response synthesizers are never imported *anywhere*, adapters included. The tool loop has one owner; the answer has one author.
 
@@ -107,15 +122,15 @@ Single schema (currently `1.19`), cross-domain validation at startup: a capabili
 
 ### Where things live
 
-- `apps/` — `agent-api`, `agent-cli`, `agent-task-worker`, `agent-ingestion-worker`, plus three project-owned MCP servers (`word`, `web`, `sandbox`). Entry points are in `pyproject.toml` `[project.scripts]`.
-- `adapters/` — one directory per outer concern (`persistence`, `vector`, `langgraph`, `llama_index`, `mcp`, `models`, `embedding`, `reranking`, `telemetry`, `tools`, `memory` for the in-memory doubles).
+- `apps/` — `agent-api`, `agent-cli`, `agent-task-worker`, `agent-ingestion-worker`, plus **four** project-owned MCP servers (`word`, `web`, `sandbox`, `computer`). Entry points are in `pyproject.toml` `[project.scripts]`.
+- `adapters/` — one directory per outer concern, **22 of them**: `artifacts`, `concurrency`, `documents`, `embedding`, `evaluation`, `filesystem`, `ingestion`, `langgraph`, `llama_index`, `mcp`, `memory` (the in-memory doubles), `models`, `persistence`, `policy`, `reranking`, `research`, `retrieval`, `screen`, `telemetry`, `testing`, `tools`, `vector` — plus two loose modules, `delegation.py` and `events.py`. The list here used to name eleven, and the omissions were not the small ones: `research/` is 1310 lines, `documents/` 835, `filesystem/` 791, `screen/` 773.
 - `tests/contracts/` — one contract, every implementation: in-memory and PostgreSQL stores are parameterized through the *same* suite, so a divergence is a failure rather than a production surprise.
-- `web/src/features/` — `chat`, `code`, `work`, `knowledge`, `evaluation`, `computer`, `system`, `usage`. `computer` is the one page that reads no endpoint: the screen gate lives in the computer MCP server process and `apps/api` has no route to it, so the page states the rules (ADR-070) and says plainly that live session grants are not readable from here.
+- `web/src/features/` — `chat`, `code`, `work`, `knowledge`, `evaluation`, `computer`, `system`, `usage`. **`computer` does read an endpoint** (ADR-095): `routes/computer.py` serves `GET /session` through a read-only reverse proxy, `main.py` mounts it unconditionally, and the page polls it every 4 seconds for the allowlist, the frontmost application and recent actions. This line said the opposite until 2026-08-31, which mattered because it was the premise a reader would use to decide whether to *add* an endpoint for that page.
 - `evals/` — `chat`, `rag`, `triage` gold sets; runners in `scripts/run_*_eval.py`. A full RAG ablation takes 30–70 minutes; low CPU during it is MPS working, not a hang.
 
 ## Working conventions
 
-- **One ADR per boundary change.** `docs/adr/` (0012–0097, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
+- **One ADR per boundary change.** `docs/adr/` (0012–0098, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
 - **Capability claims only move up the ladder `Planned → Implemented → Tested → Demonstrated`, and never without linkable test or demo evidence.** `docs/status.md` is the per-PR evidence log, `docs/known-gaps.md` the honest list of what is not done. Do not describe a Planned item as working.
 - **Comments explain the decision, not the code.** This codebase's comments are unusually long and carry measured numbers, rejected alternatives, and the incident that motivated a line. Match that register when touching commented code; a bare restatement of the syntax is a regression here.
 - `ruff` per-file-ignores exist for files that deliberately contain Chinese prose (RUF001) and verbatim OOXML fixtures (E501). Prefer adding a scoped ignore with a reason over rewording user-facing Chinese.

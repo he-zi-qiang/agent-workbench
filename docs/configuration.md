@@ -281,8 +281,16 @@ ADR-019 把提示词和工具参数写进**运行自己的事件流**——那�
 （早就在里面）同一个口径。默认 `false`，因为打开它会改变这个部署存了用户的什么；
 打开它不会放松上面那条 telemetry 的限制，两者互不影响。
 
-**`workflow.export_requires_approval` 同样是一个真正的开关**（ADR-038）。默认
-`true`；关掉它，图从 `review` 直接走到 `export`。
+**`workflow.export_requires_approval` 同样是一个真正的开关**（ADR-038）。
+**默认 `false`**——`settings.py` 是 `export_requires_approval: bool = False`，
+`config.default.toml:308` 是 `false`，
+[ADR-048](./adr/0048-the-export-gate-is-off-by-default.md) 的标题就叫「导出闸门默认关闭」。
+打开它，图会在 `review` 与 `export` 之间停下来等人。
+
+> **2026-08-31 更正：这一段此前写的是「默认 `true`」，下面的示例注释还写着
+> 「仓库默认仍是 true」。两处都反了**，而且反在 §3「被固化的架构不变量」这一节里
+> ——读者最会当真的地方。一份 2026-08-31 才提交过的活文档把一道闸门的默认方向说反，
+> 比一条过期的计数危险得多：它让一个部署以为自己有人工确认，而实际上没有。
 
 它没有放在上面那张表里，也没有放进 `[policy]`，因为它守的**不是一条授权边界**。
 export 把草稿写进这个租户自己的 artifact store，owner 是提交者本人；写完之后文件
@@ -301,7 +309,7 @@ export 把草稿写进这个租户自己的 artifact store，owner 是提交者�
 路由是状态的纯函数，一个停在闸门前的 Task 不能在恢复时走进另一张图。
 
     [workflow]
-    export_requires_approval = false   # 单人机器；仓库默认仍是 true
+    export_requires_approval = false   # 单人机器；这也**正是**仓库默认（ADR-048）
 
 **关掉它意味着这条路径上不再有任何人工确认**，这一点要说清楚而不是绕过去：
 ADR-015 当初把 `approval_required_risks` 置空，理由正是「v1 的人已经站在图边界上

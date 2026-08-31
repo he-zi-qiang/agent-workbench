@@ -76,9 +76,21 @@ def resolve_web_directory(raw: str) -> Path:
 def mount_console(app: FastAPI, directory: Path) -> None:
     """Serve the console under ``/ui``, and point ``/`` at it.
 
-    ``html=True`` makes the mount serve ``index.html`` for the prefix itself.
-    The console is one page with its own tab switching, so there are no client
-    routes to fall back on and nothing here needs to know about them.
+    ``html=True`` makes the mount serve ``index.html`` for the prefix itself,
+    and that is enough -- but **not for the reason this docstring gave until
+    2026-08-31**, which was "the console is one page with its own tab switching,
+    so there are no client routes to fall back on".
+
+    There are client routes: the console is a ``HashRouter`` with fourteen of
+    them, three of which are deep links. What makes them irrelevant here is the
+    *hash*: everything after ``#`` never reaches this server, so every request
+    it sees is for ``/ui`` or a built asset, and there is nothing to fall back.
+
+    The conclusion is the same and the premise is not, which matters to exactly
+    one reader: whoever switches this console to ``BrowserRouter``. Under the
+    old sentence they would read "no client routes" and leave this mount alone;
+    under this one they know they need an ``index.html`` fallback for unknown
+    paths under ``/ui``.
     """
 
     app.mount(
