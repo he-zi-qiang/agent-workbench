@@ -12,7 +12,7 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 |---|---|
 | 想看成色与证据 | [**十分钟版本**](docs/HIGHLIGHTS.md)——真实运行的事件流、门禁数字、四个技术判断 |
 | 想立刻跑起来 | [快速开始](#三快速开始)，一条命令，不联网、不连数据库 |
-| 想知道**没做什么** | [**已知缺口**](docs/known-gaps.md)——四类分类，每条附位置与"做完"的判据 |
+| 想知道**没做什么** | [**已知缺口**](docs/known-gaps.md)——五类分类，每条附位置与"做完"的判据 |
 | 想读设计依据 | [文档地图](docs/README.md)、[架构基线](docs/architecture-baseline.md)、[ADR 索引](docs/adr/) |
 
 ---
@@ -406,7 +406,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | 文档 | 用途 |
 |---|---|
 | [十分钟版本](docs/HIGHLIGHTS.md) | 真实事件流、门禁数字、技术判断 |
-| [已知缺口](docs/known-gaps.md) | **没做的部分**，四类分类，附判据 |
+| [已知缺口](docs/known-gaps.md) | **没做的部分**，五类分类，附判据 |
 | [实施状态](docs/status.md) | 逐 PR 的实现与测试证据 |
 | [架构与技术选型基线](docs/architecture-baseline.md) | 产品边界、分层、可靠性协议 |
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
