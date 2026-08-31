@@ -393,11 +393,16 @@ answer_context_k <= rerank_top_k
 fused_top_k <= dense_top_k + sparse_top_k
 ```
 
-**这三条校验是真的会跑的，但它们校验的五个数没有一个有读者。** `dense_top_k`、
-`sparse_top_k`、`fused_top_k`、`rerank_top_k` 校验完就没人再看；`answer_context_k`
-被投影进 `RetrievalConfig`，**但那个字段同样没有任何消费者**。检索实际用的是
-`request.top_k * candidate_multiplier`（两者都是代码里的默认值）。详见
-[已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)。
+这五个数**曾经**校验完就没有任何读者：检索实际用的是
+`request.top_k * candidate_multiplier`，两者都是代码里的默认值，改配置改不动任何东西。
+[ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md) 把其中四个接上了——
+`dense_top_k` / `sparse_top_k` 到检索器的两臂，`fused_top_k` 到候选池上限，
+`rerank_top_k` 到请求可要的真实上限。
+
+**`answer_context_k` 仍然没有读者**（ADR-097 §4.3）：它是**默认值**而不是上限，
+决定它的地方在请求构造的边界上，不在检索服务里。
+[已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)
+因此只关了一半。
 
 Embedding/reranker revision、dense dimension、vector field、parser、chunker
 或 index schema 变化时，创建新的 `write_collection`，完成回填与评测后
@@ -530,14 +535,15 @@ resolver 的当前结论求交集，不能把该快照描述为实时权限。
 请求只允许在系统上限以内下调：
 
 - step、token、Tool 次数和超时预算；
+- `top_k`，上限是 `rag.retrieval.rerank_top_k`；
 - 预先登记的 model profile。
 
-**`top_k` 曾经列在上面这张表里，那是不实的**（[已知缺口 A-07](./known-gaps.md#a-07-ragretrieval-的候选漏斗被校验然后没有任何人读它--口径不实)）。
-请求里确实带一个 `top_k`，但它**不受 `[rag.retrieval]` 的约束**：约束它的是两个硬编码
-字面量——`routes/chat.py` 的 `le=50` 与 `adapters/tools/knowledge_search.py` 的
-`MAX_TOP_K = 20`。`dense_top_k` / `sparse_top_k` / `fused_top_k` / `rerank_top_k`
-在启动时被互相校验之后**没有任何读者**，所以把 `rerank_top_k` 调小并不会让请求可要的
-`top_k` 变小。这一段此前把它写成一道生效的闸，而那道闸不存在。
+**关于 `top_k` 这一条，要记下它曾经有多久不是真的。** 从这份文档写下它的那天起，直到
+[ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md)（2026-08-31），
+`rerank_top_k` 都**没有任何读者**——约束请求的其实是两个硬编码字面量，
+`routes/chat.py` 的 `le=50` 与 `adapters/tools/knowledge_search.py` 的 `MAX_TOP_K = 20`。
+那段时间里把 `rerank_top_k` 调到 1，一个请求照样可以要 50。现在这句话成立了，而**那两个
+字面量仍然保留**：它们在传输层挡畸形请求，与部署级上限是两件事。
 
 请求不能覆盖：
 

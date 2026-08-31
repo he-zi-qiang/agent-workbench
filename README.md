@@ -330,7 +330,7 @@ flowchart TB
 | 模型 | DeepSeek（OpenAI 兼容） | 流式；服务端 `web_search` 不引入第二把 key |
 | 持久化 | PostgreSQL 16 + Alembic | 会话、任务、事件、checkpoint、outbox |
 | 工具协议 | MCP SDK v2 | Streamable HTTP，启动时冻结成本地 binding |
-| 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 |
+| 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 / 用量 |
 | 可观测 | OpenTelemetry | Port + OTLP Adapter，核心层不导入 SDK |
 
 配置为**单一 schema（当前 `1.18`）**，跨域校验在启动时完成；声称的能力与代码不符

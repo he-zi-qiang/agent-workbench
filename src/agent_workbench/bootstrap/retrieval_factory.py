@@ -29,6 +29,8 @@ def build_candidate_retriever(
     embedder: EmbeddingPort,
     index: VectorIndexPort,
     sparse_encoder: SparseEncoderPort | None = None,
+    dense_top_k: int | None = None,
+    sparse_top_k: int | None = None,
 ) -> CandidateRetrieverPort:
     """Assemble the configured retriever over one index and one embedder.
 
@@ -36,6 +38,15 @@ def build_candidate_retriever(
     is what makes the two comparable: a difference between their evaluation
     reports is a difference in retrieval, not in what was indexed, which model
     embedded it, or whether a lexical arm was available at all.
+
+    The per-arm ceilings go only to the reference path, and that does not break
+    the sentence above (ADR-097 §3.2). The LlamaIndex path forwards its own
+    `sparse_top_k`/`hybrid_top_k` to the store, which deliberately does not use
+    them to shorten either arm before fusion -- so with the shipped values,
+    where the two arms and the fused budget are all equal, both paths ask for
+    the same candidates. A deployment that sets the arms *unequal* is choosing
+    a retriever the other path cannot mirror, and should not then read an
+    equivalence report as if it compared like with like.
     """
 
     if llama_index_enabled:
@@ -43,7 +54,11 @@ def build_candidate_retriever(
             embedder=embedder, index=index, sparse_encoder=sparse_encoder
         )
     return ReferenceVectorIndexRetriever(
-        embedder=embedder, index=index, sparse_encoder=sparse_encoder
+        embedder=embedder,
+        index=index,
+        sparse_encoder=sparse_encoder,
+        dense_top_k=dense_top_k,
+        sparse_top_k=sparse_top_k,
     )
 
 

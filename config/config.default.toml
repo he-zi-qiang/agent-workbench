@@ -390,18 +390,23 @@ sparse_vector_name = "sparse"
 # re-index. Changing this needs an ADR, not an edit here.
 fusion_owner = "application"
 fusion_method = "rrf"
-# None of the five numbers below reaches retrieval. They are validated against
-# each other at startup -- `rerank_top_k <= fused_top_k <= dense_top_k +
-# sparse_top_k` -- and then read by nobody. `answer_context_k` looks like the
-# exception because it is projected into `RetrievalConfig`, but that field has
-# no consumer either: `RetrievalService` is constructed without any of them,
-# and what actually bounds a search is
-# `request.top_k * candidate_multiplier`, both dataclass defaults. Lowering
-# `rerank_top_k` here does NOT lower what a request may ask for; that ceiling is
-# the hardcoded `le=50` in `routes/chat.py` and `MAX_TOP_K = 20` in
-# `adapters/tools/knowledge_search.py`. Registered as A-07 in
-# docs/known-gaps.md. Wiring them up changes how many candidates retrieval
-# returns, so it needs an ADR and a gold-set re-run -- not an edit here.
+# Four of the five below reach retrieval (ADR-097): the arms go to the hybrid
+# query, `fused_top_k` is the candidate pool asked of the index, and
+# `rerank_top_k` is the most a request may be shown -- a request narrows within
+# it and cannot widen past it. The hardcoded `le=50` in `routes/chat.py` and
+# `MAX_TOP_K = 20` in `adapters/tools/knowledge_search.py` stay: they bound a
+# malformed request at the transport, which is a different job.
+#
+# `answer_context_k` is the exception and still has no reader (ADR-097 §4.3).
+# It is a *default* rather than a ceiling, and the default lives at the request
+# boundary; A-07 in docs/known-gaps.md stays open for it alone.
+#
+# Setting the two arms UNEQUAL makes the reference and LlamaIndex paths
+# incomparable (ADR-097 §3.2), because the LlamaIndex store deliberately does
+# not shorten either arm. Keep them equal unless an ADR says otherwise.
+#
+# Changing any of these numbers now changes retrieval, so it wants gold-set
+# evidence (known-gaps A-03) rather than an edit here.
 dense_top_k = 40
 sparse_top_k = 40
 fused_top_k = 40

@@ -27,6 +27,109 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（分支 `docs/closing-scan-2026-08-31`，第五十五批）：一次收尾扫描，查出的东西大半是"文档说的"与"仓库是的"之间的差
+
+**起因**是一句"扫描整个项目，看看还有什么欠缺"。源码那边没什么可说的：门禁全绿，
+`src/` 与 `web/src/` 里 0 个 TODO/FIXME。问题几乎全在口径上，而且有一条主线——
+**这个仓库的文档比它的代码更容易过期，而没有任何机制让过期失败。**
+
+### 1. 十条死链，八条是同一种错
+
+八条 ADR 内部链接的**编号都对，slug 是凭印象写的**：`0035-event-schema-and-upcasters.md`
+（真实文件 `0035-an-answer-is-not-a-preview.md`）、
+`0028-a-truncated-stream-is-a-broken-stream.md`（真实文件 `0028-task-workspace.md`）等。
+逐条核对了被引用的那条规矩确实在那份 ADR 里才改链接——ADR-028 第 77 行原话是"截断的
+**文件**是坏文件"，ADR-069 把它转述成"流"，编号没错。
+
+第九条不同：ADR-047 依赖的 **ADR-053 是预留但从未写下的号**，改指向会造假，去链接并写明。
+第十、十一条在两个 README 的**第一张表**里——"想立刻跑起来 / Quick start"跳不过去，
+因为标题是 `## 三、快速开始` 而锚点写的是 `#快速开始`。
+
+现在 167 个 Markdown 的相对链接与锚点各 **0 失效**，并且这次是用一个按 GitHub 锚点算法
+实现的校验器全量扫的，不是抽查。
+
+### 2. 三条"已经做完却还标着没做"
+
+| 条目 | 文档说 | 仓库是 |
+|---|---|---|
+| C-09 | 失败中 | `9a7011f` 标题就写着"关闭 C-09"，代码与 status.md 都更新了，只有 known-gaps 那一行没跟上 |
+| E-04 | "缺的只是从没跑过一次" | 跑过**两次**，其中 `batch3-2026-08-11` 干净、带 5 个附件，今天 `verify` 仍返回 `ok` |
+| E-06 | （表里没有这一行） | 正文完整；而 E-07 的注解恰好就在抱怨"编号排到 E-06 却没有进表" |
+
+E-04 这条最值得记：它是本文档体系里排第 1 位的待办，理由写着"工具已在，成本最低"，
+而它对现状的断言是假的。**真正的缺口不是"没跑过"，是没有消费者**——CI 里
+`agent-evidence` 零命中，`.gitignore:44` 忽略整个 `artifacts/evidence/`，
+`git ls-files | grep manifest.json` 命中 0。跑一次不是修复，被消费才是。
+
+### 3. C-05：问错了问题
+
+本条写着"缺的正是这份解码契约"。**契约不缺**：`plan`/`critic`/`review` 自 2026-07-31
+起就跑在 `_decoded` 上（ADR-034 的纠正轮），`_decode_review` 给出四条各不相同的拒绝理由。
+第二个假设（`revise` 配空 `issues`）也不成立——那条规则是 2026-08-11 的 `e808b34`
+写进契约的，早于 08-13 那次观测。（一度以为这就是根因，git 把它证伪了。）
+
+真正的根因是**诊断构造性失明**：`workers/task.py:_status_detail` 只读
+`error.outcome.error`，而结构化节点的解码失败按定义 `outcome.error is None`，于是永远落到
+"did not produce usable output"。`TaskNodeRunFailedError.reason` 与 `__cause__` 上挂着两份
+更具体的说法，**都没有读者**。所以那次观测不可能区分 A 和 B——它们和其余每一种解码失败
+产出同一句话。**本批未改代码**：改它会改变 Task 的失败文案，值得单独一次改动。
+
+### 4. 新登记两条，接线一条（ADR-097）
+
+**A-07**：`[rag.retrieval]` 那条候选漏斗，五个数**一个读者都没有**。
+`RetrievalService` 两处构造点一个 `top_k` 都不传，实际生效的是
+`request.top_k * candidate_multiplier` 两个 dataclass 默认值。而
+`configuration.md` §8 把这四个数写成请求级覆盖的**系统上限**——那道闸不存在，
+约束请求的是 `routes/chat.py` 的 `le=50` 与 `knowledge_search.py` 的 `MAX_TOP_K = 20`。
+把 `rerank_top_k` 调到 1，请求照样可以要 50。
+
+（`answer_context_k` 一度被我记成"唯一有读者的那个"，也是错的：它被投影进
+`RetrievalConfig` 就到此为止，那个字段同样没有消费者。对照：同一 dataclass 里
+`chunk_size_tokens` 有 1 个消费者、`llama_index_enabled` 有 2 个。）
+
+[ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md) 选了接线：两臂上限进
+`ReferenceVectorIndexRetriever`，`fused_top_k` 成为问索引要多少的那个数，
+`rerank_top_k` 成为请求可要的**真实上限**。**`CandidateRetrieverPort` 一个字没动**
+——两臂各要多少是只有混合检索器才有的问题，widening 那个 Port 会让三个实现都来回答它。
+
+**证据**：[tests/application/test_candidate_funnel.py](../tests/application/test_candidate_funnel.py)
+八条，每条正向都配一条对照组（未配置时仍走旧的乘数与不夹取）。
+
+**未取得的证据要说清楚**：候选池不再随请求伸缩，两个方向都变——`top_k=3` 是 12→40，
+`top_k=8` 是 32→40，`top_k=50` 是 200→40。这**改变了检索结果**，而本机
+`sentence_transformers` 与 `FlagEmbedding` 都不在，52 题 gold set 跑不起来。
+**在 A-03 重跑之前，不要把 ADR-097 当作"检索质量已确认不变"的依据**——测试证明的是
+机制，不是效果。
+
+**E-08**：`architecture-baseline` §17 是 CLAUDE.md 指定的"能力处在哪一级"权威，停在
+2026-08-11。computer use、项目、用量面板、工具投影、计划模式**五块已发布产品面连一行
+都没有**（每块都有实现与测试，量了文件数）。方向与 E-05 惯常那种相反——这是把做了并
+测过的记成没做——危害同类。只加了带证据的过时声明，**没有重排阶梯**：往上挪一格要逐条
+给可链接证据，做成"看起来重排过了"更坏。
+
+### 5. 门禁（本批，本机）
+
+| 项 | 结果 |
+|---|---|
+| `pytest`（离线） | **3201 passed / 800 skipped**（接线前 3193，+8 为本批新测试）|
+| `pytest`（真实 PostgreSQL 5433 + Qdrant 6333） | **3989 passed / 12 skipped**（接线前 3981）|
+| `ruff format --check` / `ruff check` | 618 files / All checks passed |
+| `pyright` strict | 0 errors / 0 warnings / 0 informations |
+| `agent-config-check` × 3 profile | 全过 |
+| `agent-cli demo` 黄金档 | 逐字节一致 |
+| 文档链接 + 锚点（167 个文件） | 0 失效 |
+
+**四行门禁数字本批重测并同步了 [HIGHLIGHTS §2](./HIGHLIGHTS.md#2-门禁与规模) 与
+README.en.md 镜像**——上一版四行测于 2026-08-29 的一条未合并分支，已过期；这是本批
+查出的 E-05 第三次复发。
+
+### 6. 顺带
+
+首份当期 evidence manifest 已生成（`artifacts/evidence/closing-scan-2026-08-31/`，
+`git_dirty: false`，schema `1.19`，`verify` 通过）。CLAUDE.md 两处订正：ADR 号段
+0012–0070 → 0012–0097，`web/src/features/` 补上 `usage`。
+
+---
 ## 2026-08-30（分支 `feat/right-panel-tabs`，第五十四批）：右栏装不下的时候，答案是标签页不是往下堆——以及一个设置面板把散在四个地方的可调项收了回来
 
 **做的是什么。** 三块界面的形状，一个共同的来路：右边那一栏只有一栏宽、一屏高，

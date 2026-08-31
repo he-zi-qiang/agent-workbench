@@ -33,6 +33,18 @@ class ReferenceVectorIndexRetriever:
     # dense arm alone -- which is a different retriever, not a degraded one,
     # and ``mode`` says so.
     sparse_encoder: SparseEncoderPort | None = None
+    # Per-arm ceilings from `[rag.retrieval]` (ADR-097). They live here rather
+    # than on `CandidateRetrieverPort` because "how much does each arm ask for"
+    # is a question only a hybrid retriever has: the dense-only path has one
+    # arm, and the port's `limit` means "how many after fusion" for every
+    # implementation. Widening the port would have made the other two answer a
+    # question they do not have.
+    #
+    # ``None`` keeps the historical behaviour -- both arms get the caller's
+    # ``limit`` -- so every in-memory double and contract test constructs this
+    # exactly as before.
+    dense_top_k: int | None = None
+    sparse_top_k: int | None = None
 
     @property
     def mode(self) -> str:
@@ -69,9 +81,14 @@ class ReferenceVectorIndexRetriever:
             # Each arm proposes a full candidate set; RRF is what narrows them
             # to one. Halving them here would make fusion choose between two
             # already-truncated lists, which is a different retriever from the
-            # one being evaluated.
-            dense_limit=limit,
-            sparse_limit=limit,
+            # one being evaluated. Configured arms keep that property: the
+            # shipped `dense_top_k` and `sparse_top_k` are equal, and a
+            # deployment that makes them unequal is choosing a different
+            # retriever on purpose rather than by arithmetic.
+            dense_limit=self.dense_top_k if self.dense_top_k is not None else limit,
+            sparse_limit=(
+                self.sparse_top_k if self.sparse_top_k is not None else limit
+            ),
         )
 
 

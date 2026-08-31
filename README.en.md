@@ -360,7 +360,7 @@ A child writes into its **parent's own event stream** under its own `run_id`, so
 | Model | DeepSeek (OpenAI-compatible) | Streaming; server-side `web_search` introduces no second key |
 | Persistence | PostgreSQL 16 + Alembic | Sessions, tasks, events, checkpoints, outbox |
 | Tool protocol | MCP SDK v2 | Streamable HTTP, frozen into local bindings at startup |
-| Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System |
+| Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System / Usage |
 | Observability | OpenTelemetry | Port + OTLP adapter; core imports no SDK |
 
 Configuration is a **single schema (currently `1.18`)** validated across domains
@@ -437,17 +437,22 @@ are in [the ten-minute version](docs/HIGHLIGHTS.md).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-All four rows were measured on **`main` itself** (`a3619f9`, working tree clean apart
-from documentation), **2026-08-31**. The previous edition measured them on an unmerged
-working branch off `main` (2026-08-29, after the ADR-093/094/095 batches), so this time
-it is not only the numbers that changed — **the tree they refer to moved from a branch
-back to the baseline**. That note records *the tree the measurement ran on*; it is not a
-promise that "the current baseline" always matches.
+All four rows were measured on the **unmerged** branch `docs/closing-scan-2026-08-31`,
+**2026-08-31**, after the ADR-097 wiring. An earlier run the same day, on `main` at
+`a3619f9`, is the **pre-wiring** set: `3981 / 3193 / 1376 / 826`. Both are recorded here
+because the difference means something — the two backend rows each gain 8, which is
+exactly this batch's new `test_candidate_funnel.py`, absent from the `main` set.
+
+That note records *the tree the measurement ran on*; it is not a promise that "the
+current baseline" always matches. **The previous edition of this sentence said `main`
+itself, and stopped being true the same day it was written** — not a slip, but another
+instance of the thing this section keeps having to correct: a number and its provenance
+go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local) | `3981 passed / 12 skipped` |
-| Backend, no external services (local) | `3193 passed / 800 skipped` |
+| Backend, real PostgreSQL + Qdrant (local) | `3989 passed / 12 skipped` |
+| Backend, no external services (local) | `3201 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
 | Frontend Vitest (local, 52 files) | `826 passed` |
 
@@ -496,17 +501,18 @@ number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (617 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (618 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 80,375 lines of Python, 97,579 lines of tests, 50,555 lines of frontend
-TypeScript; 83 files under `docs/adr/`, numbered 0012–0096 — **with gaps**: 0050
+Scale: 80,498 lines of Python, 97,829 lines of tests, 50,555 lines of frontend
+TypeScript; 84 files under `docs/adr/`, numbered 0012–0097 — **with gaps**: 0050
 and 0053 were claimed by the block reservation of 2026-08-13 and have never been
 written (the last section of `docs/adr/README.md` records that reservation). This
 line previously read "0012–0083 without gaps"; both halves were wrong, and the
-edition after that ("82 files, 0012–0095") was left behind by ADR-096. **More test code than source
+edition after that ("82 files, 0012–0095") was left behind by ADR-096, and the one
+after that ("83 files, 0012–0096") by ADR-097. **More test code than source
 code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 

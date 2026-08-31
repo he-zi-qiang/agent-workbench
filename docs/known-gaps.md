@@ -52,7 +52,7 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-04 | RAGAS 全链缺失 | 未实现 |
 | A-05 | `ragas_enabled = true` 虚假启用 | **口径不实（本次已修）** |
 | A-06 | 评测只判检索，不判答案 | 未实现 |
-| A-07 | `[rag.retrieval]` 的候选漏斗五个参数全都没有读者 | **口径不实** |
+| A-07 | 候选漏斗无人读 | ~~口径不实~~ **部分关闭**（4/5 已接线，ADR-097）|
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -180,14 +180,34 @@ answer_context_k = 8
 一个请求照样可以要 50。** 这正是 F-26 的形状（读起来像保证，`src/` 里没有读者），区别
 在于 F-26 那个字段是单值 `Literal`、改不动，而这四个数看起来**就是给人调的**。
 
-**本次已修的是口径那一半**：[configuration.md](./configuration.md) §8 不再把这些数
-说成生效的上限，`config.default.toml` 的 `[rag.retrieval]` 段加了注释说明哪些有读者。
-**没有动的是行为**：把漏斗接进 `RetrievalService` 会改变检索实际返回多少候选，那是一次
-需要 ADR 与一轮评测的变更（同一份 52 题 gold set 上重跑，见 A-03），不是一次收尾清理。
+**2026-08-31 处置：接线，见 [ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md)。**
+五个数里**四个已经有读者**：两臂上限进 `ReferenceVectorIndexRetriever`，
+`fused_top_k` 成为问索引要多少的那个数，`rerank_top_k` 成为请求可要的**真实上限**——
+`docs/configuration.md` §8 那句话第一次被执行。
+[tests/application/test_candidate_funnel.py](../tests/application/test_candidate_funnel.py)
+八条钉住它，每条正向都配一条对照组（未配置时仍走旧的乘数与不夹取）。
 
-**做完的判据**：要么五个参数各自有一条从配置到 `RetrievalService` 的读取路径，并有一条
-测试证明改配置能改变返回的候选数；要么它们从 schema 里删掉，配置不再声明一条不存在的闸。
-两条路都要先有 ADR——它们分别把"配置是契约"往两个相反的方向解释。
+**为什么不关**：`answer_context_k` 仍然没有读者。它是**默认值**而不是上限——决定
+"没指定时给多少"的是 API 的 `Field(default=8)` 与 `RetrievalRequest.top_k = 8`，
+都在请求构造的边界上，不在检索服务里（ADR-097 §4.3）。
+
+**两件必须一起记住的代价**：
+
+1. **候选池不再随请求伸缩，两个方向都变。** 默认请求（`top_k = 8`）是 32 → 40；
+   但 `top_k = 3` 是 12 → 40（变宽），`top_k = 50` 是 200 → 40（**大幅变窄**）。
+   说成"变宽了一点"会漏掉一半。这**改变了检索结果**，而本次落地的机器上
+   `embedding` extra 未装，52 题 gold set 跑不起来。**在 A-03 重跑之前，不要把
+   ADR-097 当作"检索质量已确认不变"的依据**——已有的测试证明的是机制，不是效果。
+2. **`top_k > rerank_top_k` 的请求现在会被夹小。** 这是本次唯一一处收窄用户可见行为的
+   地方，也正是 §8 一直声称的行为。
+
+**剩下的判据（两条）**：
+
+1. `answer_context_k` 要么有一条从配置到请求默认值的路径并有测试，要么从 schema 里删掉。
+2. **接线带出的一处新的同形不诚实**：`knowledge_search` 的 `INPUT_SCHEMA` 向模型声明
+   `top_k` 上限是 `MAX_TOP_K = 20`，而出厂 `rerank_top_k = 8`——模型可以合法地要 20、
+   拿回 8，且没有任何地方告诉它为什么。修法不止一种且都不小（见
+   [ADR-097](./adr/0097-a-funnel-nobody-reads-is-not-a-funnel.md) §4.2），所以登记而不顺手改。
 
 ---
 
