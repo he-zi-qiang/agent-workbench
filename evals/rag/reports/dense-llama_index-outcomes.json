@@ -51,13 +51,13 @@
         "doc_fusion"
       ],
       "retrieved_document_ids": [
-        "doc_component-retrieval-service",
         "doc_fusion",
+        "doc_component-retrieval-service",
         "doc_slo-retrieval"
       ],
       "missing_document_ids": [],
-      "rank": 2,
-      "coverage_rank": 2
+      "rank": 1,
+      "coverage_rank": 1
     },
     {
       "question": "what decides whether a principal may read a chunk",
@@ -433,7 +433,7 @@
       "retrieved_document_ids": [
         "doc_known-typos",
         "doc_config-qdrant",
-        "doc_abbreviations"
+        "doc_store-aw-vectors"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -530,8 +530,8 @@
       ],
       "retrieved_document_ids": [
         "doc_abbreviations",
-        "doc_known-typos",
-        "doc_component-retrieval-service"
+        "doc_fusion",
+        "doc_known-typos"
       ],
       "missing_document_ids": [],
       "rank": 1,

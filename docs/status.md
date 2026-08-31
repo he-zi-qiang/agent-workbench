@@ -27,6 +27,94 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第六十三批）：评测语料不再教一个被推翻的架构，并给报告加上语料指纹
+
+这一批修的是仓库里**唯一一处评测在给错误答案打满分**的地方。
+
+### 1. 缺陷
+
+`evals/rag/corpus/fusion.md` 写着 Agent Workbench
+「fuses the two exactly once, **inside Qdrant's Query API**」，
+`abbreviations.md` 写着 RRF 是「**the method Qdrant applies** when combining
+dense and sparse candidate lists」。而 ADR-033 已经把那一次融合搬进本进程。
+
+**后果不只是语料过期。** `evals/chat/gold.jsonl` 三道题的 `must_contain` 是
+`["qdrant"]`，于是一个**把本系统架构答错**的回答拿满分。
+`chat-hybrid-180s.json` 的转录里，模型答的原话是
+"Qdrant's Query API performs the hybrid fusion using reciprocal rank fusion"，
+还规规矩矩引了两个 chunk。**它照着语料答对了，而语料是错的。**
+
+而这件事就发生在防止它的机制**旁边**：`settings.py` 的 `fusion_owner` 是单值
+`Literal["application"]`，注释专门写着「It read 'qdrant' for a while after the code
+had already moved -- which is exactly the drift this field exists to make impossible」。
+**那个 `Literal` 守住了配置，守不住语料。**
+
+### 2. 改了什么
+
+- 两篇语料改写，**并保留一段说明旧设计为什么被换掉**——删掉全部提及会连同
+  「这里曾经是什么」一起删掉。chat gold set 三道题的期望改为 `application`。
+- `tests/evaluation/test_corpus_agrees_with_the_system.py`：语料里不许出现
+  「Qdrant 执行融合」的**肯定句**（否定句与"旧设计"段落仍合法），gold set 里不许有
+  `must_contain` 含 `qdrant` 的题，**外加一条对照组**——语料仍然答得出这个问题，
+  否则前两条断言可以靠删内容通过。
+- **报告新增 `corpus_digest`。** `runner.py` 自己的模块 docstring 写着
+  「a number without those is not comparable to anything」，而**语料不在 those 里面**：
+  报告记 index identity、gold digest 与题量，唯独不记它被问的是哪一份语料。
+  指纹把名字与字节一起算进去（文件名就是 `document_id`）；`None` 表示"没有语料可指纹"，
+  无此键表示"写于这个字段之前"——两者是不同的话。
+  控制台评测页据此分组：同一题库、不同语料的两份报告不再并排出现在一张表里。
+
+### 3. 52 题 gold set 全量重跑（本机，2 小时 30 分）
+
+| 报告 | `corpus_digest` | `mrr` | `recall@1` | `recall@3` | `full_cov@3` |
+|---|---|---|---|---|---|
+| dense / reference | `c5c0d003c37594da` | 0.8654 | 0.8077 | 0.9423 | 0.8462 |
+| dense / llama_index | `c5c0d003c37594da` | 0.8654 | 0.8077 | 0.9423 | 0.8462 |
+| hybrid / reference | `c5c0d003c37594da` | 0.9199 | 0.8846 | 0.9615 | 0.8269 |
+| hybrid / llama_index | `c5c0d003c37594da` | 0.9199 | 0.8846 | 0.9615 | 0.8269 |
+
+**同臂两条路径仍然逐位相同**——ADR-017 第 2 步的等价性在新语料上**重新成立**，
+不是沿用旧结论。两处变化都要说清楚：
+
+- **hybrid 臂四个指标一个字没变。** 改的两篇正是 hybrid 最擅长的那类
+  （含 `RRF`、`reciprocal rank fusion` 这些字面 token），它本来就把它们排第一。
+- **dense 臂 `recall@1` 0.7885 → 0.8077**，正好一题：「what performs the fusion」
+  此前把 `doc_component-retrieval-service` 排在 `doc_fusion` 前面，新的 `fusion.md`
+  把"谁执行融合"写得更直接，于是 `doc_fusion` 升到第一位。
+  **语料写清楚一点，语义检索就答对一点**——意料之中的改善，不是评测装置变了。
+- **延迟不可比**：重跑与一次真实服务全套测试并行，hybrid 臂的
+  `retrieval_latency_ms` 从 ~38 s 涨到 52–64 s。质量指标不受 CPU 争抢影响，延迟受。
+
+### 4. 明确没做
+
+**`evals/chat/` 没有重跑**——chat 评测要真实 provider 与模型调用。
+`chat-hybrid-180s.json` 与 `REPORT.md` 答的是改动前那份 gold set，
+已在 `REPORT.md` 顶部写明不要与以后的跑比较。**报告原样保留**：
+它记录的是一次真实测量，而一次测量不会因为被测的题目后来改了就变成假的
+——它只是不再可比。
+
+### 5. 本批门禁（也是本轮收尾的最终数字）
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant（本机，空载） | `4013 passed / 12 skipped`（16 分 13 秒） |
+| 后端，不起任何外部服务 | `3225 passed / 800 skipped` |
+| 后端，CI 那组五个服务型目录 | `1376 passed / 2 skipped` |
+| 前端 Vitest（53 个文件） | `842 passed` |
+
+`ruff format --check .`（621 files）、`ruff check .`、Pyright strict `0 errors`、
+ESLint `--max-warnings 0`、`tsc -b`、`vite build` 全绿。
+
+**真实服务那一列量了两次，第一次红了一条，写下来而不是只留绿的那次。**
+第一次（40 分 20 秒）与那次 2 小时 30 分的重跑并行，
+`test_sandbox_isolation.py::test_the_process_ceiling_holds` 报
+「the sandbox container did not finish within 35 seconds」。
+空机器上单跑同一条 **6.62 秒通过**，整份文件 14 条全过。
+**这不是"重跑到绿为止"**：本轮改动 `git diff 52809db..HEAD --stat | grep -i sandbox`
+零命中，而那条断言测的是容器能不能在 35 秒内自报进程上限——
+CPU 被抢光时它测的是这台机器有多忙。
+
+---
 ## 2026-08-31（第六十二批）：把账本自己的账结了
 
 前面几批修的是代码和别处的文档。这一批修的是**这份账本自己**——

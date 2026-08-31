@@ -52,8 +52,8 @@
       ],
       "retrieved_document_ids": [
         "doc_fusion",
-        "doc_component-retrieval-service",
-        "doc_slo-retrieval"
+        "doc_slo-retrieval",
+        "doc_component-retrieval-service"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -262,8 +262,8 @@
       ],
       "retrieved_document_ids": [
         "doc_events",
-        "doc_policy-retention",
-        "doc_component-event-log"
+        "doc_component-event-log",
+        "doc_policy-retention"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -431,7 +431,7 @@
       "retrieved_document_ids": [
         "doc_known-typos",
         "doc_store-aw-vectors",
-        "doc_abbreviations"
+        "doc_config-qdrant"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -445,7 +445,7 @@
       "retrieved_document_ids": [
         "doc_known-typos",
         "doc_slo-ingestion",
-        "doc_component-ingestion-worker"
+        "doc_chunking"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -473,7 +473,7 @@
       "retrieved_document_ids": [
         "doc_known-typos",
         "doc_slo-ingestion",
-        "doc_store-aw-vectors"
+        "doc_config-rag"
       ],
       "missing_document_ids": [],
       "rank": 1,
@@ -528,8 +528,8 @@
       ],
       "retrieved_document_ids": [
         "doc_abbreviations",
-        "doc_policy-retention",
-        "doc_known-typos"
+        "doc_fusion",
+        "doc_policy-retention"
       ],
       "missing_document_ids": [],
       "rank": 1,

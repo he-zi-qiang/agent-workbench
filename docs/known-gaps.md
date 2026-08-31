@@ -67,6 +67,7 @@ schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同
 | A-10 | Task benchmark 整条链不存在，而配置指着它 | 未实现 |
 | A-11 | 图谱检索臂从未被任何服务进程装配 | **口径不实** |
 | A-12 | ADR-081 的上下文压缩没有任何 profile 打开过 | 已知代价 |
+| A-13 | 评测语料仍在教一个被 ADR-033 推翻的架构 | ~~口径不实~~ **已关闭**（2026-08-31） |
 
 ### A-01 LlamaIndex 检索 Adapter 建成，但默认关闭
 
@@ -114,17 +115,31 @@ chunk 版本、两套 parser 版本可以并存而无人发现。摄取仍然只
 **判据（当时写的）**：一次运行内产出 Reference / LlamaIndex 两侧四份报告，
 digest 一致，写入 `evals/rag/reports/` 并在 [status.md](./status.md) 记录。
 
-**判据已全部满足**（复核于 2026-08-31）：
+**判据已全部满足**（`b9aa057` 当时的四份报告，`gold_digest` 全为 `55ec24c7d2b86062`、
+`question_count` 全为 52、同臂两条路径逐位相同；`git show --stat b9aa057` 确认四份
+同一提交更新，提交信息自己写着「ADR-017 第 2 步的等价性证据到齐了」）。
 
-| 报告 | `gold_digest` | `question_count` | `mrr` / `recall@1` / `recall@3` |
-|---|---|---:|---|
-| `dense-reference` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
-| `dense-llama_index` | `55ec24c7d2b86062` | 52 | 0.8558 / 0.7885 / 0.9423 |
-| `hybrid-reference` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
-| `hybrid-llama_index` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 |
+**2026-08-31 又重跑了一次，因为语料改了**（见 A-13）。四份报告现在是：
 
-同臂两条路径**逐位相同**；`git show --stat b9aa057` 确认四份报告同一提交更新，
-提交信息自己写着「ADR-017 第 2 步的等价性证据到齐了」。
+| 报告 | `corpus_digest` | `gold_digest` | 题 | `mrr` / `recall@1` / `recall@3` / `full_cov@3` |
+|---|---|---|---:|---|
+| `dense-reference` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.8654 / 0.8077 / 0.9423 / 0.8462 |
+| `dense-llama_index` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.8654 / 0.8077 / 0.9423 / 0.8462 |
+| `hybrid-reference` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 / 0.8269 |
+| `hybrid-llama_index` | `c5c0d003c37594da` | `55ec24c7d2b86062` | 52 | 0.9199 / 0.8846 / 0.9615 / 0.8269 |
+
+**同臂两条路径仍然逐位相同**——等价性在新语料上重新成立，不是沿用旧结论。
+两处变化都要说清楚：
+
+- **hybrid 臂四个指标一个字没变。** 改的两篇文档正是 hybrid 最擅长的那类（含
+  `RRF`、`reciprocal rank fusion` 这些字面 token），而它本来就把它们排在第一位。
+- **dense 臂 `recall@1` 0.7885 → 0.8077**，正好一题：「what performs the fusion」
+  此前把 `doc_component-retrieval-service` 排在 `doc_fusion` 前面，新的 `fusion.md`
+  把「谁执行融合」写得更直接，于是 `doc_fusion` 升到第一位。**语料写清楚一点，
+  语义检索就答对一点**——这是一次意料之中的改善，不是评测装置的变化。
+- **延迟不可比**：这次重跑与一次真实服务全套测试并行，hybrid 臂的
+  `retrieval_latency_ms` 因此从 ~38 s 涨到 52–64 s。质量指标不受 CPU 争抢影响，
+  延迟受。要用延迟数就得在空机器上重测。
 
 **它为什么在这里多开了二十天，是本次扫描的一条主要发现**：
 本文档、`docs/adr/0017` 的进度表、`HIGHLIGHTS.md` §4 与
@@ -446,6 +461,53 @@ answer_context_k = 8
 **做完了算什么样**：在 `code-local` 或 `demo-local` 上打开一次、跑一段真的越过
 `context_soft_limit_ratio` 的会话，并把那次会话的事件流记进 status.md。
 在那之前，这条能力在能力阶梯上**不应高于 Tested**。
+
+### A-13 评测语料仍在教一个被 ADR-033 推翻的架构 —— **已关闭**（2026-08-31）
+
+**留在正文而不是删掉**，因为它的论证解释了两件仍然要用的东西：报告为什么从这一天起
+分成两批，以及 `corpus_digest` 这个字段为什么存在。
+
+**当时的缺口**：`evals/rag/corpus/fusion.md` 写着 Agent Workbench
+「fuses the two exactly once, **inside Qdrant's Query API**」，
+`abbreviations.md` 写着 RRF 是「**the method Qdrant applies** when combining
+dense and sparse candidate lists」。而 [ADR-033](./adr/0033-fusion-ranks-are-ours.md)
+已经把那一次融合搬进本进程，并明文取代 ADR-016。
+
+**为什么它比一份过期文档严重**：`evals/chat/gold.jsonl` 三道题的
+`must_contain` 是 `["qdrant"]`——于是一个**把本系统架构答错**的回答拿满分。
+`chat-hybrid-180s.json` 的转录里，模型答的原话是
+"Qdrant's Query API performs the hybrid fusion using reciprocal rank fusion"，
+并规规矩矩地引了两个 chunk。**它照着语料答对了，而语料是错的。**
+这是本仓库唯一一处**评测在给错误答案打满分**。
+
+**而它就长在防止这件事的机制旁边**：`settings.py` 的 `fusion_owner` 是单值
+`Literal["application"]`，注释专门写着「It read 'qdrant' for a while after the code
+had already moved -- which is exactly the drift this field exists to make
+impossible」。**那个 `Literal` 守住了配置，守不住语料。**
+
+**处置**：
+
+1. 两篇语料改写。`fusion.md` 现在说融合在本进程、两臂各自按
+   `(-score, chunk_id)` 定序、Qdrant 只服务单臂；**并保留一段说明旧设计为什么被换掉**
+   ——删掉全部提及会连同「这里曾经是什么」一起删掉。
+2. chat gold set 三道题的期望从 `qdrant` 改为 `application`。
+3. [`tests/evaluation/test_corpus_agrees_with_the_system.py`](../tests/evaluation/test_corpus_agrees_with_the_system.py)
+   —— 语料里不许出现「Qdrant 执行融合」的**肯定句**（否定句与「旧设计」段落仍合法），
+   chat gold set 里不许有 `must_contain` 含 `qdrant` 的题，外加**一条对照组**
+   （语料仍然答得出这个问题，否则前两条断言可以靠删内容通过）。
+4. **报告新增 `corpus_digest`**。此前报告记 index identity、gold digest 与题量，
+   **唯独不记语料**——`runner.py` 自己的模块 docstring 说「a number without those is
+   not comparable to anything」，而语料不在 those 里面。于是两次跑在不同语料上的结果
+   看起来完全可比。控制台的评测页据此分组：同一题库、不同语料的两份报告不再并排。
+5. **52 题 gold set 全量重跑**（2h30m，本机）。四份报告见 A-03——
+   **同臂两条路径仍然逐位相同**，hybrid 臂四个指标一个字没变，dense 臂 `recall@1`
+   涨了正好一题。
+
+**留下的一条代价**：`evals/chat/reports/chat-hybrid-180s.json` 与
+`evals/chat/REPORT.md` **没有重跑**（chat 评测要真实 provider 与模型调用）。
+它们答的是改动前的那份 gold set，已在 `REPORT.md` 顶部写明不要与以后的跑比较。
+**报告本身原样保留**：它记录的是一次真实测量，而一次测量不会因为被测的题目后来
+改了就变成假的——它只是不再可比。
 
 ---
 

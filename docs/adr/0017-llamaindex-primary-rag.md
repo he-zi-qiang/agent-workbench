@@ -46,7 +46,7 @@ precision/recall 等确定性指标。RAGAS 不进入在线请求，也不成为
 | 步骤 | 状态 | 证据 |
 |---|---|---|
 | 1 检索 Adapter + contract tests | **完成（仅检索）** | `adapters/llama_index/`；`tests/vector/test_authorized_retrieval.py` 按 `CandidateRetrieverPort` 参数化，两条路径跑同一套 ACL/revision/引用断言 |
-| 2 同 gold set 等价评测 | **已通过**（2026-08-11，`b9aa057`） | 四份报告的 `gold_digest` 全为 `55ec24c7d2b86062`、`question_count` 全为 **52**；同臂两条路径的 `mrr` / `recall_at_1` / `recall_at_3` / `full_coverage_at_3` **逐位相同**。报告见 `evals/rag/reports/<arm>-<path>.json` |
+| 2 同 gold set 等价评测 | **已通过**（2026-08-11 `b9aa057`；2026-08-31 换语料后重跑，结论不变） | 四份报告的 `gold_digest` 全为 `55ec24c7d2b86062`、`question_count` 全为 **52**；同臂两条路径的 `mrr` / `recall_at_1` / `recall_at_3` / `full_coverage_at_3` **逐位相同**。2026-08-31 起报告另带 `corpus_digest`（当前 `c5c0d003c37594da`），因为语料改过一次（已知缺口 A-13）——重跑后 hybrid 臂四个指标一个字没变，dense 臂 `recall@1` 0.7885 → 0.8077。报告见 `evals/rag/reports/<arm>-<path>.json` |
 | 3 默认流量切换 + reference 降级 | **未做，但挡住它的已经不是第 2 条** | `rag.llama_index.enabled = false`；翻开关会改动 Task 语义指纹与一条冻结边界，该由一份单独的 ADR 决定 |
 | 4 RAGAS 离线 runner | 未开始 | — |
 | 5 能力表口径 | **整体仍是 Planned** | 适配器存在不等于框架集成完成；见 README 能力边界 |
