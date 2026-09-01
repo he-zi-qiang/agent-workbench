@@ -134,17 +134,24 @@ class TaskStep(DomainModel):
     #: model, not a DAG this system schedules.**
     #:
     #: So why is it still here. Deleting it is not free: `TaskState.plan` is a
-    #: `tuple[TaskStep, ...]` reconstructed from the checkpointed graph
-    #: channel, and `DomainModel` is `extra="forbid"` -- so a checkpoint
-    #: written before the removal would stop loading, and every Task in flight
-    #: at deploy time would fail to resume. That is precisely the job of the
-    #: upcaster machinery, whose production registry is **empty** and has never
-    #: run on real data (known gap B-05).
+    #: `tuple[TaskStep, ...]` reconstructed from the checkpointed graph channel
+    #: by `_to_state`, and `DomainModel` is `extra="forbid"` -- so a checkpoint
+    #: written before the removal stops loading, and every Task in flight at
+    #: deploy time fails to resume. Measured, not assumed: feeding `_to_state`
+    #: a plan dict with one unknown key raises `extra_forbidden`.
     #:
-    #: **Removal is therefore gated on B-05's first real upcaster**, not on
-    #: anybody's appetite for tidiness. Until then the honest thing is this
-    #: paragraph: the validation is real, and what it validates is a claim the
-    #: model made, not an order anything follows.
+    #: **And nothing in this repository would fix that** -- which is the part
+    #: worth reading twice. The upcaster registry is applied by
+    #: `PostgresEventLog` to stored *event envelopes* during replay; a
+    #: checkpoint never goes through it, so known gap B-05 is a different path
+    #: and does not gate this. Bumping `schema_version` makes it worse rather
+    #: than better: `VersionedModel` fails closed on a version it does not
+    #: recognise, so an old checkpoint is then refused outright.
+    #:
+    #: **Removal is gated on B-12**, the absence of any migration path for
+    #: checkpointed graph state. Until then the honest thing is this paragraph:
+    #: the validation is real, and what it validates is a claim the model made,
+    #: not an order anything follows.
     depends_on: tuple[Identifier, ...] = Field(default=(), max_length=MAX_PLAN_STEPS)
 
     @model_validator(mode="after")
