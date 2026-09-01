@@ -549,7 +549,7 @@ export function AppShell() {
         <span className="aw-sidebar-section-label">资源</span>
         {KNOWLEDGE_NAVIGATION === undefined ? null : (
           <div
-            className={`aw-sidebar-workspace aw-sidebar-knowledge ${
+            className={`aw-sidebar-workspace ${
               knowledgeCurrent ? "is-active" : ""
             }`}
           >
@@ -584,7 +584,7 @@ export function AppShell() {
             aria-label="更多"
             aria-expanded={mobileMoreOpen}
             aria-haspopup="dialog"
-            className={`aw-global-link aw-more-trigger ${secondaryActive ? "active" : ""}`}
+            className={`aw-global-link ${secondaryActive ? "active" : ""}`}
             onClick={openMore}
             type="button"
           >

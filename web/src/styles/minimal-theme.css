@@ -48,11 +48,6 @@ body {
   box-shadow: none;
 }
 
-.aw-global-link {
-  width: 56px;
-  min-height: 52px;
-}
-
 /* Controls -------------------------------------------------------------- */
 
 .aw-button,
@@ -1088,7 +1083,7 @@ select {
   gap: 8px;
   border-radius: 8px;
   color: var(--aw-nav-muted);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   text-align: left;
   white-space: nowrap;
@@ -1125,7 +1120,6 @@ select {
 .aw-global-link-icon svg {
   width: 17px;
   height: 17px;
-  stroke-width: 1.7;
 }
 
 .aw-global-link:is(:hover, .active) .aw-global-link-icon {
@@ -1865,7 +1859,7 @@ select {
 }
 
 .aw-sidebar-workspace.is-active .aw-workspace-row {
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--aw-nav-active);
 }
 
@@ -1901,11 +1895,15 @@ select {
   gap: 2px;
 }
 
+/* 只剩这一行真正独有的东西：它要和右边的动作区分宽度。
+ *
+ * 原先还压着三条几何：min-height 38px（和基类同值，纯复述）、border-radius 7px
+ * 和 font-size 13px（和当时的基类 8px / 13.5px 不同）。后两条的「不同」不是有人
+ * 选过，是这一行恰好被包在 .aw-workspace-row 里、而底下那条「资源 · 知识库」没有
+ * ——同一个类名，因为祖先不同而长成两个样子。删掉之后「一行长什么样」只有基类
+ * 一处说了算，加不加容器都一样。 */
 .aw-workspace-row > .aw-global-link {
-  min-height: 38px;
   flex: 1 1 auto;
-  border-radius: 7px;
-  font-size: 13px;
 }
 
 .aw-workspace-row > .aw-global-link.active {
@@ -2060,6 +2058,10 @@ select {
 /* margin-top: auto 而不是 3px：把这一族钉在栏底。
    此前是靠上面那份会话列表撑满高度顺带把它推下去的——列表一旦收起（或者
    本来就短），身份行就跟着浮到列表底下，侧栏看起来像没写完。 */
+/* 这里曾经还有一条 `.aw-sidebar-footer-nav .aw-global-link`，把「更多」压成
+   min-height 38px / border-radius 7px / font-size 12px。前两条是复述，第三条让
+   这一栏最下面那一行比它上面四行小 1px——一根竖线上五个导航项、三种字号，没有
+   哪一种是有人挑的。这一栏的分隔靠的是上面那条 border-top，不是把字缩小。 */
 .aw-sidebar-footer-nav {
   display: grid;
   flex: 0 0 auto;
@@ -2067,12 +2069,6 @@ select {
   padding-top: 5px;
   gap: 2px;
   border-top: 1px solid var(--aw-nav-rule);
-}
-
-.aw-sidebar-footer-nav .aw-global-link {
-  min-height: 38px;
-  border-radius: 7px;
-  font-size: 12px;
 }
 
 .aw-app-shell.is-rail-collapsed
