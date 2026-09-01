@@ -1,6 +1,7 @@
 import {
   Activity,
   BadgeCheck,
+  KeyRound,
   Palette,
   Wallet,
   X,
@@ -10,6 +11,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type { PrincipalIdentity } from "../api/types";
 import { IconButton } from "../components/ui";
+import { ProviderKeyPanel } from "../features/system/ProviderKeyPanel";
 import { HealthReport } from "../features/system/SystemPage";
 import { UsageReport } from "../features/usage/UsagePage";
 import { useIdentity } from "./IdentityContext";
@@ -47,6 +49,7 @@ interface Section {
 
 const SECTIONS: readonly Section[] = [
   { id: "identity", label: "本地身份", icon: BadgeCheck, hint: "这台环境用哪个身份发请求" },
+  { id: "provider", label: "模型密钥", icon: KeyRound, hint: "这台部署用哪把 key 调模型" },
   { id: "appearance", label: "外观", icon: Palette, hint: "浅色、深色，还是跟着系统" },
   { id: "usage", label: "用量", icon: Wallet, hint: "钱和 token 花在哪了" },
   { id: "health", label: "运行状态", icon: Activity, hint: "本机这几个进程还在不在" },
@@ -176,6 +179,7 @@ function SettingsDialogContent({
                 setDraft={setDraft}
               />
             ) : null}
+            {section === "provider" ? <ProviderKeyPanel /> : null}
             {section === "appearance" ? <AppearanceSection /> : null}
             {section === "usage" ? <UsageReport /> : null}
             {section === "health" ? <HealthReport /> : null}

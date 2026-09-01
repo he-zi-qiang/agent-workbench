@@ -9291,6 +9291,55 @@ p.aw-code-step-thought {
   color: var(--aw-accent);
 }
 
+/* 一组「标签在左、值在右」的设置行，中间用线分开。
+ *
+ * 加这个是因为 `ProviderKeyPanel` 引用了一个**不存在的** `.aw-facts`：那三行
+ * 状态因此是没有任何样式的裸 `<dl>`，`dt` 和 `dd` 各占一行、缩进随浏览器默认。
+ * 补一条 `.aw-facts` 也能让它不难看，但那会是第四种「一行东西」的画法——这套
+ * 界面已经有侧栏行、更多行、设置分类行三种了。
+ *
+ * 所以补的是它们共同的那一个：44 的最小高度、`8px 10px` 的内边距、11px/1.45 的
+ * 说明，和另外三种同一套数。分割线只画在两行**之间**（相邻兄弟选择器），不画在
+ * 这一组的上下边缘——一条贴着标题的线看起来是标题的下划线，不是行的分隔。 */
+.aw-setting-rows {
+  display: grid;
+}
+
+.aw-setting-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px;
+  gap: 20px;
+}
+
+.aw-setting-row + .aw-setting-row {
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-setting-row dt,
+.aw-setting-row > div > strong {
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.aw-setting-row small {
+  display: block;
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aw-setting-row dd {
+  flex: none;
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  text-align: right;
+}
+
 /* 用量和运行状态这两块面本来是整页的，进到对话框里要把它们的外边距收掉——
    页面上那圈留白是页面的，不是它们的。 */
 .aw-settings-pane .aw-usage-page,

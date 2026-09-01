@@ -12876,3 +12876,37 @@ Chat/Code 走 `chat_turns → conversation_sessions`，两个形状，因为这�
 
 用量页那一格保留 `$0` 并配着「没配价目表」的解释，因为那一页的职责就是解释；每轮
 脚注没有地方放那句话，所以它选择不说，而不是说一个会被读错的数。
+
+## 控制台可以交出一把 key，但永远读不回来（ADR-101）
+
+模型 key 此前只有一条来源：进程环境里的 `AW_SECRETS__DEEPSEEK_API_KEY`。
+`scripts/dev.sh` 会在它缺席时读 `AW_KEY_FILE` 并导出——**而这件事只有那个 shell 会做**。
+Python 侧从来没有读过那个文件（本次改动之前 `grep -rn AW_KEY_FILE src/` 零命中），
+于是换一条启动路径（`uv run agent-api`、Windows 上的启动器、容器）就跳过了它：key 明明
+躺在文档说的位置，进程却报告「没有 provider」。
+
+顺带查出的一条更朴素的事实：**`AW_KEY_FILE` 不在 `CONTROL_ENV_VARS` 里**，所以导出
+它的进程一律以 `unknown Agent Workbench environment variables: AW_KEY_FILE` 拒绝启动——
+而 `.env.example` 和 `CLAUDE.md` 都让人用这个名字。没人撞上，只因为 `dev.sh` 用的是
+shell 局部变量而不是 `export`。已修。
+
+落地的东西：
+`apps/api/routes/settings.py`（本仓库**第一个写配置的端点**）、
+`application/provider_key.py`（写盘、原子替换、`0600`、拒绝 checkout 内的路径）、
+`bootstrap/provider_key.py`（只回答「key 文件在哪」）、
+`load_settings` 的第四个显式入参 `provider_key_file`，以及控制台设置面板的「模型密钥」一类。
+
+**证据**：`tests/api/test_provider_key_api.py` 12 条（真实 store、真实文件系统、不需要数据库，
+所以在 CI 里跑）；`tests/architecture/test_provider_key_is_write_only.py` 5 条
+（响应模型的字段集被冻住、路由不得调用 `read()`、指纹恒为四字符、key 不得走路径参数、
+TS 接口与 Python 模型字段一致）；`web/src/features/system/ProviderKeyPanel.test.tsx` 7 条。
+每一条都先红后绿。
+
+**三处刻意的不做**，都写在 ADR-101 里：不回读明文（没有那个方法，不是这一版省略了）、
+不热加载（模型客户端在组装期构造一次，chat 路由只在那次拿到 key 时才挂上，所以界面
+分「已存下」与「正在用」两格说）、不做每用户一把 key。
+
+**一个新登记的缺口**：[D-07](./known-gaps.md)——存一把 key 不产生任何事件。它的前提与
+ADR-101 全篇相同（ADR-044：只绑 loopback、只信请求头），在那个前提下「谁存的」本来就
+答不出来，所以先补一条可以随便署名的审计记录比没有更糟。它与生产身份认证（D-05）绑定，
+顺序不能反。

@@ -19,7 +19,7 @@ from agent_workbench.apps.task_worker.composition import (
     build_task_worker_dependencies,
 )
 from agent_workbench.apps.task_worker.runner import TaskWorkerRunner
-from agent_workbench.bootstrap import load_settings
+from agent_workbench.bootstrap import load_settings, provider_key
 from agent_workbench.bootstrap.projections import project_task_worker
 
 EXIT_OK = 0
@@ -48,7 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
 async def serve(*, demo: bool) -> None:
     """Assemble, run, and dispose one Worker process."""
 
-    settings = load_settings()
+    # See `apps/api/main.py`: the key file is a launcher-level fact, so
+    # it is named at the entry point rather than read inside the loader.
+    settings = load_settings(provider_key_file=provider_key.key_file())
     config = project_task_worker(settings)
     dependencies = await build_task_worker_dependencies(config, demo=demo)
     listener: TaskReadyListener | None = None

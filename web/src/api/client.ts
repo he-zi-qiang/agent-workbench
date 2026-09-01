@@ -7,11 +7,12 @@ import type {
   ChatSessionView,
   CitedPassageView,
   CodeAskResponse,
-  CodeTurnApprovals,
-  CodeTurnMode,
   CodeSessionListResponse,
   CodeSessionView,
   CodeToolsResponse,
+  CodeTurnApprovals,
+  CodeTurnMode,
+  ComputerSessionResponse,
   CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
@@ -32,24 +33,24 @@ import type {
   ProjectContentsResponse,
   ProjectFileContentResponse,
   ProjectFileEntryView,
-  ProjectListResponse,
   ProjectListingResponse,
+  ProjectListResponse,
   ProjectView,
+  ProviderKeyView,
   RunFileResponse,
   SearchResponse,
+  TaskCapabilitiesResponse,
   TaskGraphChoice,
   TaskIntent,
-  ComputerSessionResponse,
-  TaskCapabilitiesResponse,
   TaskListResponse,
   TaskStatus,
   TaskTimelineResponse,
   TaskView,
   TriageResponse,
   UploadContentResponse,
-  WorkspaceResponse,
   UsageResponse,
   UsageWindow,
+  WorkspaceResponse,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -1060,6 +1061,39 @@ async function sha256(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest), (value) =>
     value.toString(16).padStart(2, "0"),
   ).join("");
+}
+
+/**
+ * 模型密钥（ADR-101）。
+ *
+ * 三个函数，一个值，**没有一个能读回明文**。`ProviderKeyView` 里最长的字段是
+ * 四个字符的指纹，服务端也没有别的方法能给出更多——这不是这里省略了，是那一侧
+ * 就没写。控制台因此不需要任何遮蔽逻辑：它拿到的本来就已经是遮好的。
+ *
+ * key 走请求体而不是路径或查询串，所以任何记 URL 的东西都记不到它。
+ */
+export async function getProviderKey(
+  identity: PrincipalIdentity,
+): Promise<ProviderKeyView> {
+  return apiRequest(identity, "/v1/settings/provider-key");
+}
+
+export async function storeProviderKey(
+  identity: PrincipalIdentity,
+  apiKey: string,
+): Promise<ProviderKeyView> {
+  return apiRequest(identity, "/v1/settings/provider-key", {
+    method: "PUT",
+    body: { api_key: apiKey },
+  });
+}
+
+export async function clearProviderKey(
+  identity: PrincipalIdentity,
+): Promise<ProviderKeyView> {
+  return apiRequest(identity, "/v1/settings/provider-key", {
+    method: "DELETE",
+  });
 }
 
 export async function checkHealth(path: "/health/live" | "/health/ready") {
