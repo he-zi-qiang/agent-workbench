@@ -1472,7 +1472,7 @@ export function CodePage() {
       <div className="aw-code-page">
         {rail}
         <main className="aw-code-main is-start">
-          <div className="aw-code-start aw-mode-start">
+          <div className="aw-code-start">
             <div className="aw-code-start-inner">
               <ModeStartHeader
                 action={

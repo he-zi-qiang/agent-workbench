@@ -316,7 +316,7 @@ export function HtmlPreview({
         </button>
       </div>
       {rendering ? (
-        <div className="aw-segmented aw-preview-zoom" aria-label="显示比例">
+        <div className="aw-segmented" aria-label="显示比例">
           <button
             aria-pressed={fit}
             className={fit ? "is-active" : ""}

@@ -124,7 +124,7 @@ export function KnowledgePage() {
             </div>
           </header>
           <button
-            className="aw-new-session aw-new-knowledge"
+            className="aw-new-session"
             onClick={openCreate}
             type="button"
           >

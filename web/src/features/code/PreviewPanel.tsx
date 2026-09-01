@@ -252,7 +252,6 @@ export function PreviewPanel({
         onSelect={onTab}
         trailing={
           <IconButton
-            className="aw-code-panel-collapse"
             expanded
             label="收起预览栏"
             onClick={onCollapse}

@@ -4872,6 +4872,22 @@ pre {
   white-space: nowrap;
 }
 
+/* 卡片里那句「为什么这个看不了」。
+ *
+ * 这一条此前不存在，而 `FileCard` 一直在写 `className="aw-code-output-note"`——
+ * 于是那句话拿的是浏览器默认的 `<p>`：上下各一个 em 的外边距，左边贴着卡片的描边。
+ * 内边距在**兄弟**元素 `.aw-code-output-open` 上（`10px 12px`），`<p>` 够不着它。
+ *
+ * 左右和按钮对齐、上边距为零（按钮自己的下内边距已经隔开了），说明用的是这套界面
+ * 里说明文字统一的那一档 11px / 1.45，不新开一个字号——排版尺度已经有 24 个值了。 */
+.aw-code-output-note {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 /* --- 一轮的时间线 --- */
 
 /* 一步一行，推理在它促成的动作正上方。这不是折叠块：转录的默认状态是「看得见」，
