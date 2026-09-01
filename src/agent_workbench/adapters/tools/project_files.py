@@ -67,6 +67,7 @@ from agent_workbench.domain.workspace import (
     GREP_TIMEOUT_SECONDS,
     MAX_GREP_MATCHES,
     MAX_GREP_SCANNED_BYTES,
+    WORKSPACE_WRITE_SCOPE,
     GrepOutcome,
     WorkspacePatternError,
     WorkspaceScanTimeoutError,
@@ -420,7 +421,7 @@ class ProjectWriteTool:
             # that granted one and not the other would be drawing a distinction
             # between two ways of writing a file that the person granting it
             # never made.
-            permission_scopes=("workspace:write",),
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
@@ -561,7 +562,7 @@ class ProjectEditTool:
             risk="write",
             idempotency="safe",
             timeout_seconds=60,
-            permission_scopes=("workspace:write",),
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:

@@ -100,7 +100,9 @@ outer (frameworks live only here): adapters/ apps/ bootstrap/ workers/ _config/ 
 
 `tests/architecture/test_dependency_boundaries.py` fails CI on any core module importing a framework. Adding a new integration means editing `OUTER_BOUNDARY_PACKAGES`/`FORBIDDEN_CORE_IMPORTS` consciously, not discovering it leaked in.
 
-The method-call guard is **narrow and worth knowing the shape of**: it is two hard-coded attribute names, `as_query_engine` and `as_chat_engine`, because those hang off the `VectorStoreIndex` this project does build and therefore need no new import. Everything else is import-shaped. And `FORBIDDEN_CORE_IMPORTS` is a **denylist**, so a third-party package nobody listed enters core without a red build — `domain/workspace.py` imports `regex` today for a good reason, and nothing stopped it.
+The method-call guard is **narrow and worth knowing the shape of**: it is two hard-coded attribute names, `as_query_engine` and `as_chat_engine`, because those hang off the `VectorStoreIndex` this project does build and therefore need no new import. Everything else is import-shaped.
+
+Third-party imports into core are an **allowlist** (`CORE_THIRD_PARTY_ALLOWLIST`, ADR-099): the standard library, `agent_workbench` itself, and exactly `pydantic` (anywhere) and `regex` (only `domain/workspace.py`, for a matching engine with a timeout). Anything else fails, listed or not. `FORBIDDEN_CORE_IMPORTS` stays beside it and names the integrations this project *rejected*, so importing one of them fails with "move it behind an adapter" instead of the general message; a test asserts the two lists never overlap.
 
 A corollary the same test enforces: LlamaIndex's agent executor, query engines and response synthesizers are never imported *anywhere*, adapters included. The tool loop has one owner; the answer has one author.
 
@@ -130,7 +132,7 @@ Single schema (currently `1.19`), cross-domain validation at startup: a capabili
 
 ## Working conventions
 
-- **One ADR per boundary change.** `docs/adr/` (0012–0098, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
+- **One ADR per boundary change.** `docs/adr/` (0012–0099, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
 - **Capability claims only move up the ladder `Planned → Implemented → Tested → Demonstrated`, and never without linkable test or demo evidence.** `docs/status.md` is the per-PR evidence log, `docs/known-gaps.md` the honest list of what is not done. Do not describe a Planned item as working.
 - **Comments explain the decision, not the code.** This codebase's comments are unusually long and carry measured numbers, rejected alternatives, and the incident that motivated a line. Match that register when touching commented code; a bare restatement of the syntax is a regression here.
 - `ruff` per-file-ignores exist for files that deliberately contain Chinese prose (RUF001) and verbatim OOXML fixtures (E501). Prefer adding a scoped ignore with a reason over rewording user-facing Chinese.

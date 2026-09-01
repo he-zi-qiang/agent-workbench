@@ -62,6 +62,7 @@
 
 | [ADR-097 没有读者的漏斗不是漏斗](./0097-a-funnel-nobody-reads-is-not-a-funnel.md) | `[rag.retrieval]` 声明的候选漏斗五个数至今没有任何读者；接线还是删掉；接线之后「请求只能在系统上限以内下调」由谁执行 | 接受，接线：两臂上限进检索器、`fused_top_k` 成为候选池、`rerank_top_k` 成为请求的真实上限；**`CandidateRetrieverPort` 不动**；`answer_context_k` 仍无读者，A-07 只关一半；**未取得检索质量证据**，待 A-03 重跑 |
 | [ADR-098 只有一个进程读的上限，不是部署级上限](./0098-a-ceiling-that-only-one-process-reads-is-not-a-deployment-ceiling.md) | `[runtime]` 三个上限与 `policy.max_tool_argument_bytes` 只被 Task Worker 读到，API 进程五处运行时、五处网关一处没接；接线还是改口径承认 Code 会话没有部署级天花板 | 接受，接线：四个数对两个进程是同一个意思；这个进程从此只有一个 `ToolGateway` 构造点，并由 AST 守门测试钉住；配置 schema 与 Worker 侧不动 |
+| [ADR-099 黑名单说不出「没人列过的那个也不行」](./0099-a-denylist-cannot-say-no-to-what-nobody-listed.md) | 核心层依赖守卫是黑名单，于是 `domain/workspace.py` 的 `import regex` 一路绿灯，而中英两版 README 同时写着「只依赖标准库与 Pydantic」和「这条边界会让 CI 变红」；是改口径还是改守卫 | 接受，改成白名单：核心层只许 import 标准库、自己与一张写明理由的清单；`FORBIDDEN_CORE_IMPORTS` 保留做具名拒绝的诊断，并断言两表不许相交；白名单也要能变小 |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 与 0077–0089 都没有行。**（ADR-075、
 > 0076、0090、0091、0092、0093、0094 与 0095 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个

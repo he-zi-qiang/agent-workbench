@@ -189,10 +189,16 @@ flowchart TB
 import；其余守卫都只处理 import 形态。理由见
 [十分钟版本 §3.1](docs/HIGHLIGHTS.md#31-让越权在类型上不可能而不是靠信任)。
 
-> **它是黑名单，不是白名单，这一点要说清楚。** `FORBIDDEN_CORE_IMPORTS` 列的是禁止项，
-> 所以**没人列过的第三方包进核心层不会让 CI 变红**——上面那个 `regex` 就是这样进来的，
-> 它有正当理由，而"有正当理由"和"被守住"是两件事。登记在
-> [已知缺口](docs/known-gaps.md)。
+> **第三方 import 进核心层是一张白名单**（`CORE_THIRD_PARTY_ALLOWLIST`，
+> [ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md)）：
+> 标准库、`agent_workbench` 自己，以及**恰好两个**——`pydantic`（核心层任何地方）与
+> `regex`（**只限 `domain/workspace.py`**，为的是一个带超时的匹配引擎）。
+> **别的一律红，无论有没有人想到过要禁它。**
+>
+> 这条 2026-08-31 才改成白名单。此前 `FORBIDDEN_CORE_IMPORTS` 是**黑名单**，
+> 于是上面那个 `regex` 一路绿灯进来——它有正当理由，而"有正当理由"和"被守住"是两件事。
+> 黑名单保留在旁边，管的是具名拒绝的诊断（"把这次集成挪到 adapter 后面去"），
+> 并有一条测试断言两张表不许相交。
 
 ### 2.3 哪个能力落在哪一层
 
@@ -412,7 +418,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 85 份实施期决策记录（0012–0098，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 86 份实施期决策记录（0012–0099，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

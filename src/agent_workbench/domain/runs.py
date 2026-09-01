@@ -13,7 +13,7 @@ caller; nothing here can widen a ceiling that settings established.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Final, Literal
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
@@ -48,10 +48,15 @@ RunState = Literal[
     "failed",
     "cancelled",
 ]
-TERMINAL_RUN_STATES: Final[frozenset[str]] = frozenset(
-    {"completed", "failed", "cancelled"}
-)
-
+# Which of these are terminal is **not** declared here, and the omission is
+# deliberate. This module owns the *vocabulary* (`RunState`); the state machine
+# -- which states may follow which, which are terminal, what `is_terminal`
+# means -- lives in `runtime/state.py` beside `ALLOWED_TRANSITIONS`, because a
+# terminal state is a property of the transition table rather than of the name.
+#
+# A `TERMINAL_RUN_STATES` frozenset used to sit here as well, listing the same
+# three states as `runtime.TERMINAL_STATES`. Nothing read it: two names for one
+# set, and the one with no readers is the one that would have gone stale first.
 StopReason = Literal[
     "completed",
     "max_steps",
@@ -539,7 +544,6 @@ def context_reason_for(
 
 
 __all__ = [
-    "TERMINAL_RUN_STATES",
     "AgentOutcome",
     "AgentRunRequest",
     "BudgetUsage",

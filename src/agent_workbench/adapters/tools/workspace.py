@@ -41,6 +41,7 @@ from agent_workbench.domain.tools import ToolResult, ToolSpec
 from agent_workbench.domain.workspace import (
     GREP_TIMEOUT_SECONDS,
     MAX_GREP_MATCHES,
+    WORKSPACE_WRITE_SCOPE,
     WorkspaceEditMatchError,
     WorkspaceOverflowError,
     WorkspacePatternError,
@@ -292,7 +293,7 @@ class WorkspaceWriteTool:
             risk="write",
             idempotency="safe",
             timeout_seconds=60,
-            permission_scopes=("workspace:write",),
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
@@ -427,7 +428,7 @@ class WorkspaceEditTool:
             risk="write",
             idempotency="safe",
             timeout_seconds=60,
-            permission_scopes=("workspace:write",),
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
         )
 
     async def handle(self, invocation: ToolInvocation) -> ToolResult:
