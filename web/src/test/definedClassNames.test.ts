@@ -32,35 +32,18 @@ const STYLESHEETS: Record<string, string> = import.meta.glob<string>(
 );
 
 /**
- * 装这条守卫时就已经在树上的十个。**这张表只能变短。**
+ * 空的，而且是刚刚清空的。
  *
- * 和 `tests/architecture/test_config_leaves_have_readers.py` 的 `KNOWN_UNREAD_LEAVES`
- * 同一个用法：一条新装的守卫如果要求先把历史清干净才能合，它就合不进来，而合不进
- * 来的守卫拦不住第十一个。所以把现状冻在这里，让守卫从今天起生效。
+ * 装这条守卫时树上有十个悬空类名，按 `KNOWN_UNREAD_LEAVES` 的办法先冻在这里，
+ * 好让守卫当天就能生效而不必先清完历史。十个里九个是**多余的钩子**——元素本来就
+ * 被基类或父选择器管着（`.aw-icon-button`、`.aw-step-group > summary`、
+ * `.aw-run-meta > :not(…)`），那个类名只是写下来没人接；删掉它们，渲染一个像素
+ * 都没动。第十个 `.aw-code-output-note` 是真缺样式，补上了。
  *
- * 它们不是一类东西，混在一起记是因为工具链分不出来：
- *
- * - `aw-mode-start`、`aw-chat-ungrounded` 看起来是**标记类**——和一个确实有样式的
- *   类并排写，自己不带样式，给测试或脚本认。
- * - `aw-run-title`、`aw-run-tokens`、`aw-step-group-head` 这些看起来是**真没写**：
- *   `<span className="aw-run-title">` 单独出现，读起来是「这里该有个标题样式」，
- *   而实际上它什么也没做。
- *
- * 分清哪个是哪个要一条一条看，不在这次改动的范围里。下面第二条测试保证这张表里
- * 每一条**此刻仍然真的缺**——修好一个却忘了从表里删，会让这条红。
+ * 留着这张空表而不是删掉它：下一个人加进来时，需要有个地方写清楚"为什么这条可以
+ * 先欠着"，而一张空表比一段注释更难被忽略。
  */
-const KNOWN_UNSTYLED = new Set<string>([
-  "aw-chat-ungrounded",
-  "aw-code-output-note",
-  "aw-code-panel-collapse",
-  "aw-mode-start",
-  "aw-new-knowledge",
-  "aw-preview-zoom",
-  "aw-run-section-head",
-  "aw-run-title",
-  "aw-run-tokens",
-  "aw-step-group-head",
-]);
+const KNOWN_UNSTYLED = new Set<string>([]);
 
 function definedClasses(): Set<string> {
   const defined = new Set<string>();

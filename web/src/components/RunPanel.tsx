@@ -173,7 +173,7 @@ function RunRow({
             {node.definitionName !== null && (
               <span className="aw-run-badge">子代理</span>
             )}
-            <span className="aw-run-title">{name}</span>
+            <span>{name}</span>
             {node.modelProfile !== null && (
               <span className="aw-run-profile">{node.modelProfile}</span>
             )}
@@ -215,7 +215,6 @@ function RunRow({
             )}
             {spent > 0 && (
               <span
-                className="aw-run-tokens"
                 title={
                   node.ceiling.maxTotalTokens === null
                     ? "这次运行没有声明 token 上限"

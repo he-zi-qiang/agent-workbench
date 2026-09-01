@@ -1306,7 +1306,7 @@ export function WorkPage() {
           </button>
         ) : null}
         {selectedTaskId === undefined ? (
-          <section className="aw-work-start aw-mode-start">
+          <section className="aw-work-start">
             {createTaskForm}
           </section>
         ) : null}

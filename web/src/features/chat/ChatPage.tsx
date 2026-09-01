@@ -1417,7 +1417,7 @@ function Citations({
     // Telling them it "did not search the knowledge base" would contradict the
     // knowledge base they picked and the label above this answer.
     return (
-      <p className="aw-chat-no-citations aw-chat-ungrounded">
+      <p className="aw-chat-no-citations">
         <ShieldAlert aria-hidden="true" size={14} />
         {answerMode === "rag"
           ? "已检索所选知识库，但没有找到足够相关的内容；这条回答由模型直接作答，没有引用"

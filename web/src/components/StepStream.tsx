@@ -271,7 +271,7 @@ export function StepStream({
           className={`aw-step-group is-${group.outcome}`}
           open={group.outcome === "running" ? true : undefined}
         >
-          <summary className="aw-step-group-head">
+          <summary>
             <ChevronRight
               aria-hidden="true"
               className="aw-step-caret"
@@ -353,7 +353,7 @@ export function StepStream({
                 className={`aw-run-section is-${outcome}`}
                 open={outcome === "running" ? true : undefined}
               >
-                <summary className="aw-run-section-head">
+                <summary>
                   <ChevronRight
                     aria-hidden="true"
                     className="aw-step-caret"
