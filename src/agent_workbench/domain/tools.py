@@ -57,7 +57,23 @@ class ToolSpec(VersionedModel):
     name: ToolName
     description: ToolDescription
     input_schema: JsonObject
-    output_schema: JsonObject | None = None
+    # `output_schema: JsonObject | None` was here until 2026-08-31. It had no
+    # producer and no consumer in `src/`, and was frozen into the golden
+    # contract -- which is how a field with neither survived being a contract.
+    #
+    # The one thing that looked like a producer is not this field:
+    # `apps/sandbox_mcp/server.py` sets `output_schema` on **MCP's**
+    # `types.Tool`, a different attribute on a different type, declared to a
+    # different protocol.
+    #
+    # Deleted rather than enforced, and the alternative is worth writing down
+    # because it is the one a reader will think of. The gateway validates
+    # *arguments*; validating a *result* against a schema means deciding what
+    # the model is shown when a call that ran and returned is then failed on
+    # its shape -- a behavioural change to the one thing `tool_executor`
+    # promises ("exactly one ToolResult leaves this method"). That is an ADR,
+    # and inventing it to give this field a job would be backwards. If output
+    # validation ever lands, it brings its own field back with it.
     concurrency: ToolConcurrency
     risk: ToolRisk
     idempotency: ToolIdempotency

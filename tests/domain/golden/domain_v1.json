@@ -393,9 +393,6 @@
       "type": "object"
     },
     "name": "export_artifact",
-    "output_schema": {
-      "type": "object"
-    },
     "permission_scopes": [
       "artifact:write"
     ],

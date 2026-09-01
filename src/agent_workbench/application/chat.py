@@ -41,7 +41,6 @@ from agent_workbench.application.chat_execution import (
 )
 from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import ErrorInfo
-from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.messages import Message, user_message
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -579,12 +578,6 @@ def _cancelled_outcome(run_id: str) -> AgentOutcome:
     )
 
 
-def new_session_id() -> str:
-    """A fresh session identifier."""
-
-    return new_id("ses")
-
-
 __all__ = [
     "REFUSAL",
     "SYSTEM_PROMPT",
@@ -592,5 +585,4 @@ __all__ = [
     "ChatRequest",
     "ChatService",
     "ChatTurn",
-    "new_session_id",
 ]

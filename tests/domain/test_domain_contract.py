@@ -118,7 +118,6 @@ SAMPLES: dict[str, VersionedModel] = {
         name="export_artifact",
         description="Write the approved report to the artifact store.",
         input_schema={"type": "object", "properties": {"task_id": {"type": "string"}}},
-        output_schema={"type": "object"},
         concurrency="exclusive",
         risk="write",
         idempotency="keyed",

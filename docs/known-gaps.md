@@ -523,7 +523,7 @@ impossible」。**那个 `Literal` 守住了配置，守不住语料。**
 | B-07 | tool 参数读不出来时，说不出是被截断还是真的坏 | 未实现 |
 | B-08 | 一个 MCP 服务器死掉，曾杀死整个 Worker（触发**本次已修**）；回收仍系于 Worker 存活 | 未实现 |
 | B-09 | Hook Bus 有完整实现与 15+ 测试，但没有任何注册面 | 未接线 |
-| B-10 | 核心层与契约里的八处死符号 | **口径不实** |
+| B-10 | 核心层与契约里的八处死符号 | ~~口径不实~~ **已关闭**（2026-08-31，最后一处移交 B-05）|
 | B-11 | 核心层的第三方依赖守卫是黑名单 | ~~口径不实~~ **已关闭**（ADR-099，2026-08-31） |
 
 > 编号一经退休不再复用。B-04（无真杀 OS 进程的恢复测试）已于 2026-08-11 关闭，
@@ -626,6 +626,13 @@ API 进程（[apps/api/main.py:160](../src/agent_workbench/apps/api/main.py:160)
 
 **做完的判据**：第一条真实 upcaster 进 `DEFAULT_EVENT_UPCASTERS`，并有一条
 对着真实旧版本行的升级测试。
+
+**2026-08-31 补一条这件事的第一个真实候选**：[B-10](#b-10-核心层与契约里的八处死符号--已关闭2026-08-31)
+把 `TaskStep.depends_on` 的删除移交到了这里。那个字段记录并校验一份**从不被执行**的
+步骤依赖，删掉它是对的；而 `TaskState.plan` 从检查点重建、`DomainModel` 是
+`extra="forbid"`，所以删字段会让部署时在飞的 Task 全部无法恢复。
+**这正是升级链存在的理由，也是它第一次有一个具体的、值得为之写的对象**——
+比等一个假想的历史版本要具体得多。
 
 ### B-06 失败标着 `retryable` 却没有任何重试路径 —— **已关闭**（[ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md)）
 
@@ -761,7 +768,7 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 **做完的判据**：一个部署可以在**不改 `src/` 的前提下**注册一个 hook——
 无论是装配参数还是配置面——并有一条端到端测试证明它的改写被重新校验过。
 
-### B-10 核心层与契约里的八处死符号 —— 口径不实
+### B-10 核心层与契约里的八处死符号 —— **已关闭**（2026-08-31）
 
 **分类**：口径不实（2026-08-31 全仓扫描新登记）。它们不是"没用到的常量"，
 每一处都在**声称一件不成立的事**。
@@ -770,20 +777,59 @@ streamable HTTP session 可能已过期，工具目录也是进程启动时冻�
 |---|---|---|
 | ~~`WORKSPACE_WRITE_SCOPE`~~ | 四个 adapter 共用一个 scope 常量 | **2026-08-31 已接线。** 此前全仓零引用、四个 adapter 各写字面量，"共用"靠四处巧合相同；现在四个 tool spec 都 import 它，`grep '"workspace:write"'` 在 `src/` 里只剩定义那一处。`PROJECT_RUN_SCOPE` 一开始就是对的，照它改 |
 | ~~`TERMINAL_RUN_STATES`~~ | 终态集合 | **2026-08-31 已删除。** 与 `runtime/state.py` 的 `TERMINAL_STATES` 重复且零读者。删的是没读者的那个：终态是**转移表**的性质而不是名字的性质，所以它属于状态机那一侧；`domain/runs.py` 留了一段注释说明这条边界划在哪 |
-| `domain/identifiers.py` 的四个 id 铸造器 | id 的前缀由 domain 定义 | 四个全部零引用；domain 声明前缀是 `"thread"`，**实际产出是 `"thr"`** |
-| `ToolSpec.output_schema` | 框架无关契约的一部分，被 golden 冻结 | 全仓无生产者也无消费者；网关只校验 `input_schema` |
-| `TaskStep.depends_on` | 计划里的步骤依赖，被四道校验守着、`_PLAN_CONTRACT` 明确要求模型产出 | 两个读者把依赖关系**原样丢弃** |
-| `ProjectPathSegment` | 带安全理由的段名约束（文件名里的换行能伪造面向行的列表） | 没有任何模型字段用它 |
-| `summarise_children` | docstring 说"用于进度上报与拒绝消息" | 两处都没用 |
+| ~~`domain/identifiers.py` 的四个 id 铸造器~~ | id 的前缀由 domain 定义 | **已处置，而查下去比登记时严重**——见下方「id 词表」 |
+| ~~`ToolSpec.output_schema`~~ | 框架无关契约的一部分，被 golden 冻结 | **已删除。** 无生产者也无消费者；看起来像生产者的那处是 MCP 自己 `types.Tool` 上的**另一个字段**。删而不接：校验*结果*意味着决定「一次跑完并返回的调用因形状被判失败时，模型看到什么」，那是对 `tool_executor` 唯一承诺的行为改动，要自己的 ADR |
+| `TaskStep.depends_on` | 计划里的步骤依赖，被四道校验守着、`_PLAN_CONTRACT` 明确要求模型产出 | **口径已改诚实，删除移交 [B-05](#b-05-生产-upcaster-注册表为空--另一半-2026-08-12-已关闭)。** 字段现在写明「记录并校验，从不执行」——计划是给模型的建议，不是任何东西调度的 DAG。删不掉的原因是真的：`TaskState.plan` 从检查点重建且 `extra="forbid"`，删字段会让部署时在飞的 Task 全部无法恢复 |
+| ~~`ProjectPathSegment`~~ | 带安全理由的段名约束（文件名里的换行能伪造面向行的列表） | **已删除，按本模块自己的论证**：它正是隔壁 `ProjectRelativePath` 注释所反对的「a second, weaker copy spelled as a regex」。而且**两者已经漂了**——约束按 255 *字符*，`validate_relative_path` 按 255 *字节* |
+| ~~`summarise_children`~~ | docstring 说"用于进度上报与拒绝消息" | **已删除。** 两处都有更好的答案在跑：拒绝消息报的是**计数**（模型下一步取决于几个而不是哪几个），进度是每个子运行自己发 `AgentDelegated`（ADR-094） |
 
-**危害不一样，要分开说**：前三个是**冗余**——删掉即可，代价是零。
+**「四个 id 铸造器」查下去比登记时严重，单独记。** 登记时写的是「四个零引用、`thread` vs `thr`」，
+而实际是整张 id 词表都对不上：`domain/identifiers.py` 声明 11 个前缀，
+生产**只用其中 3 个**，另外 6 个在调用点用**字符串字面量**铸造，
+还有第 12 个（`thr`）在**另一层**（`application/tasks.py`）自己声明——
+和 domain 那个死掉的 `"thread"` **值不一样**。
+
+两处字面量各出现在**两个文件**里：`new_id("turn")` 在两个 conversation store
+——正是 `tests/contracts` 拿**同一套**用例跑的那两个实现，而那套契约不断言前缀，
+所以两者一旦分叉，恰好在这个仓库声称「分叉会变成失败」的地方看不见；
+`new_id("ses")` 在两个 application 模块里。
+
+处置（**所有铸造出来的前缀值一个字节都没变**，已逐条实测）：
+
+- 删掉 `GRAPH_NODE_ID_PREFIX`（图节点是**被图声明命名**的，从不铸造）与
+  `STREAM_ID_PREFIX`——后者不只是闲置，是**被反驳**：stream id 要么是借来的
+  （chat/code 用 session id），要么由拥有那条流的人铸造（`triage`、`kgx`），
+  一个通用的 `stream_` 等于说流有自己的身份空间，而它没有。
+- `WORKFLOW_THREAD_ID_PREFIX` 的值由 `"thread"` 改为 **`"thr"`**（库里就是这个），
+  `application/tasks.py` 那份第二声明删除。
+- 6 个字面量前缀各自有了名字，域对象的进 `domain/identifiers.py`，
+  进程 id（`worker` / `ingester`）留在 `bootstrap/projections.py`——worker 不是域对象。
+- 两个「审批 id」并排声明并写明区别：`apr_` 是工具调用交给交互闸门的**瞬时问题**，
+  `approval_` 是带 `decision_version` 与账本的**持久 Task 审批行**。它们本来就是
+  两个不同的东西，此前是两个调用点各写各的。
+- **守门测试** [`tests/architecture/test_identifier_vocabulary.py`](../tests/architecture/test_identifier_vocabulary.py)：
+  `new_id` 在 `domain/identifiers.py` 之外不许收到字符串字面量；
+  声明了却没人铸造的前缀要删；两个前缀不许铸出同一个串。
+
+**其余五处的危害不一样，要分开说**：前三个是**冗余**——删掉即可，代价是零。
 后四个是**已经付过设计费的东西没有收到货**：`depends_on` 让模型多产出一个字段、
 让四道校验多跑一遍，然后被丢掉；`ProjectPathSegment` 写下了一条真实的安全推理
 （换行能伪造面向行的列表）却没有任何字段受它保护——**那是一条读起来像防线的空话**。
 
-**做完的判据**：每一处二选一并有一行说明——要么接上（`depends_on` 被排序读到、
-`ProjectPathSegment` 被至少一个字段用上、`output_schema` 被网关校验），
-要么删掉。**不许留在"看起来像被守着"的状态**。
+**做完的判据**（当时写的）：每一处二选一并有一行说明——要么接上，要么删掉。
+**不许留在"看起来像被守着"的状态**。
+
+**七处里六处已满足**（2026-08-31）：两处接上（`WORKSPACE_WRITE_SCOPE`、
+id 词表）、四处删掉（`TERMINAL_RUN_STATES`、两个前缀、`output_schema`、
+`ProjectPathSegment`、`summarise_children`），每一处都在代码里留下了**为什么**
+——删掉一个符号而不留下它曾经声称过什么，等于把「这里错过」也一起删掉。
+
+**第七处 `depends_on` 移交 [B-05](#b-05-生产-upcaster-注册表为空--另一半-2026-08-12-已关闭)**，
+并且它已经不在「看起来像被守着」的状态了：字段自己写着「记录并校验，从不执行」。
+移交而不是继续开着，是因为**挡住它的不是这条缺口**——`TaskState.plan` 从检查点
+重建且 `extra="forbid"`，删字段会让部署时在飞的 Task 全部无法恢复，
+而那正是 upcaster 机制的职责，那套机制的生产注册表**是空的**。
+一条缺口的判据里挂着另一条缺口的前置，就该由后者持有。
 
 **2026-08-31 处置了两处**（上表已划掉），**判据是"这一处是冗余还是欠款"**：
 前三个是冗余——删掉或接上即可，代价为零；后四个是**已经付过设计费而没有收到货**，

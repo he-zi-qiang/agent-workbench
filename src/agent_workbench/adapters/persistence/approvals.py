@@ -38,7 +38,10 @@ from agent_workbench.adapters.persistence.event_log import PostgresEventLog
 from agent_workbench.adapters.persistence.models import approvals, task_runs
 from agent_workbench.adapters.persistence.notifications import notify_task_ready
 from agent_workbench.domain.events import TaskApprovalDecided, TaskApprovalRequested
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_task_approval_id,
+)
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_registry import ApprovalDecision
 from agent_workbench.ports.approvals import (
@@ -93,7 +96,7 @@ class PostgresApprovalStore:
             await connection.execute(
                 pg_insert(approvals)
                 .values(
-                    approval_id=new_id("approval"),
+                    approval_id=new_task_approval_id(),
                     task_id=task_id,
                     graph_node_operation_id=graph_node_operation_id,
                     tenant_id=tenant_id,

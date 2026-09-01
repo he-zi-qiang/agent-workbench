@@ -13,7 +13,9 @@ from agent_workbench.domain.evidence import (
     EvidenceRevision,
     EvidenceSource,
 )
-from agent_workbench.domain.identifiers import new_id
+from agent_workbench.domain.identifiers import (
+    new_evidence_id,
+)
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.cancellation import CancellationToken
@@ -224,7 +226,7 @@ class ExternalResearchService:
             source="external",
             items=tuple(
                 EvidenceItem(
-                    evidence_id=new_id("evidence"),
+                    evidence_id=new_evidence_id(),
                     source="external",
                     text=hit.text,
                     url=hit.url,

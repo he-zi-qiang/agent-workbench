@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import SecretStr
 
@@ -45,6 +45,15 @@ from agent_workbench.domain.workspace import (
     WORKSPACE_WRITE_TOOL,
 )
 from agent_workbench.ports.task_workflow import GraphVersion
+
+#: The two process ids this module mints when a deployment did not name its
+#: own. They live here rather than in `domain/identifiers.py` because a worker
+#: is not a domain object -- it is one of the processes this file assembles,
+#: and nothing downstream reasons about it. Named rather than written inline at
+#: the call site so that `new_id` is never handed a bare string anywhere in the
+#: tree (`tests/architecture/test_identifier_vocabulary.py`).
+TASK_WORKER_ID_PREFIX: Final[str] = "worker"
+INGESTION_WORKER_ID_PREFIX: Final[str] = "ingester"
 
 #: The permission ceiling every v1 Task is submitted under.
 #:
@@ -911,7 +920,7 @@ def project_task_worker(
             max_artifact_bytes=settings.artifact_store.max_artifact_bytes,
         ),
         task=project_task(settings),
-        worker_id=worker_id or new_id("worker"),
+        worker_id=worker_id or new_id(TASK_WORKER_ID_PREFIX),
         worker_concurrency=settings.coordination.worker_concurrency,
         model=ModelConfig(
             provider=settings.model.provider,
@@ -1108,7 +1117,7 @@ def project_ingestion_worker(
             if settings.rag.graph.enabled
             else None
         ),
-        worker_id=worker_id or new_id("ingester"),
+        worker_id=worker_id or new_id(INGESTION_WORKER_ID_PREFIX),
         # One document can spend most of a lease in a model. Claiming a large
         # batch would make the tail expire before processing even starts; the
         # model does its own configured batching inside this one document.

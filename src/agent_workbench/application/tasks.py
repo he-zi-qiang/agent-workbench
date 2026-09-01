@@ -32,7 +32,7 @@ from typing import Final, Literal, Protocol, runtime_checkable
 from agent_workbench.application.run_tree import RunNode, build_run_tree
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.events import EventEnvelope
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import Identifier, new_workflow_thread_id
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.schema import DomainModel, JsonObject
@@ -43,8 +43,6 @@ from agent_workbench.ports.task_registry import TaskRegistry, TaskRun, TaskSubmi
 from agent_workbench.ports.task_workflow import GraphVersion
 from agent_workbench.workflows.general_graph import GRAPH_VERSION_V2
 from agent_workbench.workflows.research_graph import GRAPH_VERSION_V1
-
-TASK_THREAD_PREFIX: Final[str] = "thr"
 
 #: What a submitter may ask for. Deliberately a shape rather than a version
 #: string (ADR-031 §2.3): a caller naming ``graph_version`` directly could pin
@@ -254,7 +252,7 @@ class TaskService:
             TaskSubmission(
                 tenant_id=principal.tenant_id,
                 owner_id=principal.principal_id,
-                thread_id=new_id(TASK_THREAD_PREFIX),
+                thread_id=new_workflow_thread_id(),
                 graph_version=(
                     self.graph_version if graph is None else GRAPH_FOR_CHOICE[graph]
                 ),
@@ -608,7 +606,6 @@ __all__ = [
     "GRAPH_FOR_CHOICE",
     "MAX_PAGE_LIMIT",
     "MAX_TIMELINE_LIMIT",
-    "TASK_THREAD_PREFIX",
     "IsolatingEventLog",
     "SubmittedSemantics",
     "TaskGraphChoice",

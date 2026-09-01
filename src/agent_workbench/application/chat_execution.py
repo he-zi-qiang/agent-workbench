@@ -43,7 +43,9 @@ from agent_workbench.application.retrieval import (
 )
 from agent_workbench.domain.context import Citation, ContextPacket
 from agent_workbench.domain.events import RetrievalRejected
-from agent_workbench.domain.identifiers import new_id
+from agent_workbench.domain.identifiers import (
+    new_agent_run_id,
+)
 from agent_workbench.domain.messages import Message, user_message
 from agent_workbench.domain.policies import AuthorizationEnvelope, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -263,7 +265,7 @@ class ChatRequest:
     # base. Once it reaches this seam the choice is always explicit.
     answer_mode: AnswerMode = "rag"
     top_k: int = 8
-    run_id: str = field(default_factory=lambda: new_id("run"))
+    run_id: str = field(default_factory=lambda: new_agent_run_id())
     stream_id: str | None = None
 
     @property

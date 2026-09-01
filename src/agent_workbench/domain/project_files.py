@@ -115,16 +115,21 @@ _WINDOWS_RESERVED: Final[frozenset[str]] = frozenset(
     | {f"lpt{digit}" for digit in "123456789"}
 )
 
-#: A single path segment. Excludes the separators, the NUL, and every C0 control
-#: character -- a newline inside a filename is legal on POSIX and turns any
-#: line-oriented listing (a diff, a `git status`, this project's own event
-#: payloads) into something that can be forged by naming a file.
-ProjectPathSegment = Annotated[
-    str,
-    StringConstraints(pattern=r"^[^/\\\x00-\x1f]+$", min_length=1, max_length=255),
-]
-
-
+# `ProjectPathSegment` was here until 2026-08-31: a segment-level
+# `StringConstraints` refusing the separators, the NUL and the C0 controls.
+# **Nothing used it**, and deleting it rather than finding it a field is the
+# module's own argument, one paragraph down:
+#
+#     A second, weaker copy of it spelled as a regex would be a rule that can
+#     drift from the one that matters, and the drift would show up as an event
+#     refused for a path the filesystem accepted.
+#
+# It was already that copy. `validate_relative_path` enforces every character
+# rule it stated and four more the regex cannot say (`.`/`..`/empty segments,
+# Windows reserved stems, trailing dots and spaces) -- and the two had **already
+# drifted**: the constraint bounded a segment at 255 *characters*, the function
+# bounds it at `MAX_SEGMENT_BYTES` = 255 *bytes*. For any non-ASCII filename
+# those are different limits, and the one that ran was the function's.
 #: A whole project-relative path, as a value an event may carry.
 #:
 #: Deliberately weaker than ``validate_relative_path``: it bounds the length and
@@ -338,7 +343,6 @@ __all__ = [
     "ProjectFileChangedError",
     "ProjectFileExistsError",
     "ProjectPathError",
-    "ProjectPathSegment",
     "ProjectRelativePath",
     "is_within",
     "normalize_segment",
