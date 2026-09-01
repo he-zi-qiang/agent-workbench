@@ -146,10 +146,15 @@ class AgentProfile:
         return offered in self.admits
 
 
+# `"depends_on":[]` and the sentence "Steps start at 1 and only depend on
+# earlier ids" were here until 2026-08-31. The field they asked for was
+# recorded, validated five ways, and never executed -- so the contract was
+# spending part of every planner prompt, and part of every planner response, on
+# a value nothing read. Removed with the field (ADR-100).
 _PLAN_CONTRACT: Final[str] = (
     "Return exactly one JSON object and no Markdown, prose, or code fence: "
-    '{"steps":[{"step_id":"...","sequence":1,"objective":"...",'
-    '"depends_on":[]}]}. Steps start at 1 and only depend on earlier ids.'
+    '{"steps":[{"step_id":"...","sequence":1,"objective":"..."}]}. '
+    "Steps start at 1 and run in the order given."
 )
 
 _CRITIC_CONTRACT: Final[str] = (

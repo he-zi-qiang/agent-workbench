@@ -50,6 +50,11 @@ from langgraph.graph import (  # pyright: ignore[reportMissingTypeStubs]
 )
 from langgraph.types import Command  # pyright: ignore[reportMissingTypeStubs]
 
+from agent_workbench.adapters.langgraph.checkpoint_migrations import (
+    CHECKPOINT_SCHEMA_VERSION,
+    CHECKPOINT_VERSION_CHANNEL,
+    DEFAULT_CHECKPOINT_UPCASTERS,
+)
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.domain.tasks import (
@@ -130,6 +135,11 @@ class GraphState(TypedDict, total=False):
     """
 
     schema_version: int
+    #: The checkpoint's own layout version (ADR-100). Separate from
+    #: `schema_version` above, which is the *domain* contract's and is global
+    #: to every `VersionedModel` -- bumping that one to describe a change to
+    #: this state would also tell every stored event it is out of date.
+    checkpoint_schema_version: int
     task_id: str
     objective: str
     knowledge_base_id: str | None
@@ -237,9 +247,23 @@ def _to_state(payload: Mapping[str, Any]) -> TaskState:
     # domain model: an interrupted invocation returns its pending interrupts in
     # `__interrupt__`, and a TaskState that accepted that key would be a
     # checkpoint contract with a framework detail in it.
-    return TaskState.model_validate(
-        {key: value for key, value in payload.items() if not key.startswith("__")}
+    fields = {
+        key: value
+        for key, value in payload.items()
+        if not key.startswith("__") and key != CHECKPOINT_VERSION_CHANNEL
+    }
+    # **The one funnel, which is why the migration hangs here** (ADR-100).
+    # Every route function, every node handler and the snapshot read on the
+    # resume path reach a `TaskState` through this call, so a checkpoint
+    # written by an older layout is raised exactly once and in one place.
+    #
+    # Absent means 1: every checkpoint written before this channel existed
+    # carries no stamp, and that absence is the version rather than an error.
+    raised = DEFAULT_CHECKPOINT_UPCASTERS.raise_to_current(
+        fields,
+        from_version=int(payload.get(CHECKPOINT_VERSION_CHANNEL, 1)),
     )
+    return TaskState.model_validate(raised)
 
 
 def _review_aware_handler(handler: NodeHandler) -> NodeHandler:
@@ -486,7 +510,14 @@ class LangGraphTaskWorkflow:
             raise WorkflowThreadAlreadyExistsError(thread_id)
         compiled = self._graph(graph_version, thread_id)
         payload = await compiled.ainvoke(
-            state.model_dump(),
+            # Stamped on the way in, so what this deployment writes says which
+            # layout wrote it. Reading is where the stamp earns its keep; a
+            # checkpoint that carries one needs no guessing from a future
+            # reader, which is the position this change was written from.
+            {
+                **state.model_dump(),
+                CHECKPOINT_VERSION_CHANNEL: CHECKPOINT_SCHEMA_VERSION,
+            },
             _config(thread_id, graph_version, checkpoint_fence),
         )
         return await self._result(compiled, thread_id, graph_version, payload)

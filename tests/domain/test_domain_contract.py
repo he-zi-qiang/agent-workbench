@@ -214,7 +214,6 @@ SAMPLES: dict[str, VersionedModel] = {
                 step_id="step_external",
                 sequence=2,
                 objective="Cross-check public evidence.",
-                depends_on=("step_internal",),
             ),
         ),
         evidence_refs=("art_evidence_a", "art_evidence_b"),

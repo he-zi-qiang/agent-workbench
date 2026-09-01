@@ -124,45 +124,24 @@ class TaskStep(DomainModel):
     step_id: Identifier
     sequence: int = Field(ge=1, le=MAX_PLAN_STEPS)
     objective: TaskObjective
-    #: **Recorded and validated; never executed.** Stated plainly because the
-    #: four checks below, plus `TaskPlan`'s "only preceding steps" rule, plus
-    #: the planner contract that asks the model for this field, together read
-    #: like a dependency graph something walks. Nothing walks it: the plan is
-    #: rendered to later prompts as a flat numbered list
-    #: (`agent_profiles.py`), and the research graph's shape is frozen at
-    #: submission -- it does not branch per step. **The plan is advice to the
-    #: model, not a DAG this system schedules.**
-    #:
-    #: So why is it still here. Deleting it is not free: `TaskState.plan` is a
-    #: `tuple[TaskStep, ...]` reconstructed from the checkpointed graph channel
-    #: by `_to_state`, and `DomainModel` is `extra="forbid"` -- so a checkpoint
-    #: written before the removal stops loading, and every Task in flight at
-    #: deploy time fails to resume. Measured, not assumed: feeding `_to_state`
-    #: a plan dict with one unknown key raises `extra_forbidden`.
-    #:
-    #: **And nothing in this repository would fix that** -- which is the part
-    #: worth reading twice. The upcaster registry is applied by
-    #: `PostgresEventLog` to stored *event envelopes* during replay; a
-    #: checkpoint never goes through it, so known gap B-05 is a different path
-    #: and does not gate this. Bumping `schema_version` makes it worse rather
-    #: than better: `VersionedModel` fails closed on a version it does not
-    #: recognise, so an old checkpoint is then refused outright.
-    #:
-    #: **Removal is gated on B-12**, the absence of any migration path for
-    #: checkpointed graph state. Until then the honest thing is this paragraph:
-    #: the validation is real, and what it validates is a claim the model made,
-    #: not an order anything follows.
-    depends_on: tuple[Identifier, ...] = Field(default=(), max_length=MAX_PLAN_STEPS)
-
-    @model_validator(mode="after")
-    def validate_dependencies(self) -> TaskStep:
-        if self.step_id in self.depends_on:
-            raise ValueError("a task step cannot depend on itself")
-        if tuple(sorted(self.depends_on)) != self.depends_on:
-            raise ValueError("depends_on must be sorted")
-        if len(set(self.depends_on)) != len(self.depends_on):
-            raise ValueError("depends_on must not contain duplicate step ids")
-        return self
+    # `depends_on: tuple[Identifier, ...]` was here until 2026-08-31, with four
+    # validators of its own and a fifth rule on `TaskPlan` ("only preceding
+    # steps"), and the planner contract asked the model to produce it.
+    #
+    # **Nothing ever executed it.** The plan is rendered to later prompts as a
+    # flat numbered list (`agent_profiles.py`), and the graph's shape is frozen
+    # at submission -- it does not branch per step. The plan is advice to the
+    # model, not a DAG this system schedules, so five rules were guarding a
+    # claim rather than an order.
+    #
+    # Removing it needed a way to read checkpoints written while it existed:
+    # `TaskState.plan` is reconstructed from the checkpointed channel by
+    # `_to_state`, and `DomainModel` is `extra="forbid"`. That path had no
+    # migration at all until ADR-100 -- and the event upcasters are not it, they
+    # run on stored event envelopes during replay and a checkpoint never
+    # reaches them. `adapters/langgraph/checkpoint_migrations.py` is the path;
+    # its layout 1 -> 2 step drops this key, and it was the first thing that
+    # path ever carried.
 
 
 class ReviewResult(DomainModel):
@@ -309,15 +288,6 @@ class TaskState(VersionedModel):
         step_ids = tuple(step.step_id for step in self.plan)
         if len(set(step_ids)) != len(step_ids):
             raise ValueError("plan step ids must be unique")
-
-        seen: set[str] = set()
-        for step in self.plan:
-            unknown = set(step.depends_on) - seen
-            if unknown:
-                raise ValueError(
-                    "step dependencies must refer only to preceding plan steps"
-                )
-            seen.add(step.step_id)
 
     @staticmethod
     def _validate_refs(name: str, refs: tuple[str, ...]) -> None:

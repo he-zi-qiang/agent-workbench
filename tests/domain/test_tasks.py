@@ -25,7 +25,6 @@ def _steps() -> tuple[TaskStep, ...]:
             step_id="step_external",
             sequence=2,
             objective="Cross-check public evidence",
-            depends_on=("step_internal",),
         ),
     )
 
@@ -101,34 +100,31 @@ def test_plan_order_is_contiguous_and_step_ids_are_unique() -> None:
         _state(plan=duplicate)
 
 
-def test_dependencies_are_sorted_unique_and_only_point_backwards() -> None:
-    with pytest.raises(ValidationError, match="depends_on must be sorted"):
-        TaskStep(
-            step_id="step_3",
-            sequence=3,
-            objective="Combine",
-            depends_on=("step_2", "step_1"),
-        )
+def test_a_plan_step_carries_no_dependency_field_at_all() -> None:
+    """`depends_on` is gone, and the removal has to be visible from the type.
 
-    with pytest.raises(ValidationError, match="must not contain duplicate"):
-        TaskStep(
-            step_id="step_3",
-            sequence=3,
-            objective="Combine",
-            depends_on=("step_1", "step_1"),
-        )
+    This test used to assert three rules about that field -- sorted, unique,
+    backwards-only. All three were real validators guarding a value **nothing
+    ever executed**: the plan is rendered to later prompts as a flat numbered
+    list, and the graph's shape is frozen at submission (ADR-100).
 
-    forward_reference = (
-        TaskStep(
-            step_id="step_1",
-            sequence=1,
-            objective="First",
-            depends_on=("step_2",),
-        ),
-        TaskStep(step_id="step_2", sequence=2, objective="Second"),
-    )
-    with pytest.raises(ValidationError, match="preceding plan steps"):
-        _state(plan=forward_reference)
+    What replaces them is the assertion that the field cannot come back by
+    accident: `DomainModel` forbids extras, so a caller still passing it -- an
+    old caller, or an old checkpoint that skipped the migration -- is refused
+    rather than silently accepted and ignored.
+    """
+
+    assert "depends_on" not in TaskStep.model_fields
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        TaskStep.model_validate(
+            {
+                "step_id": "step_1",
+                "sequence": 1,
+                "objective": "First",
+                "depends_on": [],
+            }
+        )
 
 
 @pytest.mark.parametrize("field", ["evidence_refs", "agent_outcome_refs"])

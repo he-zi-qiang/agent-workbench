@@ -312,15 +312,11 @@
     "objective": "Produce a verified retrieval architecture brief.",
     "plan": [
       {
-        "depends_on": [],
         "objective": "Research internal evidence.",
         "sequence": 1,
         "step_id": "step_internal"
       },
       {
-        "depends_on": [
-          "step_internal"
-        ],
         "objective": "Cross-check public evidence.",
         "sequence": 2,
         "step_id": "step_external"

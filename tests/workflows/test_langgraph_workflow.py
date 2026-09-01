@@ -286,10 +286,33 @@ def test_resume_does_not_resubmit_the_original_input() -> None:
 # --------------------------------------------------------------------------
 
 
+#: Channels that are deliberately **not** `TaskState` fields.
+#:
+#: Enumerated rather than allowed by a subset check, so adding one stays a
+#: decision. `checkpoint_schema_version` is the checkpoint's own layout version
+#: (ADR-100): the domain does not know it is checkpointed, and a field on the
+#: model would put a framework detail inside the contract. `_to_state` strips
+#: it before validating, the same way it strips LangGraph's own channels.
+NON_DOMAIN_CHANNELS = frozenset({"checkpoint_schema_version"})
+
+
 def test_every_task_state_field_is_a_graph_channel() -> None:
     # A field added to TaskState without a channel here would be silently
     # dropped on the first checkpoint round trip.
-    assert set(GraphState.__annotations__) == set(TaskState.model_fields)
+    assert set(TaskState.model_fields) <= set(GraphState.__annotations__)
+
+
+def test_no_channel_exists_that_nothing_declares() -> None:
+    """The other half, and the reason the assertion above is not an equality.
+
+    A channel that is neither a `TaskState` field nor a listed exception is a
+    value being carried through checkpoints that nothing reads back -- the same
+    shape of dead weight the ledger's B-10 was about, one layer along.
+    """
+
+    extra = set(GraphState.__annotations__) - set(TaskState.model_fields)
+
+    assert extra == NON_DOMAIN_CHANNELS
 
 
 def test_a_checkpoint_round_trip_preserves_the_state() -> None:
