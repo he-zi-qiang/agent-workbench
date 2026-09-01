@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 1024" width="1260" height="1024" class="d" role="img" aria-label="Tool Gateway 的四个阶段：propose、prepare、authorize、invoke，以及每个阶段的拒绝出口与留下的事件">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1260" height="1024" fill="none"/>
+<text x="26" y="36" class="h" text-anchor="start">Tool Gateway · 一次工具调用要穿过的门</text>
+<text x="26" y="58" class="s" text-anchor="start">runtime/tool_gateway.py · 1184 行。原生 handler、MCP 工具、LangChain 工具都以同一个 ToolBinding 到达这里，所以「这次能不能跑、用这些参数、在此刻」只有一个实现。</text>
+<text x="26" y="96" class="f" text-anchor="start">留下的事件</text>
+<text x="250" y="96" class="f" text-anchor="start">阶段（由调用方按顺序驱动）</text>
+<text x="900" y="96" class="f" text-anchor="start">拒绝出口 —— 每一条都产生一个 ToolResult</text>
+<rect x="250" y="110" width="610" height="62" rx="10" class="paper"/>
+<text x="268" y="136" class="t" text-anchor="start">advertise</text>
+<text x="268" y="156" class="f" text-anchor="start">每次运行一次，不是每次调用一次。未注册的名字抛 UnknownToolError；</text>
+<text x="268" y="172" class="f" text-anchor="start">带 operation_key 的（账本副作用）抛 PolicyDeniedError——ADR-075：</text>
+<text x="268" y="188" class="f" text-anchor="start">那种工具由节点签发，从不摆到模型面前。</text>
+<rect x="250" y="188" width="610" height="58" rx="10" class="paper"/>
+<text x="268" y="214" class="t" text-anchor="start">① propose</text>
+<text x="268" y="234" class="f" text-anchor="start">记下参数字节数与 SHA-256。每一个被提议的调用都留痕，</text>
+<text x="268" y="250" class="f" text-anchor="start">包括下一步就要被拒的那些。</text>
+<rect x="250" y="262" width="610" height="122" rx="10" class="paper"/>
+<text x="268" y="288" class="t" text-anchor="start">② prepare　解析 · 检查 · 钩子</text>
+<text x="268" y="308" class="f" text-anchor="start">解析绑定（找不到 → unknown_tool）</text>
+<text x="268" y="324" class="f" text-anchor="start">参数规范化后 ≤ 65,536 字节；再按 spec 的 JSON Schema 校验</text>
+<text x="268" y="340" class="f" text-anchor="start">before_tool 钩子按注册顺序跑一遍，每个的时限是 min(5s, 本次运行剩余)</text>
+<text x="268" y="356" class="f" text-anchor="start">钩子若改写了参数 → 上面两项再跑一遍（只能改参数，改不了工具名）</text>
+<rect x="250" y="400" width="610" height="132" rx="10" class="acc"/>
+<text x="268" y="426" class="t" text-anchor="start">③ authorize　最多 3 轮</text>
+<text x="268" y="446" class="f" text-anchor="start">policy.decide(call, context) → 三个答案，没有第四个</text>
+<text x="268" y="462" class="f" text-anchor="start">每一轮都发一条 PermissionResolved —— 被拒的那次也留痕</text>
+<text x="268" y="478" class="f" text-anchor="start">allow_with_modified_input → 重新走一遍 ② 再问一次；3 轮不收敛 → 拒</text>
+<text x="268" y="494" class="f" text-anchor="start">「需要审批」是粘性的：后一轮忘了重复也撤不掉</text>
+<rect x="250" y="546" width="610" height="108" rx="10" class="warn"/>
+<text x="268" y="572" class="t" text-anchor="start">③b 需要审批时</text>
+<text x="268" y="592" class="f" text-anchor="start">没有审批闸 → PermissionRequested 后以 approval_required 拒绝</text>
+<text x="268" y="608" class="f" text-anchor="start">有闸 → PermissionRequested + RunPaused → 等待（与取消赛跑）</text>
+<text x="268" y="624" class="f" text-anchor="start">→ ToolApprovalDecided（超时、取消、闸自己报错，都算 deny 并留痕）</text>
+<rect x="250" y="668" width="610" height="152" rx="10" class="acc"/>
+<text x="268" y="694" class="t" text-anchor="start">④ invoke</text>
+<text x="268" y="714" class="f" text-anchor="start">没有 operation_key：直接派发</text>
+<text x="268" y="730" class="f" text-anchor="start">有：记意图 → 距不可逆那一行再授权一次 → 派发 → 记结果</text>
+<text x="268" y="746" class="f" text-anchor="start">第二次授权只认 allow 且不再要求审批；改写在这里不予采纳——</text>
+<text x="268" y="762" class="f" text-anchor="start">已记下的意图必须描述真正发生的那次调用</text>
+<text x="268" y="778" class="f" text-anchor="start">答不上来（超时/取消/超预算）→ 标记待人工对账，而不是猜</text>
+<path d="M555.0 172 L555.0 188" class="edge" marker-end="url(#a)"/>
+<path d="M555.0 246 L555.0 262" class="edge" marker-end="url(#a)"/>
+<path d="M555.0 384 L555.0 400" class="edge" marker-end="url(#a)"/>
+<path d="M555.0 532 L555.0 546" class="edge" marker-end="url(#a)"/>
+<path d="M555.0 654 L555.0 668" class="edge" marker-end="url(#a)"/>
+<rect x="26" y="196" width="196" height="48" rx="8" class="info"/>
+<text x="38" y="216" class="f m" text-anchor="start" fill="var(--info)">ToolProposed</text>
+<text x="38" y="233" class="f" text-anchor="start">argument_bytes · sha256</text>
+<path d="M250 220 L222 220" class="edge" marker-end="url(#a)"/>
+<rect x="26" y="410" width="196" height="48" rx="8" class="info"/>
+<text x="38" y="430" class="f m" text-anchor="start" fill="var(--info)">PermissionResolved</text>
+<text x="38" y="447" class="f" text-anchor="start">每一轮一条</text>
+<path d="M250 434 L222 434" class="edge" marker-end="url(#a)"/>
+<rect x="26" y="556" width="196" height="48" rx="8" class="info"/>
+<text x="38" y="576" class="f m" text-anchor="start" fill="var(--info)">PermissionRequested</text>
+<text x="38" y="593" class="f" text-anchor="start">RunPaused · ToolApprovalDecided</text>
+<path d="M250 580 L222 580" class="edge" marker-end="url(#a)"/>
+<rect x="26" y="700" width="196" height="48" rx="8" class="info"/>
+<text x="38" y="720" class="f m" text-anchor="start" fill="var(--info)">ToolStarted</text>
+<text x="38" y="737" class="f" text-anchor="start">ToolProgress 每 5 秒</text>
+<path d="M250 724 L222 724" class="edge" marker-end="url(#a)"/>
+<rect x="26" y="766" width="196" height="48" rx="8" class="info"/>
+<text x="38" y="786" class="f m" text-anchor="start" fill="var(--info)">ToolCompleted / ToolFailed</text>
+<text x="38" y="803" class="f" text-anchor="start">duration_ms · output_bytes</text>
+<path d="M250 790 L222 790" class="edge" marker-end="url(#a)"/>
+<rect x="900" y="196" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="217" class="f m" text-anchor="start" fill="var(--bad)">unknown_tool</text>
+<text x="912" y="234" class="f" text-anchor="start">这个进程没注册这个名字</text>
+<path d="M860 222 L900 222" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="272" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="293" class="f m" text-anchor="start" fill="var(--bad)">invalid_tool_input</text>
+<text x="912" y="310" class="f" text-anchor="start">参数太大 / 不合 schema / 改写后仍不合</text>
+<path d="M860 298 L900 298" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="348" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="369" class="f m" text-anchor="start" fill="var(--bad)">policy_denied</text>
+<text x="912" y="386" class="f" text-anchor="start">钩子拦下（只跨过异常类型名，不跨消息）</text>
+<path d="M860 374 L900 374" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="424" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="445" class="f m" text-anchor="start" fill="var(--bad)">policy_denied</text>
+<text x="912" y="462" class="f" text-anchor="start">策略拒绝，或 3 轮改写仍不收敛</text>
+<path d="M860 450 L900 450" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="556" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="577" class="f m" text-anchor="start" fill="var(--bad)">approval_required</text>
+<text x="912" y="594" class="f" text-anchor="start">「allow，但要审批」从不当作 allow</text>
+<path d="M860 582 L900 582" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="632" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="653" class="f m" text-anchor="start" fill="var(--bad)">policy_denied</text>
+<text x="912" y="670" class="f" text-anchor="start">审批被拒 / 超时 / 取消</text>
+<path d="M860 658 L900 658" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="700" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="721" class="f m" text-anchor="start" fill="var(--bad)">invalid_tool_input</text>
+<text x="912" y="738" class="f" text-anchor="start">同一 operation_key 换了参数再来</text>
+<path d="M860 726 L900 726" class="edge dash" marker-end="url(#a)"/>
+<rect x="900" y="760" width="334" height="52" rx="8" class="bad"/>
+<text x="912" y="781" class="f m" text-anchor="start" fill="var(--bad)">tool_failed</text>
+<text x="912" y="798" class="f" text-anchor="start">账本说这次已经做过，不会再做一遍</text>
+<path d="M860 786 L900 786" class="edge dash" marker-end="url(#a)"/>
+<rect x="26" y="838" width="1208" height="108" rx="10" class="panel"/><text x="44" y="864" class="h" text-anchor="start">三层收窄，每一层都是交集，没有一层能变宽</text>
+<rect x="42" y="882" width="372" height="48" rx="8" class="sunk"/>
+<text x="56" y="902" class="f" text-anchor="start">提交时冻结的授权信封</text>
+<text x="56" y="919" class="f m" text-anchor="start">task_runs.submitted_authorization_envelope，每次恢复重新施加</text>
+<text x="426" y="910" class="f" text-anchor="middle">⊇</text>
+<rect x="438" y="882" width="372" height="48" rx="8" class="sunk"/>
+<text x="452" y="902" class="f" text-anchor="start">节点画像 ∩ 信封</text>
+<text x="452" y="919" class="f m" text-anchor="start">permitted_tools(profile, envelope.allowed_tools)</text>
+<text x="822" y="910" class="f" text-anchor="middle">⊇</text>
+<rect x="834" y="882" width="372" height="48" rx="8" class="sunk"/>
+<text x="848" y="902" class="f" text-anchor="start">子代理信封</text>
+<text x="848" y="919" class="f m" text-anchor="start">child_envelope：风险上限只能降，没有参数能抬高它</text>
+<text x="26" y="966" class="s" text-anchor="start">不变量：每一条离开这里的路径，不是 refuse() 就是 _record()——所以模型手上那个 tool_call_id 恰好被一个 ToolResult 关掉。</text>
+<text x="26" y="986" class="f" text-anchor="start">被拒的那次也留下完整四件套里它走到的那几条，而不是从事件流里消失。</text>
+<text x="26" y="1008" class="f" text-anchor="start">构造期就会失败的两件事：任一工具的 input_schema 用了不支持的关键字（进程起不来，不是这次调用失败）；有 operation_key 的绑定却没有账本（ValueError 点名那些工具）。</text>
+</svg>

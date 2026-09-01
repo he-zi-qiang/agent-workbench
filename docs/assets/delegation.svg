@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 604" width="1200" height="604" class="d" role="img" aria-label="子代理委派：父运行调用 delegate_agent，子运行在同一个 AgentExecutor 里跑，三道闸分别是工具交集、深度上限时移除委派工具、信封只能收紧">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1200" height="604" fill="none"/>
+<text x="24" y="36" class="h" text-anchor="start">多 Agent：一次委派是一次运行，不是一个新循环</text>
+<text x="24" y="58" class="s" text-anchor="start">委派工具的 handler 调用的是同一个 AgentExecutor。递归的是调用层数，不是循环的份数。默认关闭。</text>
+<rect x="24" y="88" width="560" height="226" rx="10" class="paper"/>
+<text x="44" y="116" class="t" text-anchor="start">父运行　run_2e769ec…（图节点 work）</text>
+<rect x="44" y="140" width="520" height="30" rx="6" class="sunk"/>
+<text x="58" y="160" class="f m" text-anchor="start">ToolStarted</text>
+<text x="240" y="160" class="f" text-anchor="start">delegate_agent</text>
+<rect x="44" y="174" width="520" height="30" rx="6" class="sunk"/>
+<text x="58" y="194" class="f m" text-anchor="start">AgentDelegated</text>
+<text x="240" y="194" class="f" text-anchor="start">→ analyst</text>
+<rect x="44" y="208" width="520" height="30" rx="6" class="sunk"/>
+<text x="58" y="228" class="f m" text-anchor="start">⋯</text>
+<text x="240" y="228" class="f" text-anchor="start">等子运行跑完</text>
+<rect x="44" y="242" width="520" height="30" rx="6" class="sunk"/>
+<text x="58" y="262" class="f m" text-anchor="start">AgentCompleted</text>
+<text x="240" y="262" class="f" text-anchor="start">子代理的报告</text>
+<rect x="44" y="276" width="520" height="30" rx="6" class="sunk"/>
+<text x="58" y="296" class="f m" text-anchor="start">ToolCompleted</text>
+<text x="240" y="296" class="f" text-anchor="start">报告作为工具结果回到模型</text>
+<rect x="616" y="88" width="560" height="226" rx="10" class="acc"/>
+<text x="636" y="116" class="t" text-anchor="start">子运行　run_9d8ac05…（同一条事件流，自己的 run_id）</text>
+<rect x="636" y="156" width="520" height="34" rx="6" class="paper"/>
+<text x="650" y="178" class="f m" text-anchor="start">RunStarted</text>
+<text x="872" y="178" class="f" text-anchor="start">深度 +1，工具表是父的子集</text>
+<rect x="636" y="200" width="520" height="34" rx="6" class="paper"/>
+<text x="650" y="222" class="f m" text-anchor="start">ModelStarted / ModelCompleted</text>
+<text x="872" y="222" class="f" text-anchor="start">同一个 Runtime，同一条循环</text>
+<rect x="636" y="244" width="520" height="34" rx="6" class="paper"/>
+<text x="650" y="266" class="f m" text-anchor="start">RunCompleted</text>
+<text x="872" y="266" class="f" text-anchor="start">终态成为父那一次调用的 ToolResult</text>
+<path d="M564 191 L616 173" class="edge-a" marker-end="url(#aa)"/>
+<path d="M616 265 L564 259" class="edge-a" marker-end="url(#aa)"/>
+<text x="24" y="348" class="t" text-anchor="start">三道闸都写在类型里，而不是靠调用方记得</text>
+<rect x="24" y="370" width="372" height="116" rx="10" class="paper"/>
+<text x="40" y="396" class="t" text-anchor="start">子代理够不到父代理够不到的工具</text>
+<text x="40" y="418" class="f" text-anchor="start">permitted_child_tools 是交集。</text>
+<text x="40" y="434" class="f" text-anchor="start">父有 A、B，子最多 A、B——</text>
+<text x="40" y="450" class="f" text-anchor="start">没有能反转方向的参数。</text>
+<rect x="420" y="370" width="372" height="116" rx="10" class="paper"/>
+<text x="436" y="396" class="t" text-anchor="start">递归会停</text>
+<text x="436" y="418" class="f" text-anchor="start">到达深度上限时，把委派工具</text>
+<text x="436" y="434" class="f" text-anchor="start">从子代理的工具表里拿掉。</text>
+<text x="436" y="450" class="f" text-anchor="start">孙子从没见过那个工具，</text>
+<text x="436" y="466" class="f" text-anchor="start">而不是某个计数器被正确地加过。</text>
+<rect x="816" y="370" width="372" height="116" rx="10" class="paper"/>
+<text x="832" y="396" class="t" text-anchor="start">委派不能用来逃出信封</text>
+<text x="832" y="418" class="f" text-anchor="start">child_envelope 只能降低风险上限</text>
+<text x="832" y="434" class="f" text-anchor="start">（默认压到 read）。denied_tools</text>
+<text x="832" y="450" class="f" text-anchor="start">与审批要求原样往下传，</text>
+<text x="832" y="466" class="f" text-anchor="start">没有参数能把它们抬高。</text>
+<text x="24" y="516" class="s" text-anchor="start">子运行写进父运行同一条事件流，用自己的 run_id。于是「谁派生了谁」可以从事件流里重建，而不必另存一份树。</text>
+<text x="24" y="534" class="f m" text-anchor="start">GET /v1/tasks/{id}/runs 取运行树；GET /v1/tasks/{id}/timeline?run_id=… 只看某一个运行。</text>
+<text x="24" y="556" class="f" text-anchor="start">控制台的「参与的 Agent」面板把这棵树画出来，选中一行就把下面的执行过程收窄到那一个运行（ADR-083）。</text>
+<text x="24" y="582" class="f m" text-anchor="start">ADR-082 · multi_agent.delegation_enabled 默认 false · 深度上限默认 1 · 每次运行最多 4 个子代理 · 子代理并发是独立的第二个池</text>
+</svg>

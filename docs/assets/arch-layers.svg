@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 866" width="1200" height="866" class="d" role="img" aria-label="Agent Workbench 分层图：web 与 apps/adapters 在外层，ports 是唯一接缝，core 的 runtime/workflows/application/domain 不认识任何框架">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1200" height="866" fill="none"/>
+<rect x="28" y="26" width="856" height="96" rx="10" class="panel"/><text x="46" y="52" class="h m" text-anchor="start">web/</text><text x="46" y="71" class="s" text-anchor="start">八个页面的控制台：只投影后端的事实，不发明第二套执行模型</text>
+<rect x="46" y="84" width="46" height="22" rx="6" class="paper"/><text x="69.0" y="99" class="f m" text-anchor="middle">Chat</text><rect x="99" y="84" width="53" height="22" rx="6" class="paper"/><text x="125.5" y="99" class="f m" text-anchor="middle">Tasks</text><rect x="159" y="84" width="46" height="22" rx="6" class="paper"/><text x="182.0" y="99" class="f m" text-anchor="middle">Code</text><rect x="212" y="84" width="54" height="22" rx="6" class="paper"/><text x="239.0" y="99" class="f m" text-anchor="middle">知识库</text><rect x="273" y="84" width="42" height="22" rx="6" class="paper"/><text x="294.0" y="99" class="f m" text-anchor="middle">用量</text><rect x="322" y="84" width="66" height="22" rx="6" class="paper"/><text x="355.0" y="99" class="f m" text-anchor="middle">效果评测</text><rect x="395" y="84" width="54" height="22" rx="6" class="paper"/><text x="422.0" y="99" class="f m" text-anchor="middle">计算机</text><rect x="456" y="84" width="66" height="22" rx="6" class="paper"/><text x="489.0" y="99" class="f m" text-anchor="middle">运行状态</text>
+<path d="M210 122 L210 154" class="edge" marker-end="url(#a)"/>
+<text x="224" y="142" class="f" text-anchor="start">HTTP + SSE — 前端出网只出现在 2 个文件里</text>
+<rect x="28" y="158" width="856" height="100" rx="10" class="panel"/><text x="46" y="184" class="h m" text-anchor="start">apps/ · bootstrap/ · workers/</text><text x="46" y="203" class="s" text-anchor="start">进程边界与配置装配：一份 TOML 变成若干个启动即验伪的独立进程</text>
+<rect x="46" y="216" width="81" height="22" rx="6" class="paper"/><text x="86.5" y="231" class="f m" text-anchor="middle">agent-api</text><rect x="134" y="216" width="137" height="22" rx="6" class="paper"/><text x="202.5" y="231" class="f m" text-anchor="middle">agent-task-worker</text><rect x="278" y="216" width="172" height="22" rx="6" class="paper"/><text x="364.0" y="231" class="f m" text-anchor="middle">agent-ingestion-worker</text><rect x="457" y="216" width="81" height="22" rx="6" class="paper"/><text x="497.5" y="231" class="f m" text-anchor="middle">agent-cli</text><rect x="545" y="216" width="116" height="22" rx="6" class="paper"/><text x="603.0" y="231" class="f m" text-anchor="middle">agent-word-mcp</text><rect x="668" y="216" width="109" height="22" rx="6" class="paper"/><text x="722.5" y="231" class="f m" text-anchor="middle">agent-web-mcp</text><rect x="46" y="244" width="137" height="22" rx="6" class="paper"/><text x="114.5" y="259" class="f m" text-anchor="middle">agent-sandbox-mcp</text><rect x="190" y="244" width="144" height="22" rx="6" class="paper"/><text x="262.0" y="259" class="f m" text-anchor="middle">agent-computer-mcp</text><rect x="341" y="244" width="144" height="22" rx="6" class="paper"/><text x="413.0" y="259" class="f m" text-anchor="middle">agent-config-check</text><rect x="492" y="244" width="116" height="22" rx="6" class="paper"/><text x="550.0" y="259" class="f m" text-anchor="middle">agent-evidence</text>
+<path d="M210 258 L210 290" class="edge" marker-end="url(#a)"/>
+<text x="224" y="278" class="f" text-anchor="start">组合根注入 · os.environ 只允许出现在 bootstrap 包内</text>
+<rect x="28" y="294" width="856" height="154" rx="10" class="panel"/><text x="46" y="320" class="h m" text-anchor="start">adapters/</text><text x="46" y="339" class="s" text-anchor="start">一个目录接一个外部世界，各家方言在自己的边界上翻译成 ports 的协议</text>
+<rect x="46" y="352" width="95" height="22" rx="6" class="paper"/><text x="93.5" y="367" class="f m" text-anchor="middle">persistence</text><rect x="148" y="352" width="60" height="22" rx="6" class="paper"/><text x="178.0" y="367" class="f m" text-anchor="middle">vector</text><rect x="215" y="352" width="60" height="22" rx="6" class="paper"/><text x="245.0" y="367" class="f m" text-anchor="middle">models</text><rect x="282" y="352" width="39" height="22" rx="6" class="paper"/><text x="301.5" y="367" class="f m" text-anchor="middle">mcp</text><rect x="328" y="352" width="81" height="22" rx="6" class="paper"/><text x="368.5" y="367" class="f m" text-anchor="middle">langgraph</text><rect x="416" y="352" width="95" height="22" rx="6" class="paper"/><text x="463.5" y="367" class="f m" text-anchor="middle">llama_index</text><rect x="518" y="352" width="81" height="22" rx="6" class="paper"/><text x="558.5" y="367" class="f m" text-anchor="middle">retrieval</text><rect x="606" y="352" width="81" height="22" rx="6" class="paper"/><text x="646.5" y="367" class="f m" text-anchor="middle">reranking</text><rect x="694" y="352" width="81" height="22" rx="6" class="paper"/><text x="734.5" y="367" class="f m" text-anchor="middle">embedding</text><rect x="782" y="352" width="74" height="22" rx="6" class="paper"/><text x="819.0" y="367" class="f m" text-anchor="middle">research</text><rect x="46" y="380" width="53" height="22" rx="6" class="paper"/><text x="72.5" y="395" class="f m" text-anchor="middle">tools</text><rect x="106" y="380" width="60" height="22" rx="6" class="paper"/><text x="136.0" y="395" class="f m" text-anchor="middle">policy</text><rect x="173" y="380" width="81" height="22" rx="6" class="paper"/><text x="213.5" y="395" class="f m" text-anchor="middle">telemetry</text><rect x="261" y="380" width="81" height="22" rx="6" class="paper"/><text x="301.5" y="395" class="f m" text-anchor="middle">artifacts</text><rect x="349" y="380" width="81" height="22" rx="6" class="paper"/><text x="389.5" y="395" class="f m" text-anchor="middle">documents</text><rect x="437" y="380" width="81" height="22" rx="6" class="paper"/><text x="477.5" y="395" class="f m" text-anchor="middle">ingestion</text><rect x="525" y="380" width="88" height="22" rx="6" class="paper"/><text x="569.0" y="395" class="f m" text-anchor="middle">filesystem</text><rect x="620" y="380" width="60" height="22" rx="6" class="paper"/><text x="650.0" y="395" class="f m" text-anchor="middle">screen</text><rect x="687" y="380" width="95" height="22" rx="6" class="paper"/><text x="734.5" y="395" class="f m" text-anchor="middle">concurrency</text><rect x="46" y="408" width="88" height="22" rx="6" class="paper"/><text x="90.0" y="423" class="f m" text-anchor="middle">evaluation</text><rect x="141" y="408" width="60" height="22" rx="6" class="paper"/><text x="171.0" y="423" class="f m" text-anchor="middle">memory</text><rect x="208" y="408" width="67" height="22" rx="6" class="paper"/><text x="241.5" y="423" class="f m" text-anchor="middle">testing</text>
+<path d="M210 448 L210 480" class="edge-a" marker-end="url(#aa)"/>
+<text x="224" y="468" class="f" text-anchor="start">implements — 协议的实现只能出现在这一层</text>
+<rect x="28" y="484" width="856" height="66" rx="10" class="acc"/><text x="46" y="510" class="h m" text-anchor="start">ports/</text><text x="46" y="529" class="s" text-anchor="start">38 个模块、48 个 Protocol，唯一的跨层接缝：这里没有 SQL、没有 HTTP、没有向量库调用</text>
+<path d="M210 550 L210 582" class="edge-a" marker-end="url(#aa)"/>
+<text x="224" y="570" class="f" text-anchor="start">被依赖 — 依赖箭头永远由外向内，反过来 CI 变红</text>
+<rect x="28" y="586" width="856" height="254" rx="10" class="sunk"/><text x="46" y="612" class="h m" text-anchor="start">core/</text><text x="46" y="631" class="s" text-anchor="start">禁止 import 任何框架。第三方白名单只有 pydantic 与 regex 两条</text>
+<rect x="48" y="648" width="240" height="92" rx="10" class="acc"/>
+<text x="64" y="672" class="h m" text-anchor="start" fill="var(--accent)">runtime</text>
+<text x="64" y="692" class="s" text-anchor="start">全仓唯一一条</text>
+<text x="64" y="709" class="s m" text-anchor="start">model → tool → result → model</text>
+<text x="64" y="728" class="f" text-anchor="start">五道闸都长在这条线上</text>
+<rect x="326" y="648" width="240" height="92" rx="10" class="paper"/>
+<text x="342" y="672" class="h m" text-anchor="start">workflows</text>
+<text x="342" y="692" class="s" text-anchor="start">边是数据，路由是纯函数</text>
+<text x="342" y="709" class="f" text-anchor="start">两张图 · agent 画像 · 审批中断点</text>
+<text x="342" y="728" class="f" text-anchor="start">这里一行 langgraph 都不 import</text>
+<rect x="604" y="648" width="240" height="92" rx="10" class="paper"/>
+<text x="620" y="672" class="h m" text-anchor="start">application</text>
+<text x="620" y="692" class="s" text-anchor="start">用例编排与授权围栏</text>
+<text x="620" y="709" class="f" text-anchor="start">发布围栏 · 幂等 · 崩溃恢复</text>
+<text x="620" y="728" class="f" text-anchor="start">不允许自己长出工具循环</text>
+<path d="M566 718 L604 718" class="edge" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="585" y="678" class="f" text-anchor="middle">互为</text>
+<text x="585" y="692" class="f" text-anchor="middle">邻居</text>
+<rect x="48" y="760" width="796" height="74" rx="10" class="paper"/>
+<text x="64" y="786" class="h m" text-anchor="start">domain</text>
+<text x="64" y="806" class="s" text-anchor="start">把「什么状态根本不该存在」写进类型：DomainModel 全局 frozen=True / extra=&quot;forbid&quot;</text>
+<text x="64" y="824" class="f" text-anchor="start">授权信封 · 预算 · 事件（durability 是事件类型的属性） · 上下文 · 工作区 · 任务状态</text>
+<path d="M168 740 L168 760" class="edge" marker-end="url(#a)"/>
+<path d="M446 740 L446 760" class="edge" marker-end="url(#a)"/>
+<path d="M724 740 L724 760" class="edge" marker-end="url(#a)"/>
+<rect x="904" y="158" width="268" height="362" rx="10" class="panel"/><text x="922" y="184" class="h m" text-anchor="start">外部世界</text><text x="922" y="203" class="s" text-anchor="start">框架与服务只在这一侧</text>
+<rect x="918" y="210" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="229" class="t m" text-anchor="start">PostgreSQL</text>
+<text x="930" y="245" class="f" text-anchor="start">唯一事实源：会话、任务、事件、检查点</text>
+<rect x="918" y="258" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="277" class="t m" text-anchor="start">Qdrant</text>
+<text x="930" y="293" class="f" text-anchor="start">派生副本：dense + sparse 两路</text>
+<rect x="918" y="306" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="325" class="t m" text-anchor="start">LangGraph</text>
+<text x="930" y="341" class="f" text-anchor="start">控制平面：编译 workflows 的声明</text>
+<rect x="918" y="354" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="373" class="t m" text-anchor="start">LlamaIndex</text>
+<text x="930" y="389" class="f" text-anchor="start">只做检索契约，默认未启用</text>
+<rect x="918" y="402" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="421" class="t m" text-anchor="start">MCP servers</text>
+<text x="930" y="437" class="f" text-anchor="start">四个自有 server，只绑 loopback</text>
+<rect x="918" y="450" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="469" class="t m" text-anchor="start">模型供应商</text>
+<text x="930" y="485" class="f" text-anchor="start">DeepSeek（OpenAI 兼容），流式</text>
+<rect x="918" y="498" width="240" height="44" rx="8" class="paper"/>
+<text x="930" y="517" class="t m" text-anchor="start">OpenTelemetry</text>
+<text x="930" y="533" class="f" text-anchor="start">Port + OTLP Adapter，核心不导入 SDK</text>
+<path d="M884 371 L904 371" class="edge" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="28" y="856" class="f" text-anchor="start">越界不是评审时被看出来的，是 tests/architecture/test_dependency_boundaries.py 里一条断言失败。</text>
+</svg>

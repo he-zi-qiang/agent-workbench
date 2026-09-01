@@ -2,244 +2,539 @@
 
 [中文](README.md) | English
 
-A clean-room general Agent platform offering two product shapes: **Chat**
-(knowledge-base Q&A with permission checks) and **Task** (recoverable,
-approvable automation workflows).
+A clean-room Agent platform in two product shapes: **Chat** (ACL-checked
+knowledge-base Q&A) and **Task** (resumable, human-approvable workflows).
 
-Architecturally there is one claim: **the custom Agent Runtime owns the only Tool
-Loop.** LangGraph, LlamaIndex and MCP all enter through Ports/Adapters, each
-doing its own segment, and none takes over the core loop.
+The architecture makes one claim: **the self-built Agent Runtime owns the only
+tool loop.** LangGraph, LlamaIndex and MCP enter through Ports/Adapters, each
+doing its own part, and none of them takes over the core loop.
 
-| If you are | Start here |
+| Who you are | Where to start |
 |---|---|
-| Judging the substance | [**The ten-minute version**](docs/HIGHLIGHTS.md) (Chinese) — a real event stream, gate numbers, four engineering judgements |
-| Trying to run it | [Quick start](#3-quick-start) — one command, no network, no database |
-| Asking what is **missing** | [**Known gaps**](docs/known-gaps.md) — five categories, each with a location and a criterion for "done" |
-| Reading the rationale | [Documentation map](docs/README.md), [architecture baseline](docs/architecture-baseline.md), [ADR index](docs/adr/) |
+| You want the whole project in ten minutes | [**The local architecture panel**](#0-see-the-whole-thing-first) — one command, an offline page, every number computed at build time |
+| You want evidence | [**The ten-minute version**](docs/HIGHLIGHTS.md) (Chinese) — a real event stream, gate numbers, four technical judgements |
+| You want to understand how the agent actually runs | [Agent Harness](#2-the-agent-harness-what-wraps-one-run) → [Agent Runtime](#3-the-agent-runtime-the-only-tool-loop) → [Tool Gateway](#4-the-tool-gateway-what-one-tool-call-passes-through) |
+| You want to run it now | [Quick start](#9-quick-start) — one command, no network, no database |
+| You want to know what is **not** done | [**Known gaps**](docs/known-gaps.md) (Chinese) — five categories, each with a location and a "done" criterion |
+| You want the design reasoning | [Documentation map](docs/README.md), [architecture baseline](docs/architecture-baseline.md), [ADR index](docs/adr/) |
+
+> Most documents under `docs/` are written in Chinese. This file and the
+> repository's code comments are in English; where a link leads to a Chinese
+> document it is marked.
 
 ---
 
-## 1. Features
+## 0. See the whole thing first
+
+### 0.1 One command, one offline architecture panel
+
+```bash
+scripts/dev.sh panel
+```
+
+It builds a self-contained HTML page and serves it on `127.0.0.1:8770`.
+**No database, no Qdrant, no API key, no network** — it reads the working tree.
+Twelve sections:
+
+| Section | What is in it |
+|---|---|
+| Overview | Scale numbers, the launch commands, the whole-picture layer diagram |
+| Layers and guards | What each of the seven layers may depend on, plus the **actual contents** of the core third-party allowlist, the named-refusal table and the model-stream owner list |
+| Agent Runtime | The loop diagram, every step of one turn, where each of the five gates lives, every module in `runtime/` |
+| Tool Gateway | The four phases, the three answers, every refusal exit |
+| The two request paths | Chat and Task, plus sub-agent delegation |
+| Workflow graphs | Both graphs' nodes and edges, **drawn from `_STATIC_EDGES` and the compiler's conditional-edge target lists** |
+| Module browser | 320 modules, searchable by path, summary or symbol name; each line's summary is the first line of that module's own docstring |
+| HTTP surface | 71 endpoints, parsed from the route decorators |
+| Tool catalogue | In-process and MCP tools, read from the constant that declares each name |
+| Config profiles | Ten profiles, and the 82 invariants written as single-valued `Literal`s |
+| Decision records | 87 ADRs, searchable |
+| Gates and scale | Test directories, console features, process entry points |
+
+**Every number on that page is counted at build time; not one of them is typed
+into it.** That is not fastidiousness: this repository has already been bitten by
+a number written beside an unrelated fact — `458/458` survived in `CLAUDE.md` for
+months after the suite passed 800, because a number written somewhere else has
+nothing that fails when it goes stale. A panel is a far larger surface for that
+failure than a paragraph, so it is not allowed a single hand-written figure.
+
+The other half — "the five gates on the loop", "the four phases of the gateway",
+the statements that are **about architecture rather than about files** — lives in
+`NARRATIVE` inside `scripts/architecture_panel.py`. Every entry there names a
+real path and symbol, and:
+
+```bash
+uv run python scripts/architecture_panel.py --check
+```
+
+fails when something it names stops existing. So the hand-written half cannot rot
+quietly either.
+
+Other uses: `--build DIR` emits the static page only, `--json` prints the scanned
+data (useful for other checks), `--port` changes the port. **The listen address is
+hard-coded to `127.0.0.1`** — the page spreads the source tree's docstrings out
+for a reader, and `python -m http.server` defaults to every interface.
+
+### 0.2 The thirty-second version
+
+<img src="docs/assets/arch-layers.svg" alt="Agent Workbench layering: web and apps/adapters on the outside, ports as the only seam, and core's runtime/workflows/application/domain knowing no framework" width="100%">
+
+Dependency arrows point **inward, always**. The core knows no framework — that is
+not a convention, it is a test that turns CI red
+([`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)).
+
+> **Two honest notes.** `workflows` and `application` are **mutually referencing
+> neighbours**, not a strict upper/lower pair (each imports the other in three or
+> four places); drawing a one-way arrow would be drawing it wrong. And
+> `evaluation/` is a self-contained core-side package (it imports only itself),
+> off the main chain, so it is not in the picture.
+
+---
+
+## 1. What this is: two product shapes
 
 ### 1.1 Chat: knowledge-base Q&A with permission checks
 
-- **Multi-turn conversation**, with sessions and messages persisted in
-  PostgreSQL; `chat_turns` is the idempotent source of truth.
-- **Retrieval-grounded answers**: fixed two-step retrieval
-  (`chat.retrieval_shape` also accepts `agentic`, but the **default is `fixed`** —
-  only the fixed shape makes evaluation reproducible). Every citation carries
-  `chunk_id`, `document_id` and `document_version`.
-- **Permissions run the whole length**: candidates are ACL-filtered, and the
-  source revision plus authorization are **re-checked before publication**;
-  revocation and answer publication are linearized by a document row lock. The
-  reranker runs after authorization, so it cannot introduce a passage the asker
-  may not read.
-- **If it cannot answer, it says so** rather than producing something that merely
-  looks like an answer. This is scored as its own item in evaluation.
+- **Multi-turn conversation**, sessions and messages persisted in PostgreSQL;
+  `chat_turns` is the idempotent fact source.
+- **Retrieval Q&A**: a fixed two-step retrieval (`chat.retrieval_shape` also
+  accepts `agentic` and `routed`; the default is **`fixed`** — only a fixed shape
+  is reproducibly evaluable). Answers carry citations, each with a `chunk_id`,
+  `document_id` and `document_version`.
+- **Authorization runs through the whole path**: candidates are filtered by ACL,
+  and the source revision and grant are **re-checked once more** before the answer
+  is published; revocation and publication are linearized by a document row lock.
+  The reranker runs *after* authorization, so it cannot introduce a passage the
+  asker may not read.
+- **It says so when it cannot answer**, rather than producing something
+  plausible-looking. This is scored separately in the evaluation set.
 - **Web fallback**: when the corpus cannot answer, an external search may be
   called (off by default). An answer that used the web **does not count as
-  grounded**, and the console distinguishes the two.
-- **Every turn lists the tools authorized for it**, highlighting those actually
-  called; a tool call shows the tool name plus what it was called with (e.g.
-  `web_search · 北京今天天气`), and failures show the error message rather than a
-  code.
-- **Streaming over SSE**, resumable by cursor after a disconnect.
+  grounded** and is displayed differently.
+- **Every turn lists the tools it was authorized to use**, highlighting the ones
+  actually called; a tool call shows "name + what this call was about" (e.g.
+  `web_search · weather in Beijing today`), and a failure shows the error message,
+  not an error code.
+- **Streaming** is SSE, resumable by cursor after a disconnect.
 
 ### 1.2 Task: recoverable, approvable workflows
 
-Submit an objective; the Agent decomposes it, retrieves, does the work and
-produces files, pausing for human approval where required.
+Submit a goal; the agent decomposes it, retrieves, works, produces files, and can
+stop mid-way to wait for a human.
 
-**Two graphs, chosen at submission and then frozen:**
-
-| Graph | Node path | Purpose |
-|---|---|---|
-| Fixed research graph | `understand → plan → route →`{`research_internal`\|`research_external`}`→ synthesize → critic → quality_gate → approval → export` | Retrieval, synthesis, self-critiquing research reports |
-| `v2_general` | `understand → work → review →`(`approval`)`→ export` | General work: read tools, write workspace, render a document |
-
-- **Triage at submission**: `POST /v1/tasks/triage` lets the model decide which
-  graph applies, asks a human when it cannot, and falls back to a default on
-  failure.
-- **Human in the loop**: external side effects such as `export` require
-  approval. The graph stops at a LangGraph interrupt, the decision is written to
-  an authoritative ledger, and it is re-applied after cross-process recovery.
-- **Task workspace**: mutable names over immutable bytes, scoped to one Task.
-  Writing a name produces a new manifest, and the manifest is itself an artifact —
-  so "which version of the workspace" is an id a checkpoint can hold, and a
-  replayed node sees the version at its own entry.
-- **Ephemeral sandbox** (off by default): one container per call, files in and
+- **Submission triage**: `POST /v1/tasks/triage` lets the model decide which graph
+  to run, asks a human when it cannot, and falls back to a default on failure.
+- **Human in the loop**: outward effects such as `export` require approval. The
+  graph stops at a LangGraph interrupt, the decision goes to the authoritative
+  ledger, and it is re-applied after cross-process recovery.
+- **Task workspace**: mutable file names inside one Task, pressed onto immutable
+  bytes. Writing a name produces a new manifest, and the manifest is itself an
+  artifact — so "which version of the workspace" is an id a checkpoint can hold,
+  and a replayed node sees the version it entered with.
+- **A single-use sandbox** (off by default): one container per call, files in and
   files out, no network, read-only root, non-root, capabilities dropped, with
-  memory/CPU/process/wall-clock ceilings.
-- **Read-only outward access** (off by default): `fetch_page` and
-  `download_document` are both GETs and pass a **post-resolution** address gate —
-  only globally routable addresses are allowed, and redirects are gated hop by hop.
-- **Artifact export**: `.docx` and similar land in the ArtifactStore and can be
-  read (text preview) and downloaded from the console.
-- **Sub-agent delegation** (off by default): a run may start another run from
-  inside its own loop and hand a focused sub-problem over. The child runs
-  through the **same** Runtime — what recurses is call depth, not the number of
-  loops. Three gates live in the types: a child's tools are the **intersection**
-  of the parent's; at the depth ceiling the delegation tool **disappears from
-  the tool table** (a grandchild never saw it, rather than a counter having been
-  incremented correctly); and a child envelope may only **lower** a risk ceiling,
-  with no argument that raises one.
-- **Everything leaves a trace**: each tool call records
-  `ToolProposed → PermissionResolved → ToolStarted → ToolCompleted`, and **a
-  refused call is recorded too** rather than vanishing.
+  memory, CPU, process-count and wall-clock ceilings.
+- **Outward reads only** (off by default): `fetch_page` and `download_document`
+  are both GETs, and both pass an address gate applied to the **resolved**
+  address — only globally routable addresses pass, and redirects are gated hop by
+  hop.
+- **Artifact export**: `.docx` and friends go into the ArtifactStore, readable
+  (text preview) and downloadable from the console.
+- **Sub-agent spawning** (off by default): see
+  [§6.3](#63-multi-agent-a-delegation-is-a-run-not-a-new-loop).
+- **A full trail**: every tool call leaves `ToolProposed → PermissionResolved →
+  ToolStarted → ToolCompleted`, **and a refused call leaves one too** rather than
+  disappearing.
 
 ### 1.3 Knowledge bases and ingestion
 
 Create a knowledge base → upload files → asynchronous ingestion (parse, chunk,
-embed, write to Qdrant) → retrievable. PDF, Word, Markdown and plain text.
+embed, write to Qdrant) → searchable. PDF, Word, Markdown and plain text.
 
-- Documents are versioned by **revision**; revisions and revocation take effect
-  through the revision fence.
-- The ingestion Worker claims work with PostgreSQL `SKIP LOCKED`, with
+- Documents are managed by **revision**; re-issues and revocations take effect
+  through a revision fence.
+- The ingestion worker claims work with PostgreSQL `SKIP LOCKED`, with
   lease/heartbeat/fencing.
-- **Ingestion failure is stated out loud**: `documents` records
-  `failed_revision` + `failure_code` per revision and has a `failed` state,
-  instead of showing "indexing" forever.
-- A knowledge base **declares up front whether it is read-only**, and hides the
-  upload area entirely when it is.
+- **Ingestion failure is said out loud**: the `documents` table records
+  `failed_revision` + `failure_code` per revision, and a document status of
+  `failed` exists — rather than showing "indexing" forever.
+- A knowledge base **declares up front whether it is read-only**; when it is, the
+  upload area is not rendered at all.
 
 ### 1.4 Web console
 
-React + TypeScript, eight pages: **Chat**, **Tasks** (timeline and lifecycle),
-**Code** (coding sessions and file previews), **Knowledge**, **Usage** (what the
-three modes spent, in tokens and money), **Evaluation**, **Computer** (the
-screen-control boundary, and a live session panel served over a read-only
-reverse proxy — ADR-095) and **System**.
+React + TypeScript + Vite. `HashRouter`; all eight page components are
+`lazy()`-loaded:
 
-What a run did is folded into stages that expand to the raw events and their
-payloads — **folding renames, it never drops**. On a Task that delegated, a
-"participating agents" panel appears above the timeline: every run as a row,
-nested under whoever started it, with its own status and spend. Selecting a row
-narrows the step stream below to that one run.
+| Route | Page | Notes |
+|---|---|---|
+| `/chat`, `/chat/:sessionId` | Chat | Sessions, citation review, SSE |
+| `/work`, `/work/:taskId` | Tasks | Task timeline and lifecycle |
+| `/code/:sessionId?` | Code | Coding sessions and file preview |
+| `/knowledge` | Knowledge | Material and uploads |
+| `/usage` | Usage | Tokens and money per mode |
+| `/evaluation` | Evaluation | Evaluation reports |
+| `/computer` | Computer | Screen-control boundary and session panel (ADR-095) |
+| `/system` | System | Health and configuration projection |
+
+`/code/:sessionId?` is **one** route with an optional parameter rather than two
+sibling routes: written as two, the `/code → /code/:id` navigation on the first
+send remounts the page and drops the `running` flag of a turn that is still open.
+
+What a run did is folded into stages, and expanding one shows the raw events and
+payloads — **folding renames, it never drops an event**. When a Task delegated,
+an "agents involved" panel appears above the timeline: a tree of who spawned whom
+with each run's status and spend, and selecting a row narrows the execution view
+below to that one run.
+
+The frontend's **only** network egress is two files under `web/src/api/`
+(`client.ts` with 12 `fetch(` call sites, `sessionStream.ts` with one). SSE is
+consumed with `fetch` + `response.body.getReader()`; there is not one
+`EventSource` in the tree. A `fetch(` anywhere else means that boundary broke.
 
 ### 1.5 Interfaces and tools
 
-**HTTP API** (FastAPI): `/v1/chat` (sessions, messages, SSE), `/v1/tasks`
-(submit, query, timeline, run tree, cancel, triage), `/v1/knowledge-bases`,
-`/v1/uploads`, `/v1/search`, `/v1/approvals`, `/v1/artifacts` (including
-`/preview`), `/v1/projects`, `/v1/code`, `/v1/usage`, `/v1/computer` (the
-read-only reverse proxy of ADR-095), `/v1/evaluation`, `/health/live|ready`.
+**HTTP API** (FastAPI, **71 endpoints**): `/v1/chat` (sessions, messages, SSE),
+`/v1/tasks` (submit, query, timeline, run tree, cancel, triage),
+`/v1/knowledge-bases`, `/v1/uploads`, `/v1/search`, `/v1/approvals`,
+`/v1/artifacts` (with `/preview` and `/pdf`), `/v1/projects`, `/v1/code`,
+`/v1/usage`, `/v1/computer` (a read-only reverse proxy, ADR-095),
+`/v1/evaluation`, `/health/live|ready`. The itemized list is on the
+[panel](#0-see-the-whole-thing-first)'s HTTP page, parsed from the route
+decorators rather than transcribed.
 
-**CLI**: `agent-cli`, `agent-api`, `agent-task-worker`,
-`agent-ingestion-worker`, `agent-config-check`, `agent-evidence`, plus four
-project-owned MCP servers: `agent-word-mcp`, `agent-web-mcp`,
-`agent-sandbox-mcp`, `agent-computer-mcp` (all loopback-bound).
+**Command line**: `agent-cli` (demo and submit), `agent-api`,
+`agent-task-worker`, `agent-ingestion-worker`, `agent-config-check`,
+`agent-evidence`, plus four project-owned MCP servers: `agent-word-mcp`,
+`agent-web-mcp`, `agent-sandbox-mcp`, `agent-computer-mcp` (all loopback-bound).
 
-**Tools available to Agents** (17 in-process): `knowledge_search`,
+**Tools available to an agent** (17 in-process): `knowledge_search`,
 `web_search`, `external_search`, `workspace_list/read/write/edit/grep`,
-`project_list/read/write/edit/grep` (the project directory a coding session
-works in — ADR-072/074), `project_run` (runs a command on the host;
-**destructive, shown before it is run** — ADR-077), `sandbox_run`,
-`export_artifact`, `delegate_agent` (spawns a sub-agent, **off by default**);
-and over MCP `mcp_web_fetch_page`, `mcp_web_download_document`,
+`project_list/read/write/edit/grep` (the project directory in a coding session,
+ADR-072/074), `project_run` (runs a command on the host — **destructive, shown
+before it runs**, ADR-077), `sandbox_run`, `export_artifact`, `delegate_agent`
+(spawns a sub-agent, **off by default**); plus, through MCP,
+`mcp_web_fetch_page`, `mcp_web_download_document` and
 `mcp_word_render_document`.
 
-Which server's tools reach which Agent is declared by config `audience`
+Which server's tools reach which agent is declared by the config's `audience`
 (`research` / `synthesis` / `sandbox` / `delegation`), so adding a reader is a
 config change rather than a code change. That indirection is **required**, not
-tidiness: an agent that named a tool in its own static list would ask the tool
-gateway for it on deployments that never assembled it, and the gateway raises
-for a name it does not hold — turning a switch that is off into a node that
-fails every Task.
+tasteful: an agent with tool names hard-coded into its own static table would ask
+the tool gateway for one on a deployment that never installed it, and the gateway
+raises on an unregistered name — so a "switch that is off" becomes "a node that
+fails on every task".
 
 **Observability**: OpenTelemetry traces and metrics (Port + OTLP Adapter; the
-core never imports the SDK).
+core imports no SDK).
 
 ---
 
-## 2. Architecture
+## 2. The Agent Harness: what wraps one run
 
-### 2.1 One sentence, and the whole picture
+"Only one tool loop" bounds how many **implementations** exist, not how many
+levels deep it may be entered. Each layer outside it does exactly one thing, and
+every one of them satisfies the same `AgentExecutor` protocol in
+[`ports/agent_executor.py`](src/agent_workbench/ports/agent_executor.py) — so
+adding a layer changes no caller, and removing one does not either.
 
-**Two product shapes share one self-built Agent Runtime, and that Runtime owns
-the only `model → tool → result → model` loop in the repository.** LangGraph,
-LlamaIndex and MCP all enter through Ports/Adapters; none of them takes a turn
-of that loop.
+<img src="docs/assets/agent-harness.svg" alt="Agent Harness: caller → DelegationScopingExecutor → BudgetedAgentExecutor → BoundedParallelExecutor → ClaudeLikeAgentRuntime → ToolGateway → ToolExecutor → handler" width="100%">
 
-Dependency arrows point **inward, always**. Core does not know any framework —
-that is not a convention, it is a test that turns CI red.
+### 2.1 The executor stack
 
-```mermaid
-flowchart TB
-    subgraph OUT["outer — frameworks live only here"]
-        direction TB
-        APPS["apps + bootstrap\nprocess boundaries, configuration assembly\nfalsified at startup"]
-        ADP["adapters\none directory per outside concern\n23 subdirectories"]
-    end
+| Layer | Where | The one thing it does |
+|---|---|---|
+| Caller | Graph node / Chat turn / Code session | Holds an `AgentExecutor` and does not know — or need to know — how many layers are underneath |
+| `DelegationScopingExecutor` | [`application/delegation.py`](src/agent_workbench/application/delegation.py) | Enters a delegation scope around every run. It wraps the **executor** rather than the node: whether something may delegate is a property of a *run*, so a caller written later is covered without revisiting this file. A child run's depth is one greater than its parent's precisely because the ContextVar still holds the parent's context at that moment |
+| `BudgetedAgentExecutor` | [`workflows/task_handlers.py`](src/agent_workbench/workflows/task_handlers.py) | ADR-040: charge the Task for each agent invocation **before taking a concurrency slot** — the Registry round trip should not happen while holding one. It records only; nothing refuses on the count yet |
+| `BoundedParallelExecutor` | same file | How many agent invocations may run at once. Sub-agents get **their own second pool**: sharing the parent's deadlocks — a parent waiting inside a tool call holds its slot the whole time, and the child queues for a slot only the parent's return can free |
+| `ClaudeLikeAgentRuntime` | [`runtime/agent_runtime.py`](src/agent_workbench/runtime/agent_runtime.py) | **The loop itself** ([§3](#3-the-agent-runtime-the-only-tool-loop)) |
+| `ToolGateway` | [`runtime/tool_gateway.py`](src/agent_workbench/runtime/tool_gateway.py) | The four phases of one tool call ([§4](#4-the-tool-gateway-what-one-tool-call-passes-through)) |
+| `ToolExecutor` | [`runtime/tool_executor.py`](src/agent_workbench/runtime/tool_executor.py) | Runs one **already authorized** handler under a timeout with a 5-second heartbeat, and guarantees exactly one `ToolResult` leaves |
+| handler | `adapters/tools/` · `adapters/mcp/` | The 17 in-process tools plus whatever MCP brought in. None of them can see any layer above |
 
-    subgraph CORE["core — importing any framework is forbidden"]
-        direction TB
-        RT["runtime\nAgent Runtime\n⚑ the only tool loop"]
-        WF["workflows\ngraphs and profiles\nedges are data, routing is pure"]
-        APP["application\nuse-case orchestration\npublish fence, crash recovery"]
-        DOM["domain\ninvariants in the types\nrefused at construction"]
-    end
+Three more implementations satisfy the same protocol: `DeferredExecutor` (a
+one-slot holder that cuts the assembly cycle), `ArtifactPersistingExecutor`
+(persists a completed text-only outcome without changing the port), and
+`FakeAgentExecutor` (the scripted double the zero-dependency demo and the gates
+run on).
 
-    PORTS["ports — Protocol contracts (37 modules)\nthe only seam: contracts, never vendors"]
+### 2.2 What the composition root assembles
 
-    WEB["web\nseven feature surfaces\nprojects, never invents"]
+Assembly happens in `apps/*/composition.py` and `bootstrap/`. Three points are
+worth stating:
 
-    EXT["the outside world\nPostgreSQL (source of truth) · Qdrant (derived copy)\nLangGraph (control plane) · LlamaIndex (retrieval mechanism only)\nMCP servers · model providers"]
+- **The tool registry is immutable.** A running process does not gain a tool —
+  otherwise "which tools were available" would have no answer for an event log
+  already written. Revocation is live authorization, taking effect at the next
+  decision, not a mutation of this table.
+- **`DeferredExecutor` cuts the cycle.** The tool that starts a run has to be in
+  the registry the gateway reads; the gateway is constructed into the runtime; and
+  the runtime is what the tool needs in order to start anything. Something has to
+  be named before it exists — and it is a one-slot holder rather than a closure so
+  that the failure when nothing was bound can say who failed to bind it.
+- **The MCP catalogue is frozen once, at process start.** A server started after a
+  Worker leaves that Worker unable to see it for its whole life — a healthy Worker
+  missing the tool it exists for. That is why `demo-worker` probes both servers
+  before it starts.
 
-    APPS --> ADP
-    ADP -->|implements| PORTS
-    PORTS -->|depended on by| RT
-    PORTS --> WF
-    PORTS --> APP
-    RT --> DOM
-    WF <-->|neighbours| APP
-    APP --> DOM
-    WF --> DOM
-    ADP <--> EXT
-    WEB -->|HTTP + SSE| APPS
+### 2.3 One protocol, so "a delegation is a run" needs no discipline
+
+Because every layer satisfies the same `AgentExecutor`, the delegation tool's
+handler receives **the same executor from that same stack**. "A delegation is a
+run, not a new loop" is therefore an assembly fact rather than a rule someone has
+to remember ([ADR-082](docs/adr/0082-a-delegation-is-a-run-not-a-new-loop.md)).
+
+---
+
+## 3. The Agent Runtime: the only tool loop
+
+`ClaudeLikeAgentRuntime._run` is one `while True`. Its body checks five gates,
+streams **exactly one** model call, maps that call onto either a terminal outcome
+or a batch of tool calls, takes that batch through the Tool Gateway's four
+phases, realigns the results into the model's own call order, and loops.
+
+<img src="docs/assets/agent-runtime-loop.svg" alt="One turn of the Agent Runtime loop: cancellation, budget, context compaction, model stream, terminal mapping, then admission, gateway, scheduling, execution, write-back, and around again" width="100%">
+
+**Two invariants hold on every path**, and the module docstring states them first:
+
+1. Every `tool_call_id` the model was shown ends with **exactly one**
+   `ToolResult`. Unknown tool, denied call, handler exception, timeout,
+   cancellation mid-batch — each of them produces a result rather than a gap,
+   because the model is waiting on that id either way and a missing answer is a
+   conversation that can never continue.
+2. Results are submitted in the model's own call order even though execution is
+   genuinely parallel (`plan_tool_batches` + `asyncio.gather`).
+
+### 3.1 One turn, in order
+
+| # | Step | Where | What happens when it trips |
+|---|---|---|---|
+| 1 | Cancellation check | `cancellation.cancelled` | Polled **six times** per turn; this is the first |
+| 2 | Budget gate, before the turn | `domain/runs.py::halt_reason_for` | `budget_exceeded` plus the matching `StopReason`. `max_tool_calls` is **deliberately not asked here**: a run out of tool calls should still get a turn to write its answer |
+| 3 | Context gate | `context_reason_for` (ADR-080) | It asks **how large the last request actually was**, not the cumulative token count — cumulative input grows roughly quadratically with turn count, and judging the window by it judges too early |
+| 4 | Compaction, only if 3 tripped | `runtime/compaction.py` (ADR-081) | The head message always survives; the cut is advanced forward to a protocol boundary so a `tool_use` is never split from its result; the summary re-enters as an **assistant** message. If it cannot shorten, the run stops with `stop_reason="context_limit"` |
+| 5 | Cancellation, again | — | Placed right after the compaction call: a cancelled summarizer must not be filed as "context limit" |
+| 6 | Decide what to advertise | `budget.tool_allowance_spent` | When the allowance is spent the tools come **off** the request rather than staying on it to be refused — a tool the model cannot see is not proposed again and again |
+| 7 | Model stream | `_stream_model` → `_consume` | One call, one stream, the whole consumption inside `asyncio.timeout(deadline)`. The only `async for` over a model stream in the repository |
+| 8 | Meter the turn | `ledger.usage.merged(...)` | `last_input_tokens` is carried **beside** the cumulative usage, because step 3 asks about the former |
+| 9 | Terminal mapping | `_terminal_for_turn` (8 branches) | No tool calls → completed; some → on to a batch |
+| 10 | Admission | `gateway.propose` + two circuit breakers | Every proposed call leaves a trail first, **including the ones about to be refused**. Then the tool allowance cuts once; a third identical call is refused |
+| 11 | Gateway | `prepare` → `authorize` | [§4](#4-the-tool-gateway-what-one-tool-call-passes-through) |
+| 12 | Scheduling | `runtime/tool_scheduler.py` (pure, 70 lines) | Consecutive read calls group, up to 4; write / external / destructive calls are **exclusive groups of one** |
+| 13 | Execution | `ToolExecutor` | The timeout is the minimum of the tool's declaration, the run's remaining time and the deployment ceiling; a heartbeat every 5 seconds |
+| 14 | Align and write back | `domain/tools.py::align_results` | Refilled in the model's own call order; only **admitted** calls are charged |
+| 15 | Circuit breaker settles | `repeat_refusals > 2` | Ends the run — **after** those refusals are written into the messages, so the run terminates still holding the record of what it was told |
+
+Step 10's ordering is worth a look: **the signature counter increments before any
+other check**. The reason is in the code — a refusal is cheap for a model (almost
+no tokens, no effects at all), so a model re-proposing a refused call would burn
+turns to the step ceiling; counting first is what lets the breaker close on the
+third try.
+
+### 3.2 The five gates on the loop
+
+| Gate | What it stops | Where |
+|---|---|---|
+| **Budget** | Steps, tokens, cost, deadline. Three predicates guard three places: before a turn, after this turn's tokens are merged, and before dispatching tools. A budget is a **value**; a request may only narrow it. A cost ceiling with no price table is refused before the first call — an unenforceable ceiling is worse than none | `domain/runs.py` |
+| **Deadline** | The inner of "the run deadline" and "the runtime envelope" wins, and the result **remembers which one won**: the former is `budget_exceeded`, the latter a retryable `provider_error`. The model profile's own timeout is deliberately elsewhere — in the adapter, nested inside this bound | `runtime/budgets.py` |
+| **Context** | Compaction triggers past window × 0.75. Compaction is itself an ordinary model call (profile `compact`); its tokens and cost are merged **even when it fails** — the provider charged for it — but `steps` does not increase, because the loop did not advance | `runtime/compaction.py` |
+| **Cancellation** | Polled six times per turn. On cancellation, prepared calls each become a `cancelled` `ToolResult` — they still owe the model an answer and cannot simply vanish | `agent_runtime.py::_refuse_cancelled` |
+| **Duplicate calls** | **Two mechanisms.** A `tool_call_id` repeated within one turn fails the whole run (that is the provider's error, not the model's choice); the same name and arguments a third time across turns is refused, and more than two consecutive refusals ends the run | `agent_runtime.py` |
+
+### 3.3 The state machine and the terminal states
+
+A run's position is governed by a hard-coded transition table; an illegal edge
+raises `InvalidStateTransition`:
+
+```
+building_context  → model_streaming
+model_streaming   → validating_tools | completed
+validating_tools  → authorizing | recording_results
+authorizing       → executing_tools | recording_results
+executing_tools   → recording_results
+recording_results → model_streaming | compacting
+compacting        → model_streaming
 ```
 
-> **Two things stated plainly.** `workflows` and `application` are mutually
-> referencing **neighbours**, not strict layers (each imports the other in three
-> or four places); drawing a one-way arrow between them would be drawing it
-> wrong. And `evaluation/` is a self-contained core package that imports only
-> itself, so it is not on the main chain and is not in the diagram.
+Every non-terminal state additionally has edges to `failed` and `cancelled`.
+**There are exactly three terminal states** — `completed`, `failed`, `cancelled`
+— and nine `StopReason` values: `completed`, `max_steps`, `max_tool_calls`,
+`token_budget`, `cost_budget`, `context_limit`, `deadline`, `cancelled`, `error`.
+**There is no "looked like it worked".**
 
-### 2.2 What each layer is
+Note that `building_context → compacting` is **not** a legal edge, and its being
+unreachable is not luck: `context_reason_for` returns `None` while
+`last_input_tokens <= 0`, so compaction can only fire from `recording_results`.
+
+### 3.4 The eleven modules in `runtime/`
+
+| Module | Lines | What it owns |
+|---|---|---|
+| `agent_runtime.py` | 1478 | The loop, the ledger, the five gates, terminal mapping, the compaction call |
+| `tool_gateway.py` | 1184 | Everything one tool call is checked and dispatched by |
+| `tool_executor.py` | 365 | One handler, its timeout, its heartbeat |
+| `compaction.py` | 275 | The half of compaction that **needs no model**: where to cut, what the summarizer sees, how much was saved |
+| `schema_validation.py` | 249 | The supported JSON Schema subset (17 keywords, 7 types) and argument validation |
+| `hook_bus.py` | 156 | The deployment's own `before_tool` inspection; a timeout or a raise both count as blocked |
+| `fake_executor.py` | 141 | The scripted double the zero-dependency demo and the gates reproduce byte-for-byte on |
+| `budgets.py` | 136 | Deadline arithmetic: the inner one wins, and it is recorded which |
+| `state.py` | 103 | The transition table above |
+| `tool_scheduler.py` | 70 | Read-parallel / write-exclusive grouping, pure |
+| `__init__.py` | 45 | Exports |
+
+**Exclusivity is not the scheduler's judgement**: `ToolSpec.validate_risk_consistency`
+refuses **at construction** to build a non-read spec that claims to be parallel,
+and equally a write tool with no permission scope. The scheduler only reads it.
+
+### 3.5 One guard, two shapes
+
+`tests/architecture/test_dependency_boundaries.py::test_the_model_tool_loop_has_exactly_one_owner`
+guards the same sentence in two non-overlapping ways:
+
+- **By shape**: it walks the core's AST for an `async for` whose iterator is a
+  `.stream(...)` call (or a name bound to one — the runtime keeps the iterator in
+  a variable so it can close it) and asserts the result set is **exactly**
+  `{"runtime/agent_runtime.py"}`.
+- **By vocabulary**: across the whole product tree, every module importing
+  `agent_workbench.ports.model` must be in `MODEL_STREAM_OWNERS` (seven entries),
+  with a control assertion that `agent_runtime.py` **is** in the observed set, so
+  a broken import extractor cannot make an empty scan look clean.
+
+Its docstring states the distinction ADR-082 rests on: **"one tool loop" bounds
+how many implementations exist, not how many levels deep it may be entered.**
+
+---
+
+## 4. The Tool Gateway: what one tool call passes through
+
+Native handlers, MCP tools and LangChain tools all arrive as the same
+`ToolBinding`, so "may this run, with these arguments, right now" has exactly one
+implementation. The default is **deny**, and the basis is the authorization
+envelope **frozen at submission**.
+
+<img src="docs/assets/tool-gateway-pipeline.svg" alt="The Tool Gateway's four phases — propose, prepare, authorize, invoke — with each phase's refusal exits and the events it leaves" width="100%">
+
+### 4.1 The four phases
+
+| Phase | What it does | The part worth knowing |
+|---|---|---|
+| `advertise` | **Once per run**, not once per call | An unregistered name raises `UnknownToolError`; one carrying an `operation_key` (a ledgered effect) raises `PolicyDeniedError` — [ADR-075](docs/adr/0075-a-ledgered-effect-is-issued-not-proposed.md): that kind of tool is **issued** by a node, never put in front of a model to propose |
+| ① `propose` | Records the argument byte count and SHA-256 | **Including the calls about to be refused.** A refused call vanishing from the event stream deletes the fact that someone tried |
+| ② `prepare` | Resolve binding → arguments ≤ 65,536 bytes → JSON Schema validation → the `before_tool` hooks | If a hook rewrote the arguments, the size and schema checks run **again**; a hook may change arguments only, never the tool name and never the `tool_call_id`. Only a hook exception's **type name** crosses the boundary — a backend's exception message has carried a DSN |
+| ③ `authorize` | At most three policy rounds | Each round emits a `PermissionResolved`. "Requires approval" is **sticky**: a later round that forgets to repeat it cannot lift it |
+| ③b approval | Hold if there is a gate; refuse if there is not | The gate's answer must land in the legal vocabulary to count — an unrecognised word must not become permission by failing to match `deny`. Timeout, cancellation and a gate that raised are all recorded as `deny`, with a trail |
+| ④ `invoke` | Dispatch, with one more step for ledgered tools | See [§4.4](#44-ledgered-effects-authorize-again-one-line-from-the-irreversible-act) |
+
+### 4.2 Three answers, and there is no fourth
+
+`ports/policy.py`'s `PolicyEngine` has one method returning one of three effects:
+
+| Effect | Meaning | What follows |
+|---|---|---|
+| `allow` | Inside the envelope frozen at submission, with the permission scopes present | On to scheduling and execution; a ledgered tool is asked once more before dispatch |
+| `deny` | Unknown tool / outside the submitted envelope / missing a permission scope | Leaves a `PermissionResolved` and a `ToolFailed`. **Which scope is missing** is deliberately not in the `reason_code` |
+| `allow_with_modified_input` | The policy rewrote the arguments — a **decision**, not a side effect | Re-validate the rewritten arguments against the schema, then **ask again**. Three rounds without convergence is a refusal |
+
+A rewrite must be re-validated and re-decided, otherwise "rewriting" would be the
+one path past both checks.
+
+There is currently one implementation:
+`adapters/policy/envelope.py::EnvelopePolicyEngine`, 53 lines, three deny reasons
+and one allow. Its docstring states plainly what it does **not** yet do — the full
+deny-overrides intersection of envelope, settings policy floor, live ACL and live
+registry.
+
+### 4.3 Three layers of narrowing
+
+```
+The envelope frozen at submission        ⊇   node profile ∩ envelope       ⊇   sub-agent envelope
+task_runs.submitted_authorization_envelope   permitted_tools(profile, …)       child_envelope(parent, …)
+re-applied on every resume                   the profile only intersects       the risk ceiling may only drop
+```
+
+Every layer is an **intersection**; not one of them can widen. The defaults on
+`AuthorizationEnvelope.permits` are deny-shaped too: `allowed_tools=()`,
+`max_tool_risk="read"`,
+`approval_required_risks=("write","external","destructive")`. It applies
+`denied_tools` first (denial wins), then requires membership in `allowed_tools`,
+then compares risk — **so raising a tool's risk withdraws it from every historical
+Task without rewriting a single envelope.**
+
+### 4.4 Ledgered effects: authorize again, one line from the irreversible act
+
+A tool carrying an `operation_key` takes a longer path:
+
+1. No ledger, no task or no lease epoch → refused outright ("nothing to record
+   them against").
+2. The `operation_key` is computed from the **final arguments**, never from the
+   `tool_call_id` — a resent request has to recognise itself.
+3. Record the intent. The same key with different arguments →
+   `invalid_tool_input`; a ledger that says this was already done → `tool_failed`,
+   and **it will not be performed again**.
+4. **A second authorization**, one line from the irreversible act: only `allow`
+   with approval no longer required may dispatch. A rewrite here is **not
+   applied** — the recorded intent must describe the call that actually happened;
+   and an approval required again is not asked again — that would let a flapping
+   policy prompt a human twice. Any refusal records the operation as **failed**
+   before refusing, because "nothing was dispatched" is itself knowledge.
+5. Dispatch, record the result. The errors that cannot answer (timeout,
+   cancellation, budget) are marked **for human reconciliation** — for an outward
+   write, "no answer" does not mean "no effect".
+
+### 4.5 Two things that fail at construction
+
+- A tool whose `input_schema` uses an unsupported keyword → **the process does not
+  start**, rather than that call failing. An unenforceable schema is a check that
+  does not exist.
+- A binding with an `operation_key` but no ledger → `ValueError`, **naming** the
+  tools.
+
+---
+
+## 5. Layers and guards
+
+### 5.1 What each layer is
 
 | Layer | What it is | May depend on | Forbidden (guard in brackets) |
 |---|---|---|---|
-| **domain**<br/>`domain/` | Encodes "which states must not exist" into the types, so invariants hold by **construction failure** rather than by every caller remembering to check | stdlib, Pydantic, domain itself, **plus `regex`** (`domain/workspace.py` needs a matching engine with a timeout to back `GREP_TIMEOUT_SECONDS`; the stdlib `re` has none) | Any framework or SDK; any I/O; mutability or unknown fields (`DomainModel` is globally `frozen=True, extra="forbid"`); `TaskState` may not grow message logs or framework objects — it has to fit in a graph checkpoint |
-| **ports**<br/>`ports/` (37) | Uses `typing.Protocol` to separate "what capability is needed" from "who provides it" | domain, stdlib, Pydantic only | Any implementation (no SQL, no HTTP, no vector-store calls here); importing `ports/model.py` is gated by the `MODEL_STREAM_OWNERS` allowlist |
-| **runtime**<br/>`runtime/` | The one tool loop: drives a run to a **terminal** outcome with budget, deadline, context, cancellation and repeat-call gates on it | domain + ports only | Importing any framework; **no module — adapters included — may write a second loop consuming a model stream**; treating "allow, pending approval" as allow |
-| **workflows**<br/>`workflows/` | Control flow written as a **declaration** that can be read and tested on its own: edges are data, routing is pure functions, and what each agent may see and reach is a fixed table | domain, ports, application | Importing langgraph (compilation lives in `adapters/langgraph/`); widening a profile (`permitted_tools` only intersects, and no argument reverses that); asking the registry for the current epoch mid-run |
-| **application**<br/>`application/` | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
+| **domain**<br/>`domain/` (25 modules) | Encodes "which states must not exist" into the types, so invariants hold by **construction failure** rather than by every caller remembering to check | stdlib, Pydantic, domain itself, **plus `regex`** (`domain/workspace.py` needs a matching engine with a timeout to back `GREP_TIMEOUT_SECONDS`; the stdlib `re` has none) | Any framework or SDK; any I/O; mutability or unknown fields (`DomainModel` is globally `frozen=True, extra="forbid"`); `TaskState` may not grow message logs or framework objects — it has to fit in a graph checkpoint |
+| **ports**<br/>`ports/` (38 modules, 48 Protocols) | Uses `typing.Protocol` to separate "what capability is needed" from "who provides it" | domain, stdlib, Pydantic only | Any implementation (no SQL, no HTTP, no vector-store calls here); importing `ports/model.py` is gated by the `MODEL_STREAM_OWNERS` allowlist |
+| **runtime**<br/>`runtime/` (11 modules) | The one tool loop: drives a run to a **terminal** outcome with budget, deadline, context, cancellation and repeat-call gates on it | domain + ports only | Importing any framework; **no module — adapters included — may write a second loop consuming a model stream**; treating "allow, pending approval" as allow |
+| **workflows**<br/>`workflows/` (10 modules) | Control flow written as a **declaration** that can be read and tested on its own: edges are data, routing is pure functions, and what each agent may see and reach is a fixed table | domain, ports, application | Importing langgraph (compilation lives in `adapters/langgraph/`); widening a profile (`permitted_tools` only intersects, and no argument reverses that); asking the registry for the current epoch mid-run |
+| **application**<br/>`application/` (34 modules) | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
 | **adapters**<br/>`adapters/` (22 directories plus two loose modules) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
 | **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | Turns one TOML file into several processes, each handed only its own slice and each able to be falsified at startup | all four core layers + adapters + frameworks | `os.environ` **only inside the bootstrap package**; the `Settings` type may not travel past `projections.py`; connection strings are forbidden in TOML; invariants written as single-valued `Literal`s cannot be changed — that takes an ADR first |
 | **web**<br/>`web/src/` | Translates the backend's facts into something a person can check, rather than inventing a second execution model | `web/src/api/` (the only place that goes out), backend HTTP + SSE | Talking to the database or vector store directly (`fetch` appears in exactly two files); dropping events while folding them — the raw payload must stay reachable |
 
-That boundary is a test that **turns CI red**
-([`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)).
-It forbids **method calls** as well as imports — though that half is two
-hard-coded attribute names (`as_query_engine` / `as_chat_engine`), because those
-hang off the `VectorStoreIndex` this project does build and so need no new
-import; every other guard is import-shaped. The reasoning is in
-[the ten-minute version §3.1](docs/HIGHLIGHTS.md).
+### 5.2 What the guards actually contain
 
-> **Third-party imports into core are an allowlist** (`CORE_THIRD_PARTY_ALLOWLIST`,
-> [ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md)):
-> the standard library, `agent_workbench` itself, and exactly two others —
-> `pydantic` (anywhere in core) and `regex` (**only `domain/workspace.py`**, for a
-> matching engine with a timeout). **Everything else fails, whether or not anybody
-> thought to ban it.**
->
-> It became an allowlist on 2026-08-31. Before that `FORBIDDEN_CORE_IMPORTS` was a
-> *denylist*, which is how the `regex` above arrived with a green build — it has a
-> good reason, and "has a good reason" and "is guarded" are different statements.
-> The denylist stays beside it, naming the integrations this project rejected so
-> that importing one fails with "move it behind an adapter" rather than the general
-> message; a test asserts the two never overlap.
+The test that turns CI red is
+[`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py).
+It maintains four tables, and the [panel](#0-see-the-whole-thing-first)'s "layers
+and guards" page prints their current contents:
 
-### 2.3 Which layer holds which capability
+- **The core third-party allowlist** has exactly two entries — **`pydantic`** and
+  **`regex`** ([ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md))
+  — plus the standard library and `agent_workbench` itself. **Everything else
+  fails, whether or not anybody thought to ban it.**
+- **The named-refusal table** (34 entries: `crewai`, `langchain*`, `langgraph`,
+  `llama_index`, `fastapi`, `anthropic`, `docx`, …) does not do the refusing —
+  the allowlist already did. It supplies the **diagnostic**: the error says "move
+  this integration behind an adapter" rather than a generic boundary complaint. A
+  test asserts the two tables never overlap.
+- **The method-call guard** is two hard-coded attribute names: `as_query_engine`
+  and `as_chat_engine`. They hang off the `VectorStoreIndex` this project does
+  build and need no new import, so the import-shaped guards cannot see them. Every
+  other guard is import-shaped.
+- **The model-stream owners** are an allowlist of seven modules. Outside that list
+  you cannot obtain a model stream, and so cannot write a second tool loop.
+
+> The allowlist arrived on 2026-08-31. Before that it was a **denylist**, which is
+> how the `regex` above walked in green — it has a good reason, and "has a good
+> reason" and "is guarded" are different statements.
+
+### 5.3 Which layer holds which capability
 
 | Capability | Main home | Also involved |
 |---|---|---|
@@ -265,146 +560,226 @@ import; every other guard is import-shaped. The reasoning is in
 | See **who delegated whom, and how far the sub-agent got** | application `run_tree.py` (rebuilt from events, never stored twice) | web `RunPanel.tsx` (ADR-083) |
 | A wrong config, or a capability claim the code does not back, **stops the process from starting** | bootstrap `settings.py` cross-domain validation + single-valued `Literal`s | every layer (`agent-config-check` runs three profiles offline) |
 
-### 2.4 How one Chat answer flows
+---
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant W as web
-    participant A as apps/api
-    participant AP as application
-    participant AD as adapters
-    participant R as runtime
+## 6. The two request paths
 
-    W->>A: question (Idempotency-Key)
-    A->>AP: claim the turn idempotently, take a lease, set a deadline
-    AP->>AD: dense arm + sparse arm, in parallel
-    AD-->>AP: two candidate sets
-    Note over AP,AD: RRF fusion runs once, in-process\nordered by (-score, chunk_id)
-    AP->>AD: PostgreSQL ACL filter
-    Note right of AD: ⚑ authorization happens here\nand brings back each source_revision
-    AP->>AD: rerank (authorized candidates only, scores not passages)
-    AP->>R: render the context, generate
-    R->>AD: model stream (the agentic shape runs the full tool loop)
-    R-->>AP: answer and citations
-    Note over AP: model text is withheld from the event stream throughout\ncitations filtered to what was named AND shown
-    AP->>AD: publish fence — revision + ACL re-checked in one transaction
-    AD-->>AP: AnswerCommitted / UngroundedAnswerCommitted / AnswerWithheld
-    AP-->>W: SSE rendering, citation lookback
-```
+### 6.1 One Chat answer
 
-**The point of this path is the second-to-last step**: when a revocation lands
-after generation and before publication, the answer is **withheld**
-(`AnswerWithheld`) rather than shipped. The answer, the assistant history and
-the turn's terminal state commit in one transaction.
+<img src="docs/assets/chat-flow.svg" alt="The Chat path: idempotent turn claim, dense and sparse arms, RRF fusion, PostgreSQL ACL filter, reranking, generation, citation verification, publish fence" width="100%">
 
-### 2.5 How one Task run flows
+**Two positions define what this path is.**
 
-```mermaid
-flowchart LR
-    S["submit\ntenant-scoped idempotency key + input fingerprint\nthe graph version is frozen\nthe authorization envelope is stored with the Task"] --> C
-    C["a Worker claims it\nFOR UPDATE SKIP LOCKED\ntaking a lease and an epoch"] --> J
-    J["post-claim judgement\nregistry status + checkpoint position\npure function, no I/O"] --> G
-    G["compile and run the frozen graph version"] --> N
-    N["each node\nre-resolves identity and envelope\nprofile tools ∩ envelope"] --> E
-    E["AgentExecutor\n→ tool gateway → events + checkpoint"] --> AP
-    AP{"approval needed?"} -->|yes| I["interrupt\nwaiting_approval"]
-    I --> L["the decision goes to the authoritative ledger\nand is re-applied after cross-process recovery"]
-    AP -->|no| T["TaskSucceeded / TaskFailed\nexplicit terminal states, no looks-like-success"]
-    L --> T
-    E -.crash or timeout.-> X["the lease expires\nanother Worker reclaims under a new epoch\nand resumes from the checkpoint"]
-    X --> G
-```
+The first is **step 4**: authorization happens at the PostgreSQL filter, and the
+reranker runs after it. The ordering is the guarantee — the reranker cannot
+introduce text the asker may not read, because it never saw those candidates.
 
-**Two graphs, chosen and frozen at submission:**
+The second is **the second-to-last step**: when a revocation lands after
+generation but before publication, the system **withholds the answer**
+(`AnswerWithheld`) instead of shipping it. The publish fence re-checks revision
+and ACL inside **one transaction**, taking locks in the order session → turn →
+documents (sorted by id) → event stream; the answer, the assistant history and
+the turn's terminal state commit together.
 
-| Graph | Nodes |
-|---|---|
-| `v1` research | `understand → plan → route →`{`research_internal` ∥ `research_external`}`→ synthesize → critic → quality_gate → approval → export` |
-| `v2` general | `understand → work → review →`(`approval`)`→ export`, with `review` able to loop back to `work` |
+Three terminal outcomes, each an event: `AnswerCommitted` (grounded, with
+citations), `UngroundedAnswerCommitted` (not grounded, and **saying so**), and
+`AnswerWithheld`. Two off-path recoveries exist as well: `ChatTurnReaper`
+terminalizes expired `running` turns, and `ChatPendingReleaseRecovery` re-drives
+turns stuck in `release_pending` row by row, long after the original HTTP client
+has gone.
 
-The conditional nodes are `route` / `quality_gate` / `approval`; the two research
-branches fan in at `synthesize` as a **sorted union**, so the merge is
-commutative and safe to re-enter.
+### 6.2 One Task run
 
-**Reliability**: execution lease + heartbeat + epoch fencing, transactional
-outbox, a self-built PostgreSQL checkpointer (fenced), retry / dead-letter, an
-advisory execution guard, and per-stream gap-free event sequences with an
-idempotent `event_key`.
+<img src="docs/assets/task-flow.svg" alt="The Task path: submission freezes the envelope and graph version, SKIP LOCKED claim takes a lease and epoch, the graph executes, approval interrupts, and after a crash another Worker resumes from the checkpoint under a new epoch" width="100%">
 
-A node writes under the immutable `ExecutionLease` it received **at claim
-time** — never by re-asking the registry for the current epoch, or a Worker that
-lost its lease would pass the ledger fence using its replacement's epoch.
+**Two graphs, chosen and frozen at submission** (the nodes and edges below are
+what the [panel](#0-see-the-whole-thing-first) draws from `_STATIC_EDGES` and the
+compiler's conditional-edge target lists, not what someone transcribed):
 
-### 2.6 Multi-agent: a delegation is a run, not a new loop
+| Graph | Node chain | Conditional nodes |
+|---|---|---|
+| `v1`, the fixed research graph (10 nodes) | `understand → plan → route ⇉ {research_internal ∥ research_external} → synthesize → critic → quality_gate → approval → export` | `route`, `quality_gate`, `approval` |
+| `v2_general` (5 nodes) | `understand → work → review →` (`approval`) `→ export` | `review`, `approval` |
 
-Since ADR-082 a run may spawn another run mid-loop. **Off by default**
+- `route`'s router **always returns both branches** — it is a fixed fan-out, not a
+  choice. Both branches fan in at `synthesize` through a **sorted union**
+  (`merge_refs`), which is therefore commutative, associative and idempotent.
+- `quality_gate` is a four-target conditional edge: `approval` / `export` /
+  `synthesize` (the revise back-edge) / `END`. The `END` arm means "no report
+  wanted" or "out of revisions", and since ADR-060 it is a **success**, not a
+  failure. `approval` has two targets, and its `END` arm — a human rejection — is
+  the graph's only deliberate terminal failure.
+- Both graphs' revise back-edges **share one revision budget**, not one each.
+- **Conditional nodes run no agent**: `profile_for()` raises `KeyError` for a pure
+  routing node.
+- `approval` is the **only interrupt point in either graph**. When
+  `workflow.export_requires_approval` is false the gate is **skipped**, not faked —
+  no approval row is opened.
+
+**Reliability machinery**: execution lease + heartbeat + epoch fencing, a
+transactional outbox, a self-built PostgreSQL checkpointer (with fencing; the
+checkpoint itself is versioned and has an upgrade path,
+[ADR-100](docs/adr/)), retry / dead-letter, an advisory execution guard, and
+per-stream gap-free event sequences with idempotent `event_key`s.
+
+A node writes under the immutable `ExecutionLease` it received **at claim time**,
+never by re-asking the registry for the current epoch — otherwise a Worker that
+lost its lease would pass the ledger fence using its replacement's epoch, which is
+the exact thing the fence exists to stop.
+
+### 6.3 Multi-agent: a delegation is a run, not a new loop
+
+<img src="docs/assets/delegation.svg" alt="Sub-agent delegation: the parent run calls delegate_agent, the child runs on the same AgentExecutor, and the three gates are tool intersection, removing the delegation tool at the depth limit, and an envelope that can only narrow" width="100%">
+
+Since [ADR-082](docs/adr/0082-a-delegation-is-a-run-not-a-new-loop.md), a run may
+spawn another run mid-loop. **Off by default**
 (`multi_agent.delegation_enabled = false`).
 
-```mermaid
-flowchart TB
-    subgraph P["parent run — graph node work"]
-        direction TB
-        P1["ToolStarted delegate_agent"] --> P2["AgentDelegated → analyst"]
-        P2 -.-> P3["AgentCompleted"]
-        P3 --> P4["ToolCompleted\nthe sub-agent's report reaches the model as a tool result"]
-    end
-    subgraph K["child run — same stream, its own run_id"]
-        direction TB
-        K1["RunStarted"] --> K2["ModelStarted / ModelCompleted"] --> K3["RunCompleted"]
-    end
-    P2 ==> K1
-    K3 ==> P3
-```
+The point is that it is **not** a second executor: the delegation tool's handler
+calls **the same** `AgentExecutor` from the stack in
+[§2](#2-the-agent-harness-what-wraps-one-run) — what recurses is call depth, not
+the number of loops.
 
-The point is that this is **not a second executor**: the delegation tool's
-handler calls the **same** `AgentExecutor`, so the one-tool-loop claim is
-untouched — what recurses is the call depth, not the number of loops.
+The three gates are written into the types rather than left to the caller:
 
-All three gates are written into the types rather than left to callers:
-
-| Gate | How |
+| Gate | How it is done |
 |---|---|
-| A child cannot reach a tool its parent could not | `permitted_child_tools` is an **intersection**, and no argument reverses that |
-| Recursion stops | At the depth ceiling the delegation tool is **removed from the child's tool list** — a grandchild is never shown the tool, rather than a counter having been incremented correctly |
-| A delegation cannot escape the envelope | `child_envelope` can only **lower** the risk ceiling; nothing raises it |
+| A child cannot reach a tool the parent cannot | `permitted_child_tools` is an **intersection**, with no argument that reverses the direction |
+| Recursion stops | At the depth limit the delegation tool is **removed from the child's toolbox** — the grandchild never sees it, rather than a counter being incremented correctly |
+| Delegation cannot be used to escape the envelope | `child_envelope` may only **lower** the risk ceiling (to `read` by default); `denied_tools` and approval requirements travel down unchanged |
 
-A child writes into its **parent's own event stream** under its own `run_id`, so
-"who delegated whom" is rebuildable from the events (ADR-083):
+Sub-agents get **their own second concurrency pool**: sharing the parent's
+deadlocks, and the reason is written in `apps/task_worker/composition.py`.
+Assembly also refuses at startup a deployment where
+`max_children_per_run ** max_delegation_depth > max_agent_invocation_attempts_per_task`
+— a configuration that can exhaust itself should not wait for runtime to say so.
+
+A child run writes into the **parent's own event stream** under its own `run_id`.
+So "who spawned whom" is rebuilt from events (ADR-083) rather than stored twice:
 
 - `GET /v1/tasks/{id}/runs` — the run tree, for navigation
-- `GET /v1/tasks/{id}/timeline?run_id=…` — one run on its own, an index lookup
-- The console's **"参与的 Agent" panel** draws that tree; selecting a row narrows
-  the step stream below it to that one run
-
-### 2.7 Technology choices
-
-| Layer | Choice | Boundary |
-|---|---|---|
-| Agent Runtime | **self-built** | Tool loop, policy, budgets, cancellation — **not outsourced** |
-| Workflow control plane | LangGraph | Compiles the control-flow declaration; `TaskState` fields are the graph channels |
-| Retrieval | self-built + LlamaIndex adapter | LlamaIndex serves the retrieval contract only, **off by default** |
-| Vector store | Qdrant | dense / sparse storage; fusion happens in-process |
-| Embedding | BGE-M3 | dense + lexical; **refuses to construct** without weights |
-| Reranking | BGE reranker | Runs after authorization, returns positionally aligned scores |
-| Model | DeepSeek (OpenAI-compatible) | Streaming; server-side `web_search` introduces no second key |
-| Persistence | PostgreSQL 16 + Alembic | Sessions, tasks, events, checkpoints, outbox |
-| Tool protocol | MCP SDK v2 | Streamable HTTP, frozen into local bindings at startup |
-| Frontend | React + TypeScript + Vite | Chat / Tasks / Code / Knowledge / Evaluation / Computer / System / Usage |
-| Observability | OpenTelemetry | Port + OTLP adapter; core imports no SDK |
-
-Configuration is a **single schema (currently `1.19`)** validated across domains
-at startup: a capability the config claims but the code does not have **fails at
-config load**, rather than sitting there unread.
+- `GET /v1/tasks/{id}/timeline?run_id=…` — one run only, an indexed lookup
+- The console's **"agents involved"** panel draws that tree, and selecting a row
+  narrows the execution view below to that one run
 
 ---
 
-## 3. Quick start
+## 7. Events: one protocol, four consumers
+
+CLI output, SSE, the audit trail and OpenTelemetry consume **the same events**;
+none of them invents its own callback. Events describe what happened, they do
+**not** decide where execution stands: the conversation store owns chat history,
+the LangGraph checkpointer owns workflow position, and this log owns observation.
+
+**37 event types, of which exactly 3 are transient**: `ModelDelta`,
+`ModelThinkingDelta`, `ToolProgress`.
+
+> **Durability is a property of the event type, not a caller's choice**
+> (`EVENT_DURABILITY` is a fixed table). A caller cannot promote a token delta
+> into the durable log, and cannot demote a terminal state out of it. Per-token
+> rows would turn a chat into a write-amplification problem; and **only durable
+> events carry a sequence**, so an SSE cursor is `(stream_id, the last durable
+> event's sequence)` and a reconnecting client resumes from there.
+
+The four events one tool call leaves:
+
+```
+ToolProposed  →  PermissionResolved  →  ToolStarted  →  ToolCompleted / ToolFailed
+(every proposed      (one per policy       (at dispatch)     (success or failure,
+ call, including      round)                                  with duration_ms)
+ the refused ones)
+```
+
+**A refused call leaves a trail too**: `refuse()` builds a failed `ToolResult` and
+routes it through `_record` like any other, so what it leaves is "how far it got
+before being stopped" rather than an absence. When approval is needed,
+`PermissionRequested` + `RunPaused` + `ToolApprovalDecided` are inserted —
+**including on a timeout**.
+
+`ToolProgress` has two producers with different meanings: the handler's own
+`report(message, percent)` (normalized on the way out — empty dropped, over 256
+characters cut, percent clamped to 0..100, and never raising back into the
+handler), and the executor's 5-second heartbeat — **the heartbeat carries no
+percent**, because "elapsed time ÷ declared timeout" looks like a progress
+fraction and is not one
+([ADR-068](docs/adr/0068-a-running-tool-owes-the-reader-a-sign-of-life.md)).
+
+`record_step_inputs` (ADR-019, off by default) gates three body previews:
+`ModelStarted.prompt_preview`, `ToolProposed.argument_preview` and
+`ToolCompleted.output_preview`. `ToolCompleted.truncated`, `workspace_writes` and
+`project_writes` are deliberately **not** behind that flag — they are structure,
+not body.
+
+---
+
+## 8. Processes, configuration and the local topology
+
+<img src="docs/assets/process-topology.svg" alt="Local topology: browser and console, agent-api, two workers, shared PostgreSQL, Qdrant and model provider, and four loopback-bound MCP servers" width="100%">
+
+### 8.1 Configuration is a contract, not a bag of values
+
+One schema (currently **`1.19`**), cross-domain validation at startup: a
+capability the config claims but the code does not have **fails at config load**,
+rather than sitting there unread.
+
+`config/config.<name>.toml`, selected by `AW_CONFIG_FILE`. **Ten of them**:
+`local` (no MCP), `word-local`, `web-local`, `code-local`, `computer-local`,
+`sandbox-local`, `demo-local` (the union — what the console runs), plus
+`default`/`test`/`production`.
+
+They are **separate files rather than one switch**: each freezes its own tool
+names into every newly submitted Task's authorization envelope, so a wider
+profile widens **every** Task on that deployment.
+
+`agent-config-check --profile` accepts only three names — `development`, `test`,
+`production`; the other seven are checked with `--config config/config.<name>.toml`.
+
+**82 invariants are written as single-valued `Literal`s** in
+`bootstrap/settings.py` — for example `registry_backend = "postgresql"`,
+`claim_strategy = "skip_locked"`, `runtime.executor = "claude_like"`,
+`max_parallel_write_tools = 1`. They have exactly one legal value in the type
+system: **changing one is not a config edit, it is an ADR first.** The full list is
+on the [panel](#0-see-the-whole-thing-first)'s config page.
+
+`database.dsn`, `guard_dsn` and `listen_dsn` are in `FORBIDDEN_TOML_PATHS` and can
+only come from the environment — a connection string is a credential even when
+today's has no password. `os.environ` is allowed only inside the `bootstrap`
+package.
+
+### 8.2 A tour of the repository
+
+| Directory | What is in it |
+|---|---|
+| `src/agent_workbench/domain/` | 25 modules. Invariants written into the types |
+| `src/agent_workbench/ports/` | 38 modules, 48 Protocols. The only cross-layer seam |
+| `src/agent_workbench/runtime/` | 11 modules. **The only tool loop**, and the Tool Gateway |
+| `src/agent_workbench/workflows/` | 10 modules. Both graphs, agent profiles, the approval interrupt, the execution-lease scope |
+| `src/agent_workbench/application/` | 34 modules. Chat turns, Task lifecycle, coding sessions, crash recovery, the run tree |
+| `src/agent_workbench/adapters/` | 22 directories plus two loose modules. One directory per outside concern |
+| `src/agent_workbench/apps/` | `agent-api`, three worker/CLI entry points, and four project-owned MCP servers |
+| `src/agent_workbench/bootstrap/` | 16 modules. Settings, projections, the factories, startup validation |
+| `tests/` | 20 directories. `architecture/` is the one that turns a boundary breach red, `contracts/` is "one contract, every implementation", `e2e/` is the one that kills a Worker and watches it recover |
+| `web/src/` | Eight features, eight pages; network egress only in two files under `api/` |
+| `config/` | Ten profiles |
+| `migrations/` | 32 Alembic revisions, a single head |
+| `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
+| `docs/adr/` | 87 decision records, numbered 0012–0100 (0050 and 0053 reserved but never written) |
+| `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
+| `scripts/` | `dev.sh` (the one place that knows this machine), `architecture_panel.py` (the panel), evaluation and benchmark scripts |
+
+---
+
+## 9. Quick start
 
 Prerequisites: Python 3.12 and `uv`.
 
-**Zero-dependency demo** — no database, no network, no API key, byte-for-byte
-reproducible output:
+**Look at the whole project first** — no database, no network, no key:
+
+```bash
+scripts/dev.sh panel
+```
+
+**Zero-dependency demo** — byte-for-byte reproducible output:
 
 ```bash
 uv run agent-cli demo
@@ -423,6 +798,9 @@ uv run agent-cli demo --deny
 uv run agent-config-check --profile development && uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
 ```
 
+`.env` is not optional: without it the first command above stops at `3 validation
+errors for LoadedSettings`, which reads like a broken checkout and is not one.
+
 **The full local topology** (PostgreSQL, Qdrant, API, workers, console) is in
 [Running locally](docs/running-locally.md) (Chinese); the containerized demo is in
 [Compose deployment](docs/deployment.md) — the API is mapped only to
@@ -430,7 +808,7 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 
 ---
 
-## 4. Boundaries
+## 10. Boundaries
 
 > [!WARNING]
 > **The current Identity Adapter trusts request headers**, so `agent-api` is only
@@ -438,6 +816,8 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 > public internet. The listen address and Compose ports are restricted to
 > loopback, but that is a mechanism against accidental exposure, **not
 > authentication** ([ADR-044](docs/adr/0044-no-remote-no-production-identity.md)).
+> The architecture panel binds `127.0.0.1` for the same reason: it spreads the
+> source tree's docstrings out for a reader.
 
 Capability status is promoted only along `Planned → Implemented → Tested →
 Demonstrated`, and **no promotion happens without linkable test or demo
@@ -450,12 +830,16 @@ orchestration skeleton is still a graph frozen at submission. LlamaIndex
 retrieval, MCP, the sandbox, outward reads, web search and sub-agent delegation
 are **all off by default**, each for a stated reason.
 
+The `before_tool` hook boundary belongs here too: the protocol, the bus and the
+timeout all exist, and **the repository ships no hook implementation at all** —
+it is an extension point for a deployment, not a feature already in use.
+
 The current Compose topology is for local demonstration only and is not evidence
 of a production deployment or of production-grade multi-Worker operation.
 
 **Per-item categories, repository locations and "done" criteria are in
-[Known gaps](docs/known-gaps.md)**; measured gate numbers and real-run evidence
-are in [the ten-minute version](docs/HIGHLIGHTS.md).
+[Known gaps](docs/known-gaps.md)** (Chinese); measured gate numbers and real-run
+evidence are in [the ten-minute version](docs/HIGHLIGHTS.md) (Chinese).
 
 ### Gates
 
@@ -595,33 +979,57 @@ by ADR-098, and the one after *that* ("85 files, 0012–0098") by ADR-099 — th
 last two on the same evening. **More test code than source code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 
+**For a figure computed *now* rather than mirrored**, open the
+[architecture panel](#0-see-the-whole-thing-first): it counts modules, lines,
+endpoints, tools, ADRs and test functions from the working tree at build time.
+It answers a different question from the table above — the table records what a
+full run *did*, on a named tree, in a named environment; the panel records what
+the tree *is* at this moment. Neither substitutes for the other, and the panel is
+the one that cannot go stale.
+
 ---
 
-## 5. Documentation
+## 11. Technology choices
+
+| Layer | Choice | Responsibility boundary |
+|---|---|---|
+| Agent Runtime | **Self-built** | The tool loop, policy, budgets, cancellation — **not outsourced** |
+| Workflow control plane | LangGraph | Compiles the control-flow declaration; `TaskState` fields are the graph channels |
+| Retrieval | Self-built + a LlamaIndex adapter | LlamaIndex only satisfies a retrieval contract, and is **off by default** |
+| Vector store | Qdrant | Dense / sparse storage; fusion happens in this process |
+| Embedding | BGE-M3 | Dense + lexical; **refuses to construct** without weights |
+| Reranking | BGE reranker | Runs after authorization, returns positionally aligned scores |
+| Model | DeepSeek (OpenAI-compatible) | Streaming; the server-side `web_search` introduces no second key |
+| Persistence | PostgreSQL 16 + Alembic | Sessions, tasks, events, checkpoints, outbox |
+| Tool protocol | MCP SDK v2 | Streamable HTTP, frozen into local bindings at startup |
+| Frontend | React + TypeScript + Vite | Eight pages; Node 24.x (`engines` pins 24.14.0) |
+| Observability | OpenTelemetry | Port + OTLP Adapter; the core imports no SDK |
+
+---
+
+## 12. Documentation
 
 | Document | Purpose |
 |---|---|
-| [The ten-minute version](docs/HIGHLIGHTS.md) | Real event stream, gate numbers, engineering judgements |
-| [Known gaps](docs/known-gaps.md) | **What is not built**, in five categories |
-| [Implementation status](docs/status.md) | Implementation and test evidence, PR by PR |
-| [Architecture baseline](docs/architecture-baseline.md) | Product boundaries, layering, reliability protocol |
-| [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
-| [Frontend design baseline](docs/frontend-design.md) | Console structure, protocol boundaries, responsive strategy |
-| [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it |
-| [ADR index](docs/adr/) | 87 decision records (0012–0100; 0050 and 0053 reserved, never written) |
-| [Full documentation map](docs/README.md) | Layered index and reading paths by role |
-
-Most documentation is written in Chinese; this page and
-[Compose deployment](docs/deployment.md) are in English.
+| **[The local architecture panel](#0-see-the-whole-thing-first)** | `scripts/dev.sh panel` — the whole picture, computed, offline |
+| [The ten-minute version](docs/HIGHLIGHTS.md) | A real event stream, gate numbers, technical judgements (Chinese) |
+| [Known gaps](docs/known-gaps.md) | **What is not done**, five categories, each with a criterion (Chinese) |
+| [Implementation status](docs/status.md) | Per-PR implementation and test evidence (Chinese) |
+| [Architecture baseline](docs/architecture-baseline.md) | Product boundary, layering, reliability protocols (Chinese) |
+| [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics (Chinese) |
+| [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it (Chinese) |
+| [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
+| [ADR index](docs/adr/) | 87 implementation-period decision records (0012–0100; 0050 and 0053 reserved but never written) |
+| [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---
 
 ## License and provenance
 
-Released under the [Apache License 2.0](LICENSE). Retain [NOTICE.md](NOTICE.md)
-when using or distributing — Apache-2.0 §4(d) requires it. Dependency licenses
-are unaffected by this repository's license; the rules are in
+Released under the [Apache License 2.0](LICENSE). Keep [NOTICE.md](NOTICE.md)
+when using or distributing — Apache-2.0 §4(d) requires it. Dependencies keep
+their own licenses, unaffected by this repository's; the rules are in
 [compliance.md](docs/compliance.md).
 
 This repository is a clean-room implementation; the boundary is described in
-[NOTICE.md](NOTICE.md) and the [compliance notes](docs/compliance.md).
+[NOTICE.md](NOTICE.md) and the [compliance note](docs/compliance.md).

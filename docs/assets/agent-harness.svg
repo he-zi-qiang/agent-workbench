@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 906" width="1240" height="906" class="d" role="img" aria-label="Agent Harness：调用方 → DelegationScopingExecutor → BudgetedAgentExecutor → BoundedParallelExecutor → ClaudeLikeAgentRuntime → ToolGateway → ToolExecutor → handler，每一层都实现同一个 AgentExecutor 协议">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1240" height="906" fill="none"/>
+<text x="24" y="36" class="h" text-anchor="start">Agent Harness：一次运行被谁裹着</text>
+<text x="24" y="58" class="s" text-anchor="start">「唯一一条工具循环」说的是这条循环的实现只有一份，不是它只能被进入一层。</text>
+<text x="24" y="76" class="s" text-anchor="start">外面这几层每一层只做一件事，而且都实现同一个 ports/agent_executor.AgentExecutor 协议——所以加一层不改调用方，删一层也不改。</text>
+<rect x="24" y="100" width="782" height="56" rx="10" class="sunk"/>
+<text x="42" y="124" class="t m" text-anchor="start">图节点 / Chat 回合 / Code 会话</text>
+<text x="788" y="124" class="f m" text-anchor="end">调用方</text>
+<text x="42" y="144" class="f" text-anchor="start">拿到的是一个 AgentExecutor，不知道下面有几层，也不需要知道。</text>
+<path d="M415 156 L415 172" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="172" width="782" height="72" rx="10" class="paper"/>
+<text x="42" y="196" class="t m" text-anchor="start">DelegationScopingExecutor</text>
+<text x="788" y="196" class="f m" text-anchor="end">application/delegation.py</text>
+<text x="42" y="216" class="f" text-anchor="start">为每一次运行进入一个委派作用域。它裹的是执行器而不是节点：能不能委派是「运行」的属性，于是以后任何一个新的调用方都自动被覆盖。子运行的深度比</text>
+<text x="42" y="232" class="f" text-anchor="start">父大 1，正是因为进作用域那一刻 ContextVar 还持有父的上下文。</text>
+<path d="M415 244 L415 260" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="260" width="782" height="56" rx="10" class="paper"/>
+<text x="42" y="284" class="t m" text-anchor="start">BudgetedAgentExecutor</text>
+<text x="788" y="284" class="f m" text-anchor="end">workflows/task_handlers.py</text>
+<text x="42" y="304" class="f" text-anchor="start">ADR-040：每次 agent 调用先向 Registry 记一笔账，而且在拿并发名额之前——记账的那个往返不该占着一个名额发生。目前只记录，还不按次数拒绝。</text>
+<path d="M415 316 L415 332" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="332" width="782" height="72" rx="10" class="paper"/>
+<text x="42" y="356" class="t m" text-anchor="start">BoundedParallelExecutor</text>
+<text x="788" y="356" class="f m" text-anchor="end">workflows/task_handlers.py</text>
+<text x="42" y="376" class="f" text-anchor="start">同时最多几次 agent 调用。子代理有自己的第二个池：共用父的池会死锁——父在一次工具调用里等着，名额却一直被它占着，而子在排队等那个只有父返回才</text>
+<text x="42" y="392" class="f" text-anchor="start">会释放的名额。</text>
+<path d="M415 404 L415 420" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="420" width="782" height="56" rx="10" class="acc"/>
+<text x="42" y="444" class="t m" text-anchor="start">ClaudeLikeAgentRuntime</text>
+<text x="788" y="444" class="f m" text-anchor="end">runtime/agent_runtime.py</text>
+<text x="42" y="464" class="f" text-anchor="start">循环本身。全仓唯一一处消费模型流的地方。</text>
+<path d="M415 476 L415 492" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="492" width="782" height="56" rx="10" class="acc"/>
+<text x="42" y="516" class="t m" text-anchor="start">ToolGateway</text>
+<text x="788" y="516" class="f m" text-anchor="end">runtime/tool_gateway.py</text>
+<text x="42" y="536" class="f" text-anchor="start">一次工具调用的四个阶段。默认拒绝，依据是提交时冻结的授权信封。</text>
+<path d="M415 548 L415 564" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="564" width="782" height="56" rx="10" class="paper"/>
+<text x="42" y="588" class="t m" text-anchor="start">ToolExecutor</text>
+<text x="788" y="588" class="f m" text-anchor="end">runtime/tool_executor.py</text>
+<text x="42" y="608" class="f" text-anchor="start">跑一个已经被授权的 handler，带超时与 5 秒心跳，保证恰好一个 ToolResult 离开。</text>
+<path d="M415 620 L415 636" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="636" width="782" height="56" rx="10" class="sunk"/>
+<text x="42" y="660" class="t m" text-anchor="start">handler</text>
+<text x="788" y="660" class="f m" text-anchor="end">adapters/tools/ · adapters/mcp/</text>
+<text x="42" y="680" class="f" text-anchor="start">17 个进程内工具，加上经 MCP 接入的那些。它们看不见上面任何一层。</text>
+<rect x="836" y="100" width="380" height="290" rx="10" class="panel"/><text x="854" y="126" class="h m" text-anchor="start">组合根在启动时把它装起来</text><text x="854" y="145" class="s" text-anchor="start">apps/*/composition.py · bootstrap/</text>
+<text x="854" y="170" class="t" text-anchor="start">工具注册表是不可变的</text>
+<text x="854" y="189" class="f" text-anchor="start">跑起来之后不会多出一个工具——否则「当时有哪些工具」这个问题，对一</text>
+<text x="854" y="204" class="f" text-anchor="start">份已经写完的事件日志就没有答案。撤销走的是实时授权，不是改这张表</text>
+<text x="854" y="219" class="f" text-anchor="start">。</text>
+<text x="854" y="246" class="t" text-anchor="start">DeferredExecutor 把环剪开</text>
+<text x="854" y="265" class="f" text-anchor="start">启动运行的那个工具必须在网关读的注册表里；网关被构造进运行时；而</text>
+<text x="854" y="280" class="f" text-anchor="start">运行时正是那个工具需要的东西。总得有个东西先被命名再存在。</text>
+<text x="854" y="307" class="t" text-anchor="start">MCP 目录在启动时冻结一次</text>
+<text x="854" y="326" class="f" text-anchor="start">Worker 起来之后再启动的 server，那个 Worker 这辈子都看不到它。</text>
+<rect x="836" y="406" width="380" height="204" rx="10" class="panel"/><text x="854" y="432" class="h m" text-anchor="start">同一份协议的其它实现</text><text x="854" y="451" class="s" text-anchor="start">ports/agent_executor.py :: AgentExecutor</text>
+<rect x="854" y="466" width="344" height="38" rx="8" class="paper"/>
+<text x="868" y="482" class="f m" text-anchor="start">DeferredExecutor</text>
+<text x="868" y="497" class="f" text-anchor="start">一格占位，装配期把环剪开</text>
+<rect x="854" y="510" width="344" height="38" rx="8" class="paper"/>
+<text x="868" y="526" class="f m" text-anchor="start">ArtifactPersistingExecutor</text>
+<text x="868" y="541" class="f" text-anchor="start">把纯文本的完成结果落成产物，不动协议</text>
+<rect x="854" y="554" width="344" height="38" rx="8" class="paper"/>
+<text x="868" y="570" class="f m" text-anchor="start">FakeAgentExecutor</text>
+<text x="868" y="585" class="f" text-anchor="start">脚本化的测试替身，演示与门禁用它</text>
+<rect x="836" y="622" width="380" height="254" rx="10" class="panel"/><text x="854" y="648" class="h m" text-anchor="start">循环上的上限，写在配置里</text><text x="854" y="667" class="s" text-anchor="start">runtime.* · multi_agent.*</text>
+<text x="854" y="682" class="f m" text-anchor="start">max_steps</text>
+<text x="1198" y="682" class="f m" text-anchor="end">12</text>
+<text x="854" y="701" class="f m" text-anchor="start">max_tool_calls</text>
+<text x="1198" y="701" class="f m" text-anchor="end">32</text>
+<text x="854" y="720" class="f m" text-anchor="start">max_parallel_read_tools</text>
+<text x="1198" y="720" class="f m" text-anchor="end">4</text>
+<text x="854" y="739" class="f m" text-anchor="start">max_parallel_write_tools</text>
+<text x="1198" y="739" class="f m" text-anchor="end">1 · 单值</text>
+<text x="854" y="758" class="f m" text-anchor="start">model_timeout_seconds</text>
+<text x="1198" y="758" class="f m" text-anchor="end">120</text>
+<text x="854" y="777" class="f m" text-anchor="start">context_soft_limit_ratio</text>
+<text x="1198" y="777" class="f m" text-anchor="end">0.75</text>
+<text x="854" y="796" class="f m" text-anchor="start">context_compaction_enabled</text>
+<text x="1198" y="796" class="f m" text-anchor="end">false</text>
+<text x="854" y="815" class="f m" text-anchor="start">executor</text>
+<text x="1198" y="815" class="f m" text-anchor="end">&quot;claude_like&quot; · 单值</text>
+<text x="854" y="840" class="f" text-anchor="start">单值 Literal 的意思是：这个字段在类型上只有一个合法值。改它先写</text>
+<text x="854" y="855" class="f" text-anchor="start">一份 ADR，而不是加一个环境变量。</text>
+<text x="24" y="892" class="s" text-anchor="start">每一层都实现同一个协议，所以「一次委派是一次运行、不是一个新循环」不需要任何人守规矩——委派工具的 handler 拿到的就是这一摞里的同一个执行器。</text>
+</svg>

@@ -236,6 +236,15 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # 句子上，把它们规整成 ASCII 标点只会让它们更难读。RUF001 在这里要抓的是标识符里
 # 混进来的西里尔字母，不是一份刻意用中文写的豁免说明。
 "tests/architecture/test_config_leaves_have_readers.py" = ["RUF001", "RUF003"]
+# 架构面板是一个用中文写给读者看的页面，外加一整份内联进来的 HTML/CSS/JavaScript。
+# 两条豁免各有各的理由，都不是「这文件太吵所以关掉」：
+#   RUF001/2/3 —— 面板上每一句解释都是中文散文，标点当然是全角的。这条规则要抓的是
+#   标识符里混进来的西里尔字母，而这里没有一个标识符受影响。
+#   E501 —— PAGE 那个字符串里是另外两门语言。一条 CSS 规则或一行 JSX 模板在 88 列
+#   处折行，读起来不会更清楚，改起来反而更容易折错；这与 test_docx_parsing.py 里
+#   逐字节的 OOXML 是同一类豁免。上面那一半（真正的 Python）仍然由 ruff format
+#   管着，它换行的地方和别处一样。
+"scripts/architecture_panel.py" = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.pyright]
 pythonVersion = "3.12"

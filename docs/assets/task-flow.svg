@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1256 660" width="1256" height="660" class="d" role="img" aria-label="Task 运行链路：提交冻结授权信封与图版本，SKIP LOCKED 认领拿租约与 epoch，执行图，审批中断，崩溃后另一个 Worker 换新 epoch 从检查点续跑">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1256" height="660" fill="none"/>
+<text x="22" y="36" class="h" text-anchor="start">一次 Task 运行</text>
+<text x="22" y="58" class="s" text-anchor="start">崩溃不是数据丢失，是另一个 Worker 换一个 epoch 从检查点接着跑。</text>
+<rect x="22" y="96" width="186" height="148" rx="10" class="paper"/><circle cx="44" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="44" y="122" class="f m ai" text-anchor="middle">1</text><text x="64" y="123" class="t" text-anchor="start">提交</text><text x="38" y="144" class="f" text-anchor="start">租户级幂等键</text><text x="38" y="160" class="f" text-anchor="start">+ 输入指纹</text><text x="38" y="176" class="f" text-anchor="start">冻结 graph_version</text><text x="38" y="192" class="f" text-anchor="start">授权信封随 Task 存下</text>
+<rect x="228" y="96" width="186" height="148" rx="10" class="paper"/><circle cx="250" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="250" y="122" class="f m ai" text-anchor="middle">2</text><text x="270" y="123" class="t" text-anchor="start">认领</text><text x="244" y="144" class="f" text-anchor="start">FOR UPDATE</text><text x="244" y="160" class="f" text-anchor="start">SKIP LOCKED</text><text x="244" y="176" class="f" text-anchor="start">拿到不可变的</text><text x="244" y="192" class="f" text-anchor="start">ExecutionLease + epoch</text>
+<rect x="434" y="96" width="186" height="148" rx="10" class="paper"/><circle cx="456" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="456" y="122" class="f m ai" text-anchor="middle">3</text><text x="476" y="123" class="t" text-anchor="start">认领后判定</text><text x="450" y="144" class="f" text-anchor="start">Registry 状态</text><text x="450" y="160" class="f" text-anchor="start">+ checkpoint 位置</text><text x="450" y="176" class="f" text-anchor="start">纯函数，无 I/O</text><text x="450" y="192" class="f" text-anchor="start">所以可以单独测</text>
+<rect x="640" y="96" width="186" height="148" rx="10" class="acc"/><circle cx="662" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="662" y="122" class="f m ai" text-anchor="middle">4</text><text x="682" y="123" class="t" text-anchor="start">执行图</text><text x="656" y="144" class="f" text-anchor="start">按冻结的版本编译</text><text x="656" y="160" class="f" text-anchor="start">检查点写入前过</text><text x="656" y="176" class="f" text-anchor="start">fence：SELECT … FOR</text><text x="656" y="192" class="f" text-anchor="start">UPDATE + advisory lock</text>
+<rect x="846" y="96" width="186" height="148" rx="10" class="acc"/><circle cx="868" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="868" y="122" class="f m ai" text-anchor="middle">5</text><text x="888" y="123" class="t" text-anchor="start">每个节点</text><text x="862" y="144" class="f" text-anchor="start">重取身份与信封</text><text x="862" y="160" class="f" text-anchor="start">画像工具 ∩ 信封</text><text x="862" y="176" class="f" text-anchor="start">AgentExecutor</text><text x="862" y="192" class="f" text-anchor="start">→ Tool Gateway</text>
+<rect x="1052" y="96" width="186" height="148" rx="10" class="ok"/><circle cx="1074" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="1074" y="122" class="f m ai" text-anchor="middle">6</text><text x="1094" y="123" class="t" text-anchor="start">显式终态</text><text x="1068" y="144" class="f" text-anchor="start">TaskSucceeded</text><text x="1068" y="160" class="f" text-anchor="start">TaskFailed</text><text x="1068" y="176" class="f" text-anchor="start">没有「看起来成功」</text><text x="1068" y="192" class="f" text-anchor="start">这一档</text>
+<path d="M208 170.0 L228 170.0" class="edge" marker-end="url(#a)"/>
+<path d="M414 170.0 L434 170.0" class="edge" marker-end="url(#a)"/>
+<path d="M620 170.0 L640 170.0" class="edge" marker-end="url(#a)"/>
+<path d="M826 170.0 L846 170.0" class="edge" marker-end="url(#a)"/>
+<path d="M1032 170.0 L1052 170.0" class="edge" marker-end="url(#a)"/>
+<rect x="746" y="292" width="366" height="92" rx="10" class="warn"/>
+<text x="762" y="316" class="t" text-anchor="start" fill="var(--warn)">需要审批？</text>
+<text x="762" y="336" class="f" text-anchor="start">图在 approval 处 interrupt（全图唯一的中断点）→ waiting_approval</text>
+<text x="762" y="353" class="f" text-anchor="start">决定写进权威账本；跨进程恢复后重新施加，而不是重新问一次人</text>
+<text x="762" y="370" class="f" text-anchor="start">export_requires_approval 为假时这道闸被跳过，而不是被伪造</text>
+<path d="M939.0 244 L939.0 292" class="edge" marker-end="url(#a)"/>
+<path d="M1112 338 L1145.0 338 L1145.0 244" class="edge" marker-end="url(#a)"/>
+<rect x="22" y="424" width="1212" height="112" rx="12" class="panel" stroke-dasharray="6 5"/>
+<text x="40" y="452" class="t" text-anchor="start">崩溃恢复：租约 + 心跳 + epoch fencing</text>
+<text x="40" y="476" class="f" text-anchor="start">Worker 被杀 / 超时 / 机器掉电 → 心跳停了 → 租约到期</text>
+<text x="40" y="494" class="f" text-anchor="start">另一个 Worker 以新的 epoch 重新认领同一个 Task，旧 epoch 的写入从此过不了账本围栏</text>
+<text x="40" y="512" class="f" text-anchor="start">从 LangGraph 检查点续跑；审批决定从权威账本重新施加；已经发生过的副作用由 operation_key 挡住第二次</text>
+<path d="M939.0 384 L939.0 424" class="edge dash" marker-end="url(#a)"/>
+<path d="M22 480 L8 480 L8 170.0 L640 170.0" class="edge dash" marker-end="url(#a)"/>
+<text x="22" y="570" class="s" text-anchor="start">节点在**领取时**拿到的那个不可变 ExecutionLease 下写入——不是每次回头向 Registry 问当前 epoch。</text>
+<text x="22" y="590" class="f" text-anchor="start">否则一个已经失去租约的 Worker 会拿着顶替者的 epoch 通过账本围栏，而那正是围栏要挡的那件事。</text>
+<text x="22" y="620" class="f m" text-anchor="start">workflows/execution_scope.py · application/task_recovery.py · adapters/langgraph/ · adapters/persistence/</text>
+<text x="22" y="640" class="f" text-anchor="start">可靠性配套：事务 Outbox、自研带 fencing 的 PostgreSQL checkpointer、retry / dead-letter、per-stream 无缺口事件序列与幂等 event_key。</text>
+</svg>
