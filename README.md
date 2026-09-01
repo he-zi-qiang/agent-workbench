@@ -723,8 +723,22 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 `.env` 不是可选的：上面第一条命令没有它就停在 `3 validation errors for
 LoadedSettings`，读起来像 checkout 坏了，而它不是。
 
-**完整本机拓扑**（PostgreSQL、Qdrant、API、Worker、控制台）见
-[本机运行手册](docs/running-locally.md)；容器化演示见
+**整套跑起来**（PostgreSQL、Qdrant、API、双 Worker、控制台）。Windows 上只需要
+Docker Desktop，不需要 uv / Python / Node：
+
+```bat
+scripts\stack.cmd            :: 构建、启动、等到健康、打开控制台（双击亦可）
+```
+
+macOS / Linux 是同样的两步——**分两步不是讲究**，`compose up --build` 在带中文的
+目录下会死在 buildx 的 gRPC header 上，原因见下方文档：
+
+```bash
+docker build -t agent-workbench:local . && docker compose --profile demo up -d --wait
+```
+
+控制台在 `http://127.0.0.1:8000/ui/`。原生拓扑见
+[本机运行手册](docs/running-locally.md)，容器化细节见
 [Compose 部署](docs/deployment.md)——API 只映射到 `127.0.0.1:8000`。
 
 **门禁与规模的实测数字**在 [HIGHLIGHTS §2](docs/HIGHLIGHTS.md#2-门禁与规模)，
