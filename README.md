@@ -23,9 +23,29 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 ### 0.1 一条命令，一个离线的架构面板
 
+**macOS / Linux：**
+
 ```bash
 scripts/dev.sh panel
 ```
+
+**Windows**（`dev.sh` 是 bash，在 Windows 上没有这条路）：
+
+```bat
+scripts\panel.cmd
+```
+
+在资源管理器里双击也行。cmd 与 PowerShell 都能跑；两处都接同样的参数
+（`--port 9000`、`--no-open`、`--check`）。要跳过启动器直接跑，用 `py` 而不是
+`python`：
+
+```bat
+py -3 scripts\architecture_panel.py --serve
+```
+
+启动器存在的一半理由就在这个差别里：一台**没装 Python** 的 Windows 上，PATH 里照样有一个
+`python.exe`——那是应用商店的执行别名，跑起来会打开商店然后退出。启动器逐个
+**试着跑**候选解释器而不是问名字解析得到不，所以它不会把面板交给那个壳子。
 
 它构建一个自包含的 HTML 并在 `127.0.0.1:8770` 上提供服务。**不需要数据库、不需要
 Qdrant、不需要 API key、不联网**——它读的是工作树本身。十二个分区：
@@ -60,8 +80,19 @@ uv run python scripts/architecture_panel.py --check
 
 会在它点名的东西不存在时失败。所以手写的那一半也不能悄悄烂掉。
 
+**它不 import 标准库以外的任何东西**，所以在一台只装了 Python 的机器上就能开——
+不需要 `uv sync`、不需要虚拟环境、不需要仓库里其它任何一个服务。这条性质是刻意维持的，
+不是碰巧：面板是一个人**还不知道这个仓库是什么**的时候打开的东西，一个要求先把环境
+装好的第一步就把顺序搞反了。`tests/deployment/test_architecture_panel.py` 守着它，
+连同另外几条 Windows 上才会犯的错——路径分隔符、控制台代码页、批处理文件的编码与换行。
+
+> **关于 Windows 的如实说明。** 本仓库的测试跑在 POSIX 上，上面那些是**规则断言**，
+> 不是一次 Windows 上的真实运行：每一条断言的是"让 Windows 行为成立的那条规则"，
+> 而不是"在 Windows 上跑过了"。规则比运行弱，测试里写明了这一点。
+
 其它用法：`--build DIR` 只产出静态页面，`--json` 只吐扫描出的数据（可以拿去做别的
-检查），`--port` 换端口。**监听地址写死在 `127.0.0.1`**——这个页面把源码树的 docstring
+检查），`--port` 换端口。这三个都要直接调那个 Python 脚本——两个启动器都会自己补上
+`--serve`，所以经它们传 `--build` 会既构建又起服务。**监听地址写死在 `127.0.0.1`**——这个页面把源码树的 docstring
 铺开给人看，而 `python -m http.server` 的默认绑定是每一个网卡。
 
 ### 0.2 三十秒版本
@@ -646,7 +677,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
 | `docs/adr/` | 87 份决策记录，编号 0012–0100（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
-| `scripts/` | `dev.sh`（本机唯一知道环境的地方）、`architecture_panel.py`（面板）、评测与基准脚本 |
+| `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`panel.cmd`（面板的 Windows 入口，ASCII + CRLF）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
 ---
 
@@ -654,10 +685,14 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 
 前置：Python 3.12 与 `uv`。
 
-**先看一眼整个项目**——不需要数据库、不需要联网、不需要 key：
+**先看一眼整个项目**——不需要数据库、不需要联网、不需要 key，也不需要先把环境装起来：
 
 ```bash
-scripts/dev.sh panel
+scripts/dev.sh panel          # macOS / Linux
+```
+
+```bat
+scripts\panel.cmd             :: Windows（双击亦可）
 ```
 
 **零依赖演示**——输出逐字节可复现：
