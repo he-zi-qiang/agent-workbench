@@ -727,7 +727,9 @@ export function AppShell() {
                 type="button"
               >
                 <ThemeIcon aria-hidden="true" size={19} />
-                <span>主题：{THEME_LABEL[themeMode].text}</span>
+                <span className="aw-mobile-more-copy">
+                  <strong>主题：{THEME_LABEL[themeMode].text}</strong>
+                </span>
               </button>
               <button
                 className="aw-mobile-more-link"
@@ -735,7 +737,9 @@ export function AppShell() {
                 type="button"
               >
                 <Settings2 aria-hidden="true" size={19} />
-                <span>设置</span>
+                <span className="aw-mobile-more-copy">
+                  <strong>设置</strong>
+                </span>
               </button>
             </nav>
           </section>
