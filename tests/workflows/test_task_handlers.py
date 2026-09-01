@@ -177,7 +177,7 @@ def _text_for(node: str | None) -> str:
     if node == "plan":
         return (
             '{"steps":[{"step_id":"step_1","sequence":1,'
-            '"objective":"Collect evidence","depends_on":[]}]}'
+            '"objective":"Collect evidence"}]}'
         )
     if node == "critic":
         return (
@@ -281,9 +281,8 @@ def _provider(
         '{"steps":[]} trailing',
         '{"steps":[],"steps":[]}',
         '{"steps":[]}',
-        '{"steps":[{"step_id":"step_1","sequence":"1","objective":"x","depends_on":[]}]}',
-        '{"steps":[{"step_id":"step_1","sequence":1,"objective":"x","depends_on":["step_1"]}]}',
-        '{"steps":[{"step_id":"step_1","sequence":1,"objective":"x","depends_on":[]}],"extra":1}',
+        '{"steps":[{"step_id":"step_1","sequence":"1","objective":"x"}]}',
+        '{"steps":[{"step_id":"step_1","sequence":1,"objective":"x"}],"extra":1}',
     ],
 )
 def test_planner_rejects_malformed_or_unsafe_json(payload: str) -> None:
@@ -291,17 +290,36 @@ def test_planner_rejects_malformed_or_unsafe_json(payload: str) -> None:
         decode_plan_output(payload)
 
 
-def test_planner_validates_the_full_task_plan_including_dependency_order() -> None:
-    decoded = decode_plan_output(
-        '{"steps":[{"step_id":"step_1","sequence":1,"objective":"First","depends_on":[]},'
-        '{"step_id":"step_2","sequence":2,"objective":"Second","depends_on":["step_1"]}]}'
-    )
+def test_planner_validates_the_full_task_plan_not_just_each_step() -> None:
+    """The rules that survive `depends_on`'s removal, and they are plan-wide.
 
+    This test used to be named "...including dependency order" and its second
+    half fed a step depending on one that came after it. That rule went with
+    the field (ADR-100): nothing ever executed the ordering it declared. What a
+    plan is still refused for is plan-wide rather than per-step, which is why
+    a per-step decoder cannot catch either of these.
+    """
+
+    decoded = decode_plan_output(
+        '{"steps":[{"step_id":"step_1","sequence":1,"objective":"First"},'
+        '{"step_id":"step_2","sequence":2,"objective":"Second"}]}'
+    )
     assert tuple(step.step_id for step in decoded) == ("step_1", "step_2")
+
+    # Sequences must be contiguous from 1: a plan numbered 1, 3 is a plan with
+    # a step somebody dropped.
     with pytest.raises(StructuredOutputError):
         decode_plan_output(
-            '{"steps":[{"step_id":"step_2","sequence":1,"objective":"Second",'
-            '"depends_on":["step_1"]}]}'
+            '{"steps":[{"step_id":"step_1","sequence":1,"objective":"First"},'
+            '{"step_id":"step_2","sequence":3,"objective":"Second"}]}'
+        )
+
+    # Step ids must be unique: two steps under one id make the plan's own
+    # references ambiguous.
+    with pytest.raises(StructuredOutputError):
+        decode_plan_output(
+            '{"steps":[{"step_id":"step_1","sequence":1,"objective":"First"},'
+            '{"step_id":"step_1","sequence":2,"objective":"Second"}]}'
         )
 
 
