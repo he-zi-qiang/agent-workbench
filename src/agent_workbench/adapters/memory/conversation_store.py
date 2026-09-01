@@ -14,7 +14,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_conversation_turn_id,
+    new_message_id,
+)
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import AgentOutcome, stale_execution_outcome
 from agent_workbench.ports.conversation_store import (
@@ -373,7 +377,7 @@ class InMemoryConversationStore:
                 message=user_message,
             )
             turn = StoredChatTurn(
-                turn_id=new_id("turn"),
+                turn_id=new_conversation_turn_id(),
                 session_id=session_id,
                 idempotency_key=idempotency_key,
                 request_hash=request_hash,

@@ -35,7 +35,6 @@ from pydantic import (
 from agent_workbench.application.chat import (
     ChatRequest,
     ChatService,
-    new_session_id,
 )
 from agent_workbench.application.citation_source import (
     CitationSourceUnavailableError,
@@ -43,7 +42,7 @@ from agent_workbench.application.citation_source import (
 from agent_workbench.apps.api.disconnects import watched
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.context import Citation
-from agent_workbench.domain.identifiers import Identifier
+from agent_workbench.domain.identifiers import Identifier, new_session_id
 from agent_workbench.domain.runs import BudgetUsage
 from agent_workbench.ports.cancellation import CancellationSource
 

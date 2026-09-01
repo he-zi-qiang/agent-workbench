@@ -27,6 +27,110 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-08-31（第六十五批）：B-10 剩下的六处死符号，以及查下去发现的整张 id 词表
+
+上一批处置了 B-10 的前两处。这一批做完剩下的，**而其中一处查下去比登记时严重得多**。
+
+### 1. 「四个 id 铸造器」其实是整张词表都对不上
+
+登记时写的是「四个零引用；domain 声明 `thread`，实际产出 `thr`」。实际情况：
+
+| | 条数 |
+|---|---:|
+| `domain/identifiers.py` 声明的前缀 | 11 |
+| 生产真的通过它铸造的 | **3** |
+| 在调用点用**字符串字面量**铸造的 | **6** |
+| 在**另一层**自己声明的第 12 个（`application/tasks.py` 的 `thr`） | 1 |
+
+**两处字面量各出现在两个文件里**，而这是最要紧的一条：
+`new_id("turn")` 在两个 conversation store 里——**正是 `tests/contracts` 拿同一套用例
+跑的那两个实现**，而那套契约不断言前缀，所以两者一旦分叉，恰好在这个仓库声称
+「分叉会变成失败而不是生产惊喜」的地方看不见。`new_id("ses")` 同理，在两个 application 模块里。
+
+**处置（所有铸造出来的前缀值一个字节都没变，17 个逐条实测过）：**
+
+- **删掉两个描述不存在之物的前缀。** `GRAPH_NODE_ID_PREFIX`——图节点是被图声明**命名**的
+  （`understand`、`plan`、`route`），从不铸造。`STREAM_ID_PREFIX`——**这个不只是闲置，是被反驳**：
+  stream id 要么是借来的（chat/code 用 session id），要么由拥有那条流的人铸造
+  （`triage`、`kgx`）。一个通用的 `stream_` 等于说流有自己的身份空间，而它没有。
+- **`WORKFLOW_THREAD_ID_PREFIX` 由 `"thread"` 改为 `"thr"`**（库里就是这个），
+  并删掉 `application/tasks.py` 那份第二声明。**两层各声明一次同一个概念、值还不一样，
+  而死的那个在 domain**——这是本批最典型的一处。
+- **6 个字面量各自有了名字。** 域对象的进 `domain/identifiers.py`；进程 id
+  （`worker` / `ingester`）留在 `bootstrap/projections.py`——**worker 不是域对象**，
+  规则只要求前缀有名字，不要求名字住在 domain。
+- **两个「审批 id」并排声明并写明区别**：`apr_` 是工具调用交给交互闸门的**瞬时问题**，
+  `approval_` 是带 `decision_version` 与账本的**持久 Task 审批行**。
+  它们本来就是两个不同的东西，此前是两个调用点各写各的字面量。
+- 顺带删掉 `application/chat.py` 里一个把自己写成无限递归的 `new_session_id` 包装器
+  ——它和 `code_session.py` 的同名包装器是同一个前缀的两份。
+
+**守门测试** `tests/architecture/test_identifier_vocabulary.py`，3 条：
+`new_id` 在声明模块之外不许收到字符串字面量；声明了却没人铸造的前缀要删；
+两个前缀不许铸出同一个串。**对照组实测**：往一个模块塞
+`new_id("oops")`，第一条红。
+
+### 2. 三处删除，每一处的理由都写进了代码
+
+- **`ProjectPathSegment`**：删，**按本模块自己的论证**。隔壁 `ProjectRelativePath` 的
+  注释写着「A second, weaker copy of it spelled as a regex would be a rule that can
+  drift from the one that matters」——**它就是那份副本**。而且两者**已经漂了**：
+  约束按 255 *字符*，`validate_relative_path` 按 255 *字节*，对任何非 ASCII 文件名
+  这是两个不同的上限，而生效的是函数那个。
+- **`ToolSpec.output_schema`**：删。无生产者也无消费者；**看起来像生产者的那处不是它**
+  ——`apps/sandbox_mcp/server.py` 设的是 **MCP 自己** `types.Tool` 上的另一个属性。
+  删而不接的理由要写清楚：网关校验的是*参数*；校验*结果*意味着决定
+  「一次跑完并返回的调用因形状被判失败时，模型看到什么」，那是对 `tool_executor`
+  唯一承诺（"exactly one ToolResult leaves this method"）的行为改动，
+  **要自己的 ADR，而为了给一个没人要的字段找活干去发明它是本末倒置**。
+  golden 契约同步更新——3 行，正是这个字段。
+- **`summarise_children`**：删。docstring 说的两处用途**都有更好的答案在跑**：
+  它写给的那条拒绝消息报的是**计数**（模型下一步取决于几个而不是哪几个，
+  一串 run id 是它得读过去的噪音）；进度是每个子运行自己发 `AgentDelegated`，
+  控制台据此画委派树（ADR-094），一个拼接字符串是对事件流已有内容的二次弱化渲染。
+
+### 3. 第七处删不掉，移交 B-05——而这是本批最值得记的一条
+
+`TaskStep.depends_on` 被四道校验守着、`_PLAN_CONTRACT` 明确要求模型产出它，
+**然后没有任何东西执行它**：计划被渲染进后续 prompt 时是一串扁平编号
+（`agent_profiles.py`），而研究图的形状在提交时就冻结了，不按步骤分支。
+**计划是给模型的建议，不是任何东西调度的 DAG。**
+
+按本条判据应当删掉。**删不了，而原因是真的**：`TaskState.plan` 是
+`tuple[TaskStep, ...]`，从检查点的图通道重建，而 `DomainModel` 是 `extra="forbid"`
+——删字段会让**部署时每一个在飞的 Task 无法恢复**。
+
+那正是 upcaster 机制的职责，而[B-05](./known-gaps.md) 记着它的生产注册表**是空的、
+从未在真实数据上跑过**。所以：字段留下，**口径改诚实**（它自己写着「记录并校验，
+从不执行」，以及删除被什么挡住），**删除移交 B-05**。
+
+**一条缺口的判据里挂着另一条缺口的前置，就该由后者持有。**
+顺带，这给了 B-05 第一个**具体的、值得为之写第一条 upcaster 的对象**
+——比等一个假想的历史版本具体得多。
+
+### 4. 门禁
+
+四个环境全部重测：
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant（本机，空载） | `4020 passed / 12 skipped`（13 分 03 秒） |
+| 后端，不起任何外部服务 | `3232 passed / 800 skipped` |
+| CI 那组五个服务型目录 | `1376 passed / 2 skipped`（11 分 21 秒） |
+| 前端 Vitest（53 个文件） | `842 passed` |
+
+前两列各 +3，正是 id 词表守门那三条。**五目录那一列又一次重测**——
+这一批同样动了 `src/`，而且动的是 `adapters/persistence`、`application`、`workers`
+里真正铸造 id 的那些行，正好落在那五个目录测得到的地方。
+
+`ruff format --check`（621 files）、`ruff check`、`pyright strict 0 errors` 全绿。
+B-10 据此关闭（七处里六处满足，第七处移交）。
+
+**没有为本批写 ADR**，理由写下来而不是省略：这一批没有做任何**决定**——
+它把几处声称了而不成立的东西改成成立的，或者删掉。唯一像决定的是
+「不给 `output_schema` 接上校验」，而那恰恰是**拒绝**做一次需要 ADR 的行为改动。
+
+---
 ## 2026-08-31（第六十四批）：把边界收干净——守卫改成白名单，两处"读起来像边界"的符号落地
 
 前六批修的是口径与接线。这一批修的是**边界本身**：一条守卫的形状，

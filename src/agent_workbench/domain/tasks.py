@@ -124,6 +124,27 @@ class TaskStep(DomainModel):
     step_id: Identifier
     sequence: int = Field(ge=1, le=MAX_PLAN_STEPS)
     objective: TaskObjective
+    #: **Recorded and validated; never executed.** Stated plainly because the
+    #: four checks below, plus `TaskPlan`'s "only preceding steps" rule, plus
+    #: the planner contract that asks the model for this field, together read
+    #: like a dependency graph something walks. Nothing walks it: the plan is
+    #: rendered to later prompts as a flat numbered list
+    #: (`agent_profiles.py`), and the research graph's shape is frozen at
+    #: submission -- it does not branch per step. **The plan is advice to the
+    #: model, not a DAG this system schedules.**
+    #:
+    #: So why is it still here. Deleting it is not free: `TaskState.plan` is a
+    #: `tuple[TaskStep, ...]` reconstructed from the checkpointed graph
+    #: channel, and `DomainModel` is `extra="forbid"` -- so a checkpoint
+    #: written before the removal would stop loading, and every Task in flight
+    #: at deploy time would fail to resume. That is precisely the job of the
+    #: upcaster machinery, whose production registry is **empty** and has never
+    #: run on real data (known gap B-05).
+    #:
+    #: **Removal is therefore gated on B-05's first real upcaster**, not on
+    #: anybody's appetite for tidiness. Until then the honest thing is this
+    #: paragraph: the validation is real, and what it validates is a claim the
+    #: model made, not an order anything follows.
     depends_on: tuple[Identifier, ...] = Field(default=(), max_length=MAX_PLAN_STEPS)
 
     @model_validator(mode="after")

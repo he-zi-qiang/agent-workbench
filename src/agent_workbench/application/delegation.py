@@ -29,7 +29,7 @@ be indistinguishable in the event log from one somebody did.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -447,12 +447,19 @@ def clip_report(text: str, limit: int) -> tuple[str, bool]:
     return text[:limit], True
 
 
-def summarise_children(spawned: Sequence[SpawnedChild]) -> str:
-    """One line per child, for progress reporting and for refusal messages."""
-
-    return ", ".join(
-        f"{child.definition_name}({child.child_agent_run_id})" for child in spawned
-    )
+# `summarise_children` was here until 2026-08-31 -- one joined line of
+# `name(run_id)` per child. Its docstring named two uses and **had neither**,
+# and both turn out to have a better answer already in place:
+#
+# * The refusal it was written for (`adapters/tools/delegate.py`) reports
+#   *counts*: "this run has started 3 sub-agents and has 1 still running,
+#   against an allowance of 4". That is the right shape -- what the model has
+#   to decide next depends on how many, not on which, and a wall of run ids in
+#   a refusal is noise the model then has to read past.
+# * Progress is reported per child, as an `AgentDelegated` event. The console
+#   draws its delegation tree from those (ADR-094), so each child announces
+#   itself and a joined string would be a second, weaker rendering of what the
+#   stream already carries.
 
 
 __all__ = [
@@ -465,5 +472,4 @@ __all__ = [
     "build_child_request",
     "clip_report",
     "derive_child_budget",
-    "summarise_children",
 ]

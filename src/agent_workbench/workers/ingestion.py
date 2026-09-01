@@ -45,7 +45,9 @@ from agent_workbench.adapters.persistence.models import (
 from agent_workbench.application.graph_enrichment import GraphEnrichmentService
 from agent_workbench.application.ingestion import IngestionRequest, IngestionService
 from agent_workbench.domain.errors import ErrorInfo, StaleExecutionError
-from agent_workbench.domain.identifiers import new_id
+from agent_workbench.domain.identifiers import (
+    new_event_id,
+)
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.artifact_store import ArtifactStore
 from agent_workbench.ports.execution_guard import (
@@ -366,7 +368,7 @@ class IngestionWorker:
                 # indexing itself slow or failing (ADR-037 §2.6).
                 await connection.execute(
                     insert(outbox_events).values(
-                        event_id=new_id("evt"),
+                        event_id=new_event_id(),
                         document_id=event.document_id,
                         source_revision=revision,
                         kind="graph_extraction_requested",

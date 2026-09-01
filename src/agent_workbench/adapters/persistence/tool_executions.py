@@ -56,7 +56,10 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agent_workbench.adapters.persistence.models import task_runs, tool_executions
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_tool_execution_id,
+)
 from agent_workbench.domain.schema import ShortText
 from agent_workbench.ports.tool_executions import (
     OperationKey,
@@ -94,7 +97,7 @@ class PostgresToolExecutionLedger:
             await connection.execute(
                 pg_insert(tool_executions)
                 .values(
-                    execution_id=new_id("texec"),
+                    execution_id=new_tool_execution_id(),
                     task_id=intent.task_id,
                     operation_key=intent.operation_key,
                     tool_name=intent.tool_name,

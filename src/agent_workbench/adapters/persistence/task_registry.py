@@ -60,7 +60,10 @@ from agent_workbench.domain.events import (
     TaskSubmitted,
     TaskSucceeded,
 )
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_task_id,
+)
 from agent_workbench.domain.pagination import ListCursor
 from agent_workbench.domain.task_registry import (
     TERMINAL_STATUSES,
@@ -154,7 +157,7 @@ class PostgresTaskRegistry:
     async def submit(self, submission: TaskSubmission) -> TaskRun:
         reservation = submission.index_reservation
         values = {
-            "task_id": new_id("task"),
+            "task_id": new_task_id(),
             "resolved_qdrant_collection": (
                 None if reservation is None else reservation.collection_name
             ),

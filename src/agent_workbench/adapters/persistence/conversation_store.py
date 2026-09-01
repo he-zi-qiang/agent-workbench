@@ -28,7 +28,11 @@ from agent_workbench.adapters.persistence.models import (
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import Identifier, new_id, new_message_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_conversation_turn_id,
+    new_message_id,
+)
 from agent_workbench.domain.messages import Message, assistant_message
 from agent_workbench.domain.runs import (
     AgentOutcome,
@@ -513,7 +517,7 @@ class PostgresConversationStore:
                     lease_seconds=lease_seconds,
                 )
                 turn = StoredChatTurn(
-                    turn_id=new_id("turn"),
+                    turn_id=new_conversation_turn_id(),
                     session_id=session_id,
                     idempotency_key=idempotency_key,
                     request_hash=request_hash,

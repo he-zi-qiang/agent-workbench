@@ -477,7 +477,8 @@ taken that day and the differences mean something:
 | Batch 56 (the C-05 diagnostic) | 3993 | 3205 | 1376 | 828 |
 | Batch 57 (the boundary tests) | 3993 | 3207 | 1376 | 828 |
 | Batches 58–63 (the closing pass) | 4013 | 3225 | 1376 | 842 |
-| Batch 64 (the boundary guard, this table) | **4017** | **3229** | **1376** | **842** |
+| Batch 64 (the boundary guard) | 4017 | 3229 | 1376 | 842 |
+| Batch 65 (the last dead symbols, this table) | **4020** | **3232** | **1376** | **842** |
 
 The last row's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
 (`test_api_runtime_ceilings.py`), four config-leaf reader guards
@@ -490,8 +491,9 @@ had **zero** coverage of `QUICK_DESTINATIONS` before it) and six for the evaluat
 page. **The five-directory row did not move**, because none of these batches added
 tests there — whether they pass is covered by the full-suite row above.
 
-The last row's +4 is ADR-099's four allowlist guards. The five-directory row was
-**re-measured anyway**, even though the new tests are not in it: that batch changed
+The +4 is ADR-099's four allowlist guards; the +3 after it is the identifier
+vocabulary's three. The five-directory row was **re-measured both times**,
+even though the new tests are not in it: those batches changed
 `src/` (two tool specs now import `WORKSPACE_WRITE_SCOPE`, and a duplicate terminal
 -state set was removed), and "no new tests there" is a different claim from "nothing
 there behaves differently".
@@ -516,8 +518,8 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4017 passed / 12 skipped` |
-| Backend, no external services (local) | `3229 passed / 800 skipped` |
+| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4020 passed / 12 skipped` |
+| Backend, no external services (local) | `3232 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
 | Frontend Vitest (local, 53 files) | `842 passed` |
 

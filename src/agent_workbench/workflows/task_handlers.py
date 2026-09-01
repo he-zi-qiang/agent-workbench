@@ -55,7 +55,10 @@ from agent_workbench.domain.evidence import (
     EvidenceUrl,
     ExternalTitle,
 )
-from agent_workbench.domain.identifiers import new_agent_run_id, new_id
+from agent_workbench.domain.identifiers import (
+    new_agent_run_id,
+    new_evidence_id,
+)
 from agent_workbench.domain.messages import Message
 from agent_workbench.domain.policies import ExecutionContext, PrincipalContext
 from agent_workbench.domain.runs import (
@@ -1223,7 +1226,7 @@ def decode_external_evidence_output(
             EvidenceItem(
                 # Not the URL: two passages read from the same page are two
                 # items, and the bundle requires their ids to differ.
-                evidence_id=new_id("evidence"),
+                evidence_id=new_evidence_id(),
                 source="external",
                 text=item.text,
                 url=item.url,

@@ -68,7 +68,10 @@ from agent_workbench.application.workspace import (
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import NotFoundError
-from agent_workbench.domain.identifiers import Identifier, new_id
+from agent_workbench.domain.identifiers import (
+    Identifier,
+    new_session_id,
+)
 from agent_workbench.domain.messages import Message, assistant_message, user_message
 from agent_workbench.domain.policies import (
     AuthorizationEnvelope,
@@ -518,7 +521,7 @@ class CodeRunNotPermittedError(RuntimeError):
 
 
 def new_code_session_id() -> str:
-    return new_id("ses")
+    return new_session_id()
 
 
 #: What a turn is allowed to be. Two values, not a flag, because the name is
