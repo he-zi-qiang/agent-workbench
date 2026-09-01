@@ -7,8 +7,16 @@
  * 组件测试也过，因为那些测试断言的是文字在不在，而文字确实在。**一个拼错的类名和
  * 一个还没写的类名，在这套工具链里长得一模一样。**
  *
- * 只看**字符串字面量**里的类名。模板串拼出来的、条件表达式算出来的都跳过——它们
- * 需要求值，而一个会误报的守卫最后会被人往豁免表里加东西，那就等于没有守卫。
+ * 只看**写死**的类名，但「写死」包括模板串里那些静态的段。最初这条守卫把整个模板串
+ * 都跳过了，理由是它们需要求值；代价是它对 `aw-app-shell`、`aw-chat-page`、
+ * `aw-mobile-link` 这类**只出现在模板串里**的名字完全看不见——全仓 37 个。侧边栏那两个
+ * 悬空类名（`aw-more-trigger`、`aw-sidebar-knowledge`）就是从这个洞里漏过去的：它们
+ * 一个规则都没有，而守卫是绿的。
+ *
+ * 现在扫模板串，但只认**两侧都被空白或字面量边界夹住**的完整 token。`aw-${kind}-row`
+ * 留下的静态段是 `aw-` 和 `-row`，两个都贴着插值，两个都不算数——所以扩大覆盖没有
+ * 带进一条误报。求值才能得到的名字（`${on ? "aw-x" : ""}`）仍然看不见，那是这条守卫
+ * 明确不管的部分。
  *
  * 走 vite 的 `import.meta.glob` 而不是 `node:fs`，理由和 `jsxChineseWrap` 那条一样：
  * 这个 tsconfig 里没有 node 的类型，给它加上等于让业务代码也能 `import fs`。
@@ -59,18 +67,60 @@ function definedClasses(): Set<string> {
   return defined;
 }
 
+/**
+ * 模板串里挖掉 `${…}` 之后剩下的静态段，逐个 token 吐出来——但只吐**完整**的那些。
+ *
+ * 一个 token 贴着插值边界时，它可能只是某个求值结果的前缀或后缀（`aw-${k}-row` 里
+ * 的 `aw-` 和 `-row`），那不是类名。所以段首的 token 只有在它同时是整个字面量的开头、
+ * 或者它前面真的有空白时才算数；段尾同理。
+ */
+function* staticTokens(body: string): Generator<string> {
+  const chunks: Array<{ text: string; atStart: boolean; atEnd: boolean }> = [];
+  let cursor = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] !== "$" || body[index + 1] !== "{") continue;
+    chunks.push({ text: body.slice(cursor, index), atStart: cursor === 0, atEnd: false });
+    // 数括号而不是找第一个 `}`：插值里可以再嵌对象或另一个模板串。
+    let depth = 1;
+    index += 2;
+    for (; index < body.length && depth > 0; index += 1) {
+      if (body[index] === "{") depth += 1;
+      else if (body[index] === "}") depth -= 1;
+    }
+    cursor = index;
+    index -= 1;
+  }
+  chunks.push({ text: body.slice(cursor), atStart: cursor === 0, atEnd: true });
+
+  for (const chunk of chunks) {
+    const tokens = chunk.text.split(/\s+/u);
+    for (const [index, token] of tokens.entries()) {
+      if (token === "") continue;
+      if (index === 0 && !chunk.atStart) continue;
+      if (index === tokens.length - 1 && !chunk.atEnd) continue;
+      yield token;
+    }
+  }
+}
+
 function referencedClasses(): Map<string, Set<string>> {
   const used = new Map<string, Set<string>>();
+  const note = (name: string, path: string) => {
+    if (!name.startsWith("aw-")) return;
+    const where = used.get(name) ?? new Set<string>();
+    where.add(path);
+    used.set(name, where);
+  };
+
   for (const [path, source] of Object.entries(SOURCES)) {
     if (path.startsWith("test/")) continue;
-    // `className="…"` 与 `className={"…"}`，只认字面量。
+    // `className="…"` 与 `className={"…"}`
     for (const [, literal] of source.matchAll(/className=\{?"([^"{}]*)"/gu)) {
-      for (const name of (literal ?? "").split(/\s+/u)) {
-        if (!name.startsWith("aw-")) continue;
-        const where = used.get(name) ?? new Set<string>();
-        where.add(path);
-        used.set(name, where);
-      }
+      for (const name of (literal ?? "").split(/\s+/u)) note(name, path);
+    }
+    // className={`…`}。表达式里含反引号的会整条匹配不上——那是漏报，不是误报。
+    for (const [, body] of source.matchAll(/className=\{`([^`]*)`\}/gu)) {
+      for (const name of staticTokens(body ?? "")) note(name, path);
     }
   }
   return used;
@@ -102,5 +152,22 @@ describe("样式表里没有的类名", () => {
     expect(defined.size).toBeGreaterThan(100);
     expect(used.has("aw-button")).toBe(true);
     expect(defined.has("aw-button")).toBe(true);
+    // `aw-app-shell` 只出现在一处模板串里（AppShell.tsx 的根 div）。它在这里，
+    // 就证明扫模板串那一半真的在跑——否则上面那条会退回只看字面量而依然是绿的。
+    expect(used.has("aw-app-shell")).toBe(true);
+  });
+
+  it("模板串里贴着插值的半个名字不算类名", () => {
+    // 这条守着扩大覆盖时唯一的真风险：`aw-${kind}-row` 的静态段是 `aw-` 和
+    // `-row`，两个都不是类名。一旦这里开始误报，下一个人的修法会是往豁免表里
+    // 加东西，那就等于把守卫关掉。
+    expect([...staticTokens("aw-${kind}-row")]).toEqual([]);
+    expect([...staticTokens("aw-card ${tone}")]).toEqual(["aw-card"]);
+    expect([...staticTokens("${tone} aw-card")]).toEqual(["aw-card"]);
+    expect([...staticTokens("aw-a ${x} aw-b")]).toEqual(["aw-a", "aw-b"]);
+    expect([...staticTokens("aw-row ${on ? `aw-${x}` : \"\"} aw-tail")]).toEqual([
+      "aw-row",
+      "aw-tail",
+    ]);
   });
 });
