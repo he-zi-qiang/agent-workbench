@@ -54,6 +54,18 @@ vi.mock("../api/client", () => ({
   }),
   storeProviderKey: vi.fn(),
   clearProviderKey: vi.fn(),
+  // 同一条理由的下一个受害者：「运行状态」那一类现在还渲染能力清单（ADR-102），
+  // 它调 `getDeploymentCapabilities`，而 `capabilityErrorMessage` 用 `ApiError`
+  // 做 instanceof——两个都得在这里列出来，否则这个文件整片红。
+  getDeploymentCapabilities: vi.fn().mockResolvedValue({ capabilities: [] }),
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
 }));
 
 /** 这个框自己不带触发器——它读的是 context 里那个开关。 */

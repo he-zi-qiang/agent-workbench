@@ -122,6 +122,16 @@ echo.
 echo   Console  http://127.0.0.1:8000/ui/
 echo   Stop     scripts\stack.cmd down
 echo.
+rem  Said at the one moment somebody is looking at this window. This stack
+rem  assembles Direct Chat and Tasks and *not* knowledge-base retrieval, web
+rem  search, MCP tools or the sandbox -- and until ADR-102 nothing on screen
+rem  said so, which is how a console that was working as configured came to be
+rem  read as a broken provider key. The page names every absence and what it
+rem  would take to fix it; this line is only the pointer to it.
+echo   Not everything is on: this image has no embedding runtime and no MCP
+echo   servers. The console's System page lists what this stack did or did not
+echo   assemble, why, and what to change.
+echo.
 rem  /ui/ rather than the bare root. The root answers 307 to the same place, so
 rem  either works today. Naming the real path means this line does not depend
 rem  on that redirect staying.

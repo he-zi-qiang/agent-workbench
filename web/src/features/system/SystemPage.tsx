@@ -1,12 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  CheckCircle2,
+  CircleDashed,
   CircleHelp,
   Database,
   RefreshCw,
+  XCircle,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { checkHealth } from "../../api/client";
+import {
+  ApiError,
+  checkHealth,
+  getDeploymentCapabilities,
+} from "../../api/client";
+import type { DeploymentCapability } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   ErrorNotice,
@@ -89,12 +97,21 @@ export function HealthReport({ heading }: { heading?: ReactNode }) {
         />
       </section>
 
+      {/* 这段话此前写的是「数据库已就绪不代表模型、Qdrant、Task Worker 或文档处理
+          Worker 都正常；现有公开接口无法验证这些状态」。**模型那半句从今天起不成立**
+          ——下面这份清单就是那个接口（ADR-102），它答得出这个进程有没有装配起
+          模型、检索、联网搜索与 MCP 工具。剩下的半句仍然成立，而且是这一页现在
+          唯一还要靠人去核对的部分：Worker 跑在别的进程里，没有任何上报通道。 */}
       <div className="aw-notice is-warning">
         <CircleHelp aria-hidden="true" size={16} />
         <span>
-          数据库已就绪不代表模型、Qdrant、Task Worker 或文档处理 Worker 都正常；现有公开接口无法验证这些状态。
+          数据库已就绪不代表 Qdrant 与两个 Worker 都正常。下面这份清单只答得出 API
+          进程自己装配成了什么；Worker 在另一个进程里，它是不是 <code>--demo</code>{" "}
+          合成 Worker，从这里看不出来。
         </span>
       </div>
+
+      <CapabilityReport />
 
       {health.data !== undefined && (
         <p className="aw-page-note">
@@ -167,6 +184,117 @@ export function SystemPage() {
   );
 }
 
+
+/**
+ * 「这套部署能做什么」，以及每一处缺失的原因与补法（ADR-102）。
+ *
+ * 这块是被一次真实的误判逼出来的：Docker 默认栈起来以后，控制台里 Chat 能答、
+ * 任务能提交、页面一页不少，而外部搜索、Word/web MCP、沙箱一件都不在——因为进程
+ * 启动时就没装配它们。从界面上看不出来任何一处，于是人会去查 key、查网络、查
+ * 模型，唯独查不到「这个进程从一开始就没有这件工具」。
+ *
+ * **不轮询。** 上面那几格问的是「此刻还在不在」，会变，所以 15 秒一次；这一份
+ * 问的是「启动那一刻装配成了什么」，只有重启才会变，轮询它只是在重复同一个答案。
+ */
+export function CapabilityReport() {
+  const { identity } = useIdentity();
+  const report = useQuery({
+    queryKey: ["deployment-capabilities", identity.tenantId, identity.principalId],
+    queryFn: () => getDeploymentCapabilities(identity),
+    staleTime: Infinity,
+  });
+
+  const rows = report.data?.capabilities ?? [];
+  const core = rows.filter((row) => row.tier === "core");
+  const optional = rows.filter((row) => row.tier === "optional");
+
+  return (
+    <section className="aw-card aw-section" aria-labelledby="capabilities-title">
+      <div className="aw-card-header">
+        <div>
+          <span className="aw-eyebrow">这套部署</span>
+          <h2 id="capabilities-title">能做什么，缺什么</h2>
+        </div>
+      </div>
+      {/* 一行写完，不折行：JSX 会把换行折成一个空格，中文里那个空格是可见的
+          （`src/test/jsxChineseWrap.test.ts` 守着这条）。 */}
+      <p className="aw-page-note">
+        核心是这个产品自称是什么，附加是它还能被要求做什么。每一条缺失都写明它是怎么来的、以及补上它要动什么——这些答案来自进程启动时的那份装配，不是这个页面的推测。
+      </p>
+
+      {report.isPending && <LoadingLine label="正在读取能力清单" />}
+      {report.error !== null && report.error !== undefined && (
+        <ErrorNotice message={capabilityErrorMessage(report.error)} />
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <h3 className="aw-eyebrow">核心</h3>
+          <ul className="aw-capability-list">
+            {core.map((row) => (
+              <CapabilityRow key={row.id} row={row} />
+            ))}
+          </ul>
+          <h3 className="aw-eyebrow">附加</h3>
+          <ul className="aw-capability-list">
+            {optional.map((row) => (
+              <CapabilityRow key={row.id} row={row} />
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function CapabilityRow({ row }: { row: DeploymentCapability }) {
+  return (
+    <li className={`is-${row.state} is-${row.tier}`}>
+      {stateIcon(row)}
+      <div>
+        <strong>
+          {row.title}
+          <em className="aw-capability-state">{stateLabel(row.state)}</em>
+        </strong>
+        {row.reason !== "" && <span>{row.reason}</span>}
+        {row.remedy !== "" && <span>要补上它：{row.remedy}</span>}
+        {row.detail.length > 0 && <span>{row.detail.join(" · ")}</span>}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * 四个图标，三个状态——多出来的那一个是「核心缺失」。
+ *
+ * `unknown` 有自己的图标而不是画成灰色的缺失：它说的是「这个进程看不见那个进程」，
+ * 把它画成缺失，就是替另一个进程作了它没作过的证。而核心缺失与附加缺失分成两个
+ * 图标（配色也不同），是因为附加项缺席是一个选择、核心项缺席是半个产品不在——
+ * 一页把两者画成同一个红点，就又变回了一份要人挨个去查的清单。
+ */
+function stateIcon(row: DeploymentCapability) {
+  // 返回元素而不是组件：`react-hooks/static-components` 拦的是把组件赋给一个
+  // 每次渲染都会重新算出来的变量。
+  if (row.state === "available") return <CheckCircle2 aria-hidden="true" size={16} />;
+  if (row.state === "unknown") return <CircleHelp aria-hidden="true" size={16} />;
+  if (row.tier === "core") return <XCircle aria-hidden="true" size={16} />;
+  return <CircleDashed aria-hidden="true" size={16} />;
+}
+
+function stateLabel(state: DeploymentCapability["state"]): string {
+  if (state === "available") return "可用";
+  if (state === "unknown") return "未知";
+  return "缺失";
+}
+
+function capabilityErrorMessage(error: unknown): string {
+  // 404 有它自己的意思，而且是一个人真的会遇到的意思：这个 API 比控制台旧，旧到
+  // 还没有这条路由。说成「读取失败」会让人去查网络。
+  if (error instanceof ApiError && error.status === 404) {
+    return "这个 API 进程还没有能力清单接口（/v1/system/capabilities），它比当前控制台旧。";
+  }
+  return error instanceof Error ? error.message : "读取能力清单失败。";
+}
 
 function HealthMetric({
   icon,

@@ -210,6 +210,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # is here to catch a Cyrillic lookalike in an identifier, not a full-width comma
 # in deliberate Chinese.
 "src/agent_workbench/apps/api/routes/projects.py" = ["RUF001"]
+# 这一页的全部内容就是给人读的句子：每一行「缺什么、为什么缺、怎么补」。这些理由
+# 与产生它们的那个判断写在同一处，是这条路由存在的理由——把它们搬去浏览器端的
+# 映射表，就又多了一份会和代码走散的说法。RUF001 在这里要抓的仍是标识符里混进来
+# 的西里尔字母，不是一段刻意用中文写的诊断。
+"src/agent_workbench/apps/api/routes/system.py" = ["RUF001"]
+"tests/api/test_system_capabilities.py" = ["RUF001"]
 "tests/application/test_task_triage.py" = ["RUF001"]
 "tests/api/test_task_api.py" = ["RUF001"]
 "tests/cli/test_repl.py" = ["RUF001"]

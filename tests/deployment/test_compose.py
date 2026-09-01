@@ -391,3 +391,68 @@ def test_the_windows_launcher_opens_the_port_the_topology_publishes() -> None:
     assert any(url in line for line in launched), (
         f"the launcher should open {url}, it opens {launched}"
     )
+
+
+def test_the_windows_launcher_says_the_stack_is_not_everything() -> None:
+    """The pointer goes where the person actually is (ADR-102).
+
+    This launcher's summary is the one moment somebody is looking at a window
+    that could tell them. What it may not do is claim the stack is complete by
+    saying nothing: this image has no embedding runtime and this topology has no
+    MCP server, and a console read as broken was the cost of that silence.
+
+    Asserted on the executable lines, because the paragraph of `rem` above them
+    explains the same thing and would satisfy a whole-file search while the
+    person running it saw nothing.
+    """
+
+    printed = " ".join(
+        line for line in _launcher_commands() if line.lower().startswith("echo")
+    )
+    assert "System page" in printed
+    assert "no embedding runtime" in printed
+
+
+def _api_launcher() -> str:
+    """The shell script the API container runs, as text."""
+
+    return (ROOT / "docker" / "run-api-local.sh").read_text(encoding="utf-8")
+
+
+def test_the_api_launcher_decides_web_search_by_probing_for_a_key() -> None:
+    """The one switch that must not be set statically, and why (ADR-102).
+
+    `research.enabled` without a provider key is a startup error rather than a
+    degraded start, and the page that stores the key lives inside the process
+    that would refuse to start. So a Compose file that wrote `true` here would
+    make a fresh stack unbootable, and the person who saved a key on the
+    settings page a minute earlier could never have got there.
+
+    Asserted three ways because each half fails differently: the probe has to
+    be *run*, the enablement has to sit behind it, and Compose has to pass an
+    operator's own value through untouched.
+    """
+
+    launcher = _api_launcher()
+    assert "docker/provider_key_present.py" in launcher
+    enabling = launcher.index("AW_RESEARCH__ENABLED=true")
+    probe = launcher.index("provider_key_present.py")
+    assert probe < enabling, "research is enabled before anything looked for a key"
+    # An explicit value from the operator survives: only unset/empty is decided.
+    assert 'if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then' in launcher
+
+
+def test_compose_hands_the_operators_own_research_value_through() -> None:
+    """Unset must arrive as empty rather than as `true` or `false`.
+
+    `-` and not `:-`: Compose has no way to omit a key, so the launcher gets an
+    empty string when the host said nothing, and unsets it before the process
+    reads it. Written as a test because `${VAR:-false}` looks equivalent and
+    would quietly disable the switch on every machine that never sets it.
+    """
+
+    api = _compose()["services"]["api"]
+    assert api["environment"]["AW_RESEARCH__ENABLED"] == ""
+
+    raw = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert 'AW_RESEARCH__ENABLED: "${AW_RESEARCH__ENABLED-}"' in raw

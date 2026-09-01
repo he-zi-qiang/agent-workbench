@@ -150,6 +150,18 @@ services:
       AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
       AW_MODEL__MAIN__MODEL_ID: deepseek-chat
       AW_MODEL__COMPACT__MODEL_ID: deepseek-chat
+      # Chat's web search, and the only value this file can honestly carry for
+      # it is the operator's own. `true` here would refuse to start on a fresh
+      # stack (no key yet, and `research.enabled` without one is a startup
+      # error); `false` here would silently override the launcher. So: whatever
+      # the host says, and nothing when the host says nothing -- `run-api-local.sh`
+      # decides that case by probing for a key, and its comment carries why.
+      #
+      # `-` rather than `:-`: an unset variable arrives as the empty string,
+      # which the launcher reads as "nobody decided" and the settings loader
+      # reads as False. `:-false` would look equivalent and would instead pin
+      # the switch off on every machine that never sets it.
+      AW_RESEARCH__ENABLED: "${AW_RESEARCH__ENABLED-}"
     depends_on:
       migrate:
         condition: service_completed_successfully
