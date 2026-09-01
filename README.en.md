@@ -478,7 +478,8 @@ taken that day and the differences mean something:
 | Batch 57 (the boundary tests) | 3993 | 3207 | 1376 | 828 |
 | Batches 58–63 (the closing pass) | 4013 | 3225 | 1376 | 842 |
 | Batch 64 (the boundary guard) | 4017 | 3229 | 1376 | 842 |
-| Batch 65 (the last dead symbols, this table) | **4020** | **3232** | **1376** | **842** |
+| Batch 65 (the last dead symbols) | 4020 | 3232 | 1376 | 842 |
+| Batch 66 (the checkpoint migration, this table) | **4032** | **3244** | **1376**\* | **842** |
 
 The last row's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
 (`test_api_runtime_ceilings.py`), four config-leaf reader guards
@@ -518,9 +519,18 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4020 passed / 12 skipped` |
-| Backend, no external services (local) | `3232 passed / 800 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
+| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4032 passed / 12 skipped` |
+| Backend, no external services (local) | `3244 passed / 800 skipped` |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped`\* |
+
+> \* That row went red twice on the night of 2026-08-31 and the cause is **not
+> established** — tracked as B-13. Both times it was the same five tests in
+> `test_code_api.py`, and both times the run took 2:27, faster than any passing
+> run. It has not reproduced in three subsequent runs of the identical command,
+> and **the actual error text was never captured**. The table records the
+> passing run; the asterisk is there because writing `1376 passed` unqualified
+> for a suite that flakes is exactly the kind of sentence this section exists
+> to stop.
 | Frontend Vitest (local, 53 files) | `842 passed` |
 
 **The first row used to carry 3 failures; it no longer does, and why they went
@@ -573,9 +583,9 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 80,842 lines of Python across 320 files, 98,875 lines of tests across 258
-files, 51,166 lines of frontend TypeScript across 139 files; 86 files under
-`docs/adr/`, numbered 0012–0099 — **with gaps**: 0050 and 0053 were claimed by the
+Scale: 81,020 lines of Python across 321 files, 99,094 lines of tests across 259
+files, 51,166 lines of frontend TypeScript across 139 files; 87 files under
+`docs/adr/`, numbered 0012–0100 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -598,7 +608,7 @@ test without a control case does not count**.
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
 | [Frontend design baseline](docs/frontend-design.md) | Console structure, protocol boundaries, responsive strategy |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it |
-| [ADR index](docs/adr/) | 86 decision records (0012–0099; 0050 and 0053 reserved, never written) |
+| [ADR index](docs/adr/) | 87 decision records (0012–0100; 0050 and 0053 reserved, never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role |
 
 Most documentation is written in Chinese; this page and
