@@ -1104,10 +1104,6 @@ select {
   display: none;
 }
 
-.aw-global-link.active svg {
-  color: currentColor;
-}
-
 .aw-global-link-icon {
   display: grid;
   width: 22px;
@@ -1865,7 +1861,22 @@ select {
 
 /* 箭头长在行里，不是行旁边的第二个控件：整行就是那个开关。
    收起时指向右——它说的是「展开的方向」，不是「现在是什么状态」；一个朝下
-   的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
+   的箭头配一个收起的区，每次都要想一下才知道点了会怎样。
+
+   下面这条 `color` 有 11 天不生效（2026-08-21 到 09-01）。箭头的前身
+   `.aw-workspace-fold` 是行**旁边**一个独立的 <button>，够不着
+   `.aw-global-link.active svg`，那时 muted 是真的；afa86f8 把它收进行里变成行内
+   图标之后，那条 (0,2,1) 的规则开始压过它 (0,1,0)，
+   而箭头**只在当前工作区那一行渲染**、那个 button 恒带 `active`——于是它一直
+   是 --aw-nav-text，和「退回成行内的一个图标」正好相反，没有任何测试会红。
+
+   修法是删掉 `.aw-global-link.active svg { color: currentColor }` 而不是在这里
+   堆特异度：那条规则在整个应用里唯一能观察到的效果就是这个 bug。导航图标的
+   高亮另有出处（下面 `.aw-global-link:is(:hover, .active) .aw-global-link-icon`），
+   删掉之后实测它仍是 --aw-nav-text。
+
+   顺带对齐了同一行里的另外两个控件：搜索和 + （`.aw-side-action`）本来就是
+   muted。这一行现在是「亮图标 + 亮标题」说身份，三个 muted 控件说能做什么。 */
 .aw-workspace-fold-icon {
   flex: none;
   margin-left: 4px;
