@@ -58,6 +58,7 @@ from agent_workbench.apps.api.routes import (
     knowledge_bases,
     projects,
     search,
+    settings,
     tasks,
     uploads,
     usage,
@@ -68,7 +69,7 @@ from agent_workbench.apps.api.routes.tasks import InvalidTaskCursorError
 from agent_workbench.apps.api.sse import TooManyLiveSubscribersError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.apps.api.web import mount_console, resolve_web_directory
-from agent_workbench.bootstrap import load_settings
+from agent_workbench.bootstrap import load_settings, provider_key
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import (
     NotFoundError,
@@ -266,6 +267,10 @@ def create_app(
     # server is not up right now", which are the two states ADR-095 §7 says must
     # stay distinguishable.
     app.include_router(computer.router)
+    # Unconditional, and for a sharper version of computer.router's reason: a
+    # settings page that vanished when no key was configured would be a page
+    # nobody could reach in order to configure one.
+    app.include_router(settings.router)
     if dependencies.serves_search:
         # Mounted without a model. Retrieval is the half of chat that needs
         # no provider, and a deployment that has indexed documents should be
@@ -373,7 +378,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import uvicorn
 
-    config = project_api(load_settings())
+    # Pointed at the key file here rather than inside `load_settings`.
+    # That function is called a few hundred times by the test suite and
+    # by `agent-config-check`, none of which should pick up a credential
+    # from whichever home directory the process happens to run in. A
+    # process a person started on purpose is a different question, and
+    # this is one -- the same question `scripts/dev.sh` has been
+    # answering for the shell since before Python could.
+    config = project_api(load_settings(provider_key_file=provider_key.key_file()))
     # Not a degraded mode that hides a misconfiguration. `build_model` refuses to
     # start a process whose model it could not call, and that refusal is correct
     # -- a process that answers nothing while passing its health check turns a

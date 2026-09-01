@@ -231,13 +231,16 @@ a {
   font-weight: 550;
 }
 
+/* 说明换行，不再截断成一行。
+ *
+ * 这几句是 `NAVIGATION` 里每一项的 description，写出来就是为了让人在点进去之前
+ * 知道那是什么。截成一行之后「了解屏幕控制的安全边…」占着一整行高度却不传达
+ * 任何东西——省下的不是空间，是那句话本身。设置面板里同一份说明一直是换行的
+ * （`line-height: 1.45`），这里跟它对齐。 */
 .aw-mobile-more-copy small {
-  overflow: hidden;
   color: var(--aw-text-muted);
   font-size: 11px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
 }
 
 /* --- 全局快速跳转 -------------------------------------------------------
@@ -6777,38 +6780,23 @@ p.aw-code-step-thought {
  * 不是一个设置面板，是起始屏本身。所以它用和起始屏一样的居中窄栏，而不是长成
  * 一个对话框——对话框意味着「先处理这件事再回到主流程」，而这里没有可回去的
  * 主流程：在选定文件夹之前，Code 没有别的内容。
+ *
+ * 「一样」现在是字面意义上的：720px 的栏，标题和引子交给 `.aw-mode-start-head`
+ * （Chat 与 Tasks 用的同一套）。此前这里是 560px 加一套自己的 22px 左对齐标题，
+ * 于是新用户看到的第一屏，恰好是全站唯一一个不像别处的开场。
  */
 
 .aw-code-chooser {
   display: flex;
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   min-height: 0;
   flex-direction: column;
   margin: auto;
-  padding: 24px 20px;
+  /* 左右不留内边距，因为 `box-sizing: border-box` 会让它从那 720 里扣。
+     实测：`padding: 24px 20px` 时这一栏的内容宽是 680，而 Chat 与 Tasks 是 720——
+     三屏用同一套标题、同一个栏宽声明，却差 40px。差 40px 的「一致」不是一致。 */
+  padding: 24px 0;
   gap: 16px;
-}
-
-.aw-code-chooser-head h1 {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.aw-code-chooser-head p {
-  margin: 0;
-  color: var(--aw-text-muted);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.aw-code-chooser-head code {
-  padding: 1px 5px;
-  border-radius: 5px;
-  background: var(--aw-surface-sunken);
-  font-family: var(--aw-mono);
-  font-size: 12px;
 }
 
 .aw-code-chooser-list {
@@ -9289,6 +9277,55 @@ p.aw-code-step-thought {
   border-color: var(--aw-accent);
   background: var(--aw-accent-soft);
   color: var(--aw-accent);
+}
+
+/* 一组「标签在左、值在右」的设置行，中间用线分开。
+ *
+ * 加这个是因为 `ProviderKeyPanel` 引用了一个**不存在的** `.aw-facts`：那三行
+ * 状态因此是没有任何样式的裸 `<dl>`，`dt` 和 `dd` 各占一行、缩进随浏览器默认。
+ * 补一条 `.aw-facts` 也能让它不难看，但那会是第四种「一行东西」的画法——这套
+ * 界面已经有侧栏行、更多行、设置分类行三种了。
+ *
+ * 所以补的是它们共同的那一个：44 的最小高度、`8px 10px` 的内边距、11px/1.45 的
+ * 说明，和另外三种同一套数。分割线只画在两行**之间**（相邻兄弟选择器），不画在
+ * 这一组的上下边缘——一条贴着标题的线看起来是标题的下划线，不是行的分隔。 */
+.aw-setting-rows {
+  display: grid;
+}
+
+.aw-setting-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px;
+  gap: 20px;
+}
+
+.aw-setting-row + .aw-setting-row {
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-setting-row dt,
+.aw-setting-row > div > strong {
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.aw-setting-row small {
+  display: block;
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aw-setting-row dd {
+  flex: none;
+  margin: 0;
+  color: var(--aw-text-soft);
+  font-size: 12.5px;
+  text-align: right;
 }
 
 /* 用量和运行状态这两块面本来是整页的，进到对话框里要把它们的外边距收掉——

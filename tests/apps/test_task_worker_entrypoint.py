@@ -981,7 +981,10 @@ def test_serve_awaits_assembly_and_disposes_if_runner_setup_fails(
             lifecycle.append("runner")
             raise RuntimeError("runner setup failed")
 
-    def load() -> object:
+    # `**_`: the entry point names the provider key file when it loads settings
+    # (ADR-101). A stub with a fixed signature would be asserting the shape of
+    # that call rather than the lifecycle this test is about.
+    def load(**_: object) -> object:
         return settings
 
     def project(_: object) -> SimpleNamespace:
@@ -1092,7 +1095,14 @@ def test_serve_hands_the_listener_s_wakeup_to_the_runner(
         assert configured["application_name"] == "agent-workbench-test-worker-listener"
         return listener
 
-    monkeypatch.setattr(task_worker_main, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        task_worker_main,
+        "load_settings",
+        # `**_`: the entry point names the provider key file when it loads
+        # settings (ADR-101), and a stub with a fixed signature would be
+        # asserting the shape of the call rather than the behaviour under test.
+        lambda **_: settings,
+    )
     monkeypatch.setattr(task_worker_main, "project_task_worker", lambda _: config)
     monkeypatch.setattr(task_worker_main, "build_task_worker_dependencies", assemble)
     monkeypatch.setattr(

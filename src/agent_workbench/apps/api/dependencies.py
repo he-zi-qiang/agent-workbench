@@ -130,6 +130,7 @@ from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.knowledge_bases import KnowledgeBaseService
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.projects import ProjectService
+from agent_workbench.application.provider_key import ProviderKeyStore
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.sub_agents import CODE_SUB_AGENTS
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
@@ -402,6 +403,12 @@ class ApiDependencies:
     #: only *starting* a run is gated, and that gate lives inside the service so
     #: that a deployment which cannot run one still answers with the command.
     evaluation: EvaluationService | None = None
+    #: Where a provider key may be stored (ADR-101). Always present: a settings
+    #: page that disappeared when no key was configured would be a page nobody
+    #: could reach in order to configure one.
+    provider_keys: ProviderKeyStore = field(
+        default_factory=lambda: ProviderKeyStore(key_file=None, checkout_root=None)
+    )
 
     @property
     def max_control_request_body_bytes(self) -> int:
@@ -819,6 +826,16 @@ def build_dependencies(
             ),
             reports_root=Path(config.evaluation.reports_root),
             runs_enabled=config.evaluation.runs_enabled,
+        ),
+        provider_keys=ProviderKeyStore(
+            key_file=(
+                Path(config.provider_key_file)
+                if config.provider_key_file is not None
+                else None
+            ),
+            checkout_root=(
+                Path(config.checkout_root) if config.checkout_root is not None else None
+            ),
         ),
     )
 

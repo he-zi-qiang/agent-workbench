@@ -245,6 +245,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 #   逐字节的 OOXML 是同一类豁免。上面那一半（真正的 Python）仍然由 ruff format
 #   管着，它换行的地方和别处一样。
 "scripts/architecture_panel.py" = ["E501", "RUF001", "RUF002", "RUF003"]
+# 这三条拒绝理由会原样出现在设置面板里——「这把 key 是空的」「拒绝把 key 写进
+# checkout 里」「删不掉这个文件」。它们是给人读的句子，标点当然是全角的；RUF001
+# 在这里要抓的是标识符里混进来的西里尔字母，而这个文件里没有一个标识符受影响。
+"src/agent_workbench/application/provider_key.py" = ["RUF001"]
 
 [tool.pyright]
 pythonVersion = "3.12"

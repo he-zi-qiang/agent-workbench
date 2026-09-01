@@ -29,6 +29,8 @@ from agent_workbench.adapters.tools.export_artifact import (
 from agent_workbench.adapters.tools.external_search import (
     TOOL_NAME as EXTERNAL_SEARCH_TOOL,
 )
+from agent_workbench.bootstrap import provider_key
+from agent_workbench.bootstrap.paths import CHECKOUT_ROOT
 from agent_workbench.bootstrap.settings import ModelPricingSettings, Settings
 from agent_workbench.domain.agents import DELEGATE_TOOL
 from agent_workbench.domain.identifiers import new_id
@@ -773,6 +775,17 @@ class ApiRuntimeConfig:
     #: is back at the problem the page refused to have by showing nothing.
     computer_session_url: str
     max_control_request_body_bytes: int
+    #: Where a provider key may be stored, and the tree it may not be stored in
+    #: (ADR-101). Both resolved here rather than in the route, because the first
+    #: needs the process environment and the second needs to know what a
+    #: checkout is -- two questions this package exists to answer once.
+    #:
+    #: ``provider_key_file`` is ``None`` when the deployment declared no key
+    #: file, which is a real state and not a missing value: it is how a
+    #: deployment says "this key comes from the environment, and the console may
+    #: not put one anywhere".
+    provider_key_file: str | None
+    checkout_root: str | None
     database: DatabaseConfig
     artifacts: ArtifactStoreConfig
     model: ModelConfig
@@ -1153,6 +1166,17 @@ def _project_embedding(settings: Settings) -> EmbeddingConfig:
     )
 
 
+def _provider_key_file() -> str | None:
+    """The key file as a string, because a projection carries no ``Path``.
+
+    Every other filesystem location on ``ApiRuntimeConfig`` is a ``str`` that
+    the consumer wraps (``Path(config.evaluation.reports_root)``), and one field
+    that arrived pre-wrapped would be the exception a reader has to notice.
+    """
+    resolved = provider_key.key_file()
+    return str(resolved) if resolved is not None else None
+
+
 def project_api(settings: Settings) -> ApiRuntimeConfig:
     """Project validated settings onto what the API process consumes."""
 
@@ -1173,6 +1197,8 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         computer_session_url=settings.api.computer_session_url,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
+        provider_key_file=_provider_key_file(),
+        checkout_root=str(CHECKOUT_ROOT) if CHECKOUT_ROOT is not None else None,
         record_step_inputs=settings.runtime.record_step_inputs,
         context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
         context_compaction_enabled=settings.runtime.context_compaction_enabled,

@@ -219,6 +219,15 @@ React + TypeScript + Vite. `HashRouter`; all eight page components are
 sibling routes: written as two, the `/code → /code/:id` navigation on the first
 send remounts the page and drops the `running` flag of a turn that is still open.
 
+The avatar in the bottom-left opens **Settings**: local identity, model key,
+appearance, usage, health. The model-key section stores a provider key in a file
+**outside** the checkout ([ADR-101](docs/adr/0101-the-console-may-hand-over-a-key-it-can-never-read-back.md)),
+and **it never comes back** — the endpoint returns four characters and has no
+method that returns more. It also reports "stored" and "in use by this process"
+as two separate facts: the model client is built once at composition, so a key
+stored now takes effect at the next start, and a switch that says "saved" while
+nothing changes reads as broken.
+
 What a run did is folded into stages, and expanding one shows the raw events and
 payloads — **folding renames, it never drops an event**. When a Task delegated,
 an "agents involved" panel appears above the timeline: a tree of who spawned whom
@@ -237,7 +246,7 @@ consumed with `fetch` + `response.body.getReader()`; there is not one
 `/v1/knowledge-bases`, `/v1/uploads`, `/v1/search`, `/v1/approvals`,
 `/v1/artifacts` (with `/preview` and `/pdf`), `/v1/projects`, `/v1/code`,
 `/v1/usage`, `/v1/computer` (a read-only reverse proxy, ADR-095),
-`/v1/evaluation`, `/health/live|ready`. The itemized list is on the
+`/v1/evaluation`, `/v1/settings` (the model key, ADR-101), `/health/live|ready`. The itemized list is on the
 [panel](#0-see-the-whole-thing-first)'s HTTP page, parsed from the route
 decorators rather than transcribed.
 

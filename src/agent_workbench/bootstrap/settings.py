@@ -25,7 +25,7 @@ import warnings
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, cast
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
@@ -38,6 +38,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     NestedSecretsSettingsSource,
@@ -53,6 +54,13 @@ from agent_workbench.evaluation.metrics import RETRIEVAL_METRICS
 CONTROL_ENV_VARS = {
     "AW_CONFIG_FILE",
     "AW_ENV_FILE",
+    # Documented in `.env.example` and CLAUDE.md since long before it was legal
+    # here. `scripts/dev.sh` reads it as a *shell* variable and never exports
+    # it, so the rejection below was never reached from the one path that used
+    # it -- and any other path that set it got "unknown Agent Workbench
+    # environment variable" for a name this project's own documentation tells
+    # people to use.
+    "AW_KEY_FILE",
     "AW_SECRETS_DIR",
 }
 FORBIDDEN_TOML_PATHS = {
@@ -133,6 +141,36 @@ def _validate_service_endpoint(
             f"{field_name} must not contain query credentials or a fragment"
         )
     return value
+
+
+class StoredProviderKeySource(PydanticBaseSettingsSource):
+    """The key file, as the lowest-priority place a provider key may come from.
+
+    A source rather than a value patched onto the loaded object, because
+    ``Settings`` validates across fields after construction -- a deployment with
+    ``research.enabled`` and a key that arrives *afterwards* would be refused
+    for not having the key it does have. The value has to be present while
+    validation runs, which is what a source is for.
+
+    Ranked below ``env_settings`` and below the dotenv file, which is the
+    precedence ``scripts/dev.sh`` has always implemented and
+    ``tests/config/test_local_console_profile.py`` already asserts: an exported
+    key beats the file.
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings], key: str | None) -> None:
+        super().__init__(settings_cls)
+        self._key = key
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[Any, str, bool]:  # pragma: no cover - the whole dict is supplied
+        raise NotImplementedError
+
+    def __call__(self) -> dict[str, Any]:
+        if self._key is None:
+            return {}
+        return {"secrets": {"deepseek_api_key": self._key}}
 
 
 class StrictModel(BaseModel):
@@ -1518,6 +1556,13 @@ class Settings(BaseSettings):
         },
     )
 
+    #: The key read from the file `load_settings` was pointed at, if it was
+    #: pointed at one. A ClassVar and not a private attribute: pydantic turns a
+    #: leading-underscore class attribute into a `ModelPrivateAttr`, and the
+    #: source below would then hand that object to the validator instead of a
+    #: string -- which is exactly what it did on the first attempt.
+    stored_provider_key: ClassVar[str | None] = None
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -1536,6 +1581,12 @@ class Settings(BaseSettings):
             env_settings,
             NestedSecretsSettingsSource(file_secret_settings),
             dotenv_settings,
+            # Below the dotenv file and above nothing that could carry a secret:
+            # TOML is rejected outright for a [secrets] table, so this is the
+            # last place a provider key can come from.
+            StoredProviderKeySource(
+                settings_cls, getattr(settings_cls, "stored_provider_key", None)
+            ),
             TomlConfigSettingsSource(settings_cls, deep_merge=True),
         )
 
@@ -2164,11 +2215,24 @@ def _assert_safe_pydantic_settings_version() -> None:
         )
 
 
+def _read_stored_provider_key(path: Path) -> str | None:
+    """The stored key, with the shell's own whitespace handling."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        # Missing or unreadable is the same answer as absent, as it is in
+        # `scripts/dev.sh`: the refusal downstream names the missing key, which
+        # says more than an errno about a path nobody asked about.
+        return None
+    return "".join(raw.split()) or None
+
+
 def load_settings(
     *,
     config_file: str | Path | None = None,
     env_file: str | Path | None = None,
     secrets_dir: str | Path | None = None,
+    provider_key_file: Path | None = None,
 ) -> Settings:
     """Load and validate settings once during process bootstrap.
 
@@ -2198,11 +2262,28 @@ def load_settings(
     )
     _reject_conflicting_secret_sources(selected_secrets_dir)
 
+    # The fourth input, and the only one that defaults to "do not look". The
+    # other three name a file the deployment chose; this one would otherwise
+    # name a path in whoever's home directory happens to be running the
+    # process -- and `load_settings` is called by the test suite several
+    # hundred times and by `agent-config-check`, none of which should acquire a
+    # credential from the machine they run on. The entry points that *should*
+    # pass it are the ones a person starts on purpose.
+    stored_key = (
+        _read_stored_provider_key(provider_key_file)
+        if provider_key_file is not None
+        else None
+    )
+
     runtime_model_config = dict(Settings.model_config)
     runtime_model_config["toml_file"] = [str(path) for path in config_files]
 
     class LoadedSettings(Settings):
         model_config = runtime_model_config
+        # Read by `settings_customise_sources` off `settings_cls`. Per-call
+        # rather than a module global, which two loads in one process would
+        # share.
+        stored_provider_key: ClassVar[str | None] = stored_key
 
     loaded = LoadedSettings(
         _env_file=selected_env_file,  # pyright: ignore[reportCallIssue]

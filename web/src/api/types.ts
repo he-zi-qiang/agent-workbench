@@ -891,3 +891,19 @@ export interface UsageResponse {
   /** 这一档在这个窗口里每次运行记下的费用都是 0：说「没配价目表」，不说「免费」。 */
   unpriced_profiles: string[];
 }
+
+/**
+ * 模型密钥的状态（ADR-101）。
+ *
+ * `active` 与 `stored` 是两个问题，不是一个：进程在组装时读一次 key，之后存进
+ * 去的那把要等下次启动才生效。把它们并成一个字段，正是一个设置页会声称「刚存的
+ * key 已经在用了」的那条路。
+ */
+export interface ProviderKeyView {
+  active: boolean;
+  stored: boolean;
+  fingerprint: string | null;
+  path: string | null;
+  restart_required: boolean;
+  restart_hint: string;
+}

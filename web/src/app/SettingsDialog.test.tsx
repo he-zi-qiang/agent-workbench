@@ -41,6 +41,19 @@ vi.mock("../api/client", () => ({
     unpriced_profiles: [],
   }),
   checkHealth: vi.fn().mockResolvedValue({ ok: true }),
+  // 这个 mock 工厂没有 `importActual` 展开，所以它没列到的每一个导出在这里都是
+  // `undefined`。「模型密钥」那一类一渲染就会去调它们，于是漏掉一个不是让那一类
+  // 出错，是让这个文件里七条测试一起红。
+  getProviderKey: vi.fn().mockResolvedValue({
+    active: false,
+    stored: false,
+    fingerprint: null,
+    path: "~/.config/agent-workbench/key",
+    restart_required: false,
+    restart_hint: "",
+  }),
+  storeProviderKey: vi.fn(),
+  clearProviderKey: vi.fn(),
 }));
 
 /** 这个框自己不带触发器——它读的是 context 里那个开关。 */

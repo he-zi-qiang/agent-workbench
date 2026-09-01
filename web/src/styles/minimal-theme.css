@@ -185,10 +185,19 @@ select {
   margin-bottom: 34px;
 }
 
+/* 与 `.aw-mode-start-head h1` 同一条曲线，此前是两条。
+ *
+ * 三个工作区的首页用 29 / 600 / -0.028em，资源页用 36 / 620 / -0.035em——字号、
+ * 字重、字距三样全不同。哪一条单看都不错，两条同时在一个应用里就是错的：从 Chat
+ * 切到「用量」，标题会长大 7px 并且变紧，而那两页在信息层级上是平级的。
+ *
+ * 收敛到小的那一条而不是大的：资源页是工具页，Codex 与 Claude Desktop 的设置类
+ * 页面都不用大标题起头。`clamp()` 一并去掉——29 已经在小屏上放得下，一个随视口
+ * 变化的标题只会让两页在中间尺寸上再次错开。 */
 .aw-page-header h1 {
-  font-size: clamp(28px, 3vw, 36px);
-  font-weight: 620;
-  letter-spacing: -0.035em;
+  font-size: 29px;
+  font-weight: 600;
+  letter-spacing: -0.028em;
 }
 
 .aw-page-header p {
@@ -683,9 +692,34 @@ select {
   background: transparent;
 }
 
-.aw-mobile-more-link:hover,
-.aw-mobile-more-link.active {
+.aw-mobile-more-link:hover {
   background: var(--aw-panel-soft);
+}
+
+/* 选中和悬停曾经是同一个 `--aw-panel-soft`。
+ *
+ * 那不是一个偏淡的选中态，那是**没有**选中态：指针停在「运行状态」上时，它和
+ * 真正打开着的「用量」画得一模一样，于是这份清单答不出「我在哪」。设置面板里
+ * 同一份清单一直答得出——`--aw-panel-strong` 加左边一条 2px 的强调条——所以这里
+ * 不是发明一个新样式，是把隔壁那个搬过来。
+ *
+ * 强调条而不是把整行染成强调色：这份清单里五行随时可能有一行是当前页，而一整行
+ * 橙底会让它比它旁边那些「可以去的地方」重要得多，读起来像个警告。 */
+.aw-mobile-more-link.active {
+  position: relative;
+  background: var(--aw-panel-strong);
+  color: var(--aw-text);
+}
+
+.aw-mobile-more-link.active::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--aw-accent);
+  content: "";
 }
 
 @media (min-width: 761px) {
@@ -1282,10 +1316,18 @@ select {
   color: var(--aw-text-subtle);
 }
 
+/* `justify-items` 不在这里，理由值得写下来。
+ *
+ * 这里曾经是 `justify-items: center`，于是 `.aw-mode-start-head` 收缩包裹成了
+ * 实测 270px——而它自己声明的 `p { max-width: 54ch }`（约 459px）因此永远够不着，
+ * 副标题在 270 处就换行。同一个组件在 Tasks 里撑满 720，两页的副标题于是断在
+ * 不同的地方，而两边写的是同一句话式的引导语。
+ *
+ * 居中由 `.aw-mode-start-head` 自己负责（它有 `justify-items: center` 和
+ * `text-align: center`）。这一层只负责给它一列宽度。 */
 .aw-chat-welcome {
   display: grid;
   width: min(720px, 100%);
-  justify-items: center;
   margin: 0 auto;
   text-align: center;
 }
@@ -1501,6 +1543,17 @@ select {
   color: var(--aw-text-muted);
   font-size: 13.5px;
   line-height: 1.6;
+}
+
+/* 引子里的命令。这条原来是 `.aw-code-chooser-head code`，跟着那一屏的私有开场
+ * 一起没了——而命令还在句子里，只是不再看起来像命令。搬到共用的那个 head 上，
+ * 因为「引子里强调半句话」不是 Code 独有的需求，只是它先有的。 */
+.aw-mode-start-head code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--aw-surface-sunken);
+  font-family: var(--aw-mono);
+  font-size: 12px;
 }
 
 .aw-mode-starters {

@@ -175,6 +175,12 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 `/code/:sessionId?` 是**一条**带可选参数的路由而不是两条兄弟路由：写成两条时，第一次
 发送触发的 `/code → /code/:id` 会重挂整个页面，把还开着的那一轮的 `running` 标志丢掉。
 
+左下角的头像打开**设置**：本地身份、模型密钥、外观、用量、运行状态。模型密钥那一格
+可以把 provider key 存进 checkout **之外**的文件（[ADR-101](docs/adr/0101-the-console-may-hand-over-a-key-it-can-never-read-back.md)），
+但**存进去就读不回来**——接口只回四个字符的指纹，没有返回明文的方法。它还把「已存下」
+和「这个进程正在用」分成两格说：模型客户端在组装期构造一次，所以刚存的 key 要等下次
+启动才生效，而一个说了「已保存」却什么也没变的开关，读起来就是坏了。
+
 一次运行做了什么会折叠成阶段，展开能看到原始事件与 payload——**折叠只改称呼，不丢
 事件**。任务发生过委派时，时间线上方多出一个「参与的 Agent」面板：按谁派生谁的树列出
 每个运行、各自的状态与花费，选中一行就把下面的执行过程收窄到那一个运行。
@@ -189,7 +195,7 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 （提交、查询、时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、
 `/v1/search`、`/v1/approvals`、`/v1/artifacts`（含 `/preview` 与 `/pdf`）、
 `/v1/projects`、`/v1/code`、`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、
-`/v1/evaluation`、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
+`/v1/evaluation`、`/v1/settings`（模型密钥，ADR-101）、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
 「HTTP 接口」页，它是从路由装饰器解析出来的，不是抄的。
 
 **命令行**：`agent-cli`（演示与提交）、`agent-api`、`agent-task-worker`、
