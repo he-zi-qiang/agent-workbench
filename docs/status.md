@@ -123,7 +123,8 @@
 这一批同样动了 `src/`，而且动的是 `adapters/persistence`、`application`、`workers`
 里真正铸造 id 的那些行，正好落在那五个目录测得到的地方。
 
-`ruff format --check`（621 files）、`ruff check`、`pyright strict 0 errors` 全绿。
+`ruff format --check`（**622 files** —— 本批新增的守门测试自己就让上一批那个 621
+过期了一次，如实记下）、`ruff check`、`pyright strict 0 errors` 全绿。
 B-10 据此关闭（七处里六处满足，第七处移交）。
 
 **没有为本批写 ADR**，理由写下来而不是省略：这一批没有做任何**决定**——

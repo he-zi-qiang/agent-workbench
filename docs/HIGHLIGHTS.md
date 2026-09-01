@@ -145,7 +145,7 @@ getter，jsdom 只在该全局**缺席**时才装自己的那份），两条路�
 `alembic upgrade head` 再跑它，2026-08-28 起 `tests/e2e` 也在其中。它仍然不覆盖需要模型
 Provider 的路径。
 
-静态门禁全绿：`ruff format --check .`（621 files）、`ruff check .`、
+静态门禁全绿：`ruff format --check .`（622 files）、`ruff check .`、
 Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings 0`、
 `tsc -b`、production build。配置 schema `1.19`，Alembic 单一 head
 `0032_events_stream_run_sequence`（32 个迁移）。
