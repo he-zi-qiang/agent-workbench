@@ -23,6 +23,7 @@
 #   scripts/dev.sh demo-api         # API with Word *and* web *and* Code: the console
 #   scripts/dev.sh demo-worker      # real Worker for that profile; needs both servers
 #   scripts/dev.sh smoke            # drive the whole thing and print what happened
+#   scripts/dev.sh panel            # architecture panel on 127.0.0.1:8770 (offline)
 #
 # This is the one place that knows the local environment. The three DSNs live
 # here rather than in the committed TOML because settings forbids connection
@@ -148,7 +149,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Whether every host port a container publishes is bound to loopback.
 #
@@ -588,6 +589,15 @@ demo-worker)
 smoke)
   exec "$PYTHON" scripts/smoke_local.py \
     --api-url "$API_URL" --tenant-id "$TENANT" --principal-id "$PRINCIPAL"
+  ;;
+
+panel)
+  # The one command here that needs nothing running: no database, no Qdrant, no
+  # provider key. It reads the working tree, writes one self-contained page and
+  # serves it on loopback -- so "what is this repository" is answerable on a
+  # fresh checkout, before any of the above has been started.
+  shift
+  exec "$PYTHON" scripts/architecture_panel.py --serve "$@"
   ;;
 
 *)
