@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createProjectAtDirectory, listProjects } from "../../api/client";
 import type { ProjectView } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
+import { ModeStartHeader } from "../../components/ModeStart";
 import { ErrorNotice, LoadingLine } from "../../components/ui";
 import { FolderPicker } from "./FolderPicker";
 
@@ -74,12 +75,18 @@ export function ProjectChooser({
 
   return (
     <div className="aw-code-chooser">
-      <div className="aw-code-chooser-head">
-        <h1>在哪个文件夹里编码？</h1>
-        <p>
-          Agent 读写的就是这个文件夹里的真实文件，产物也留在那里。在终端里可以用 <code>agent-cli project use</code> 直接把当前目录变成项目。
-        </p>
-      </div>
+      {/* 标题和引子从 ModeStartHeader 出，而不是这一屏自己那套。这是新用户看到
+          的第一屏，此前它是三个工作区里唯一一个 22px、左对齐的开场——同一个产品
+          的同一个位置，三种第一印象。 */}
+      <ModeStartHeader
+        description={
+          <>
+            Agent 读写的就是这个文件夹里的真实文件，产物也留在那里。在终端里可以用{" "}
+            <code>agent-cli project use</code> 直接把当前目录变成项目。
+          </>
+        }
+        title="在哪个文件夹里编码？"
+      />
 
       {projects.isPending ? <LoadingLine label="正在读取项目" /> : null}
       {projects.isError ? (

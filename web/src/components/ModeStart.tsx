@@ -28,7 +28,13 @@ export function ModeStartHeader({
   title,
 }: {
   action?: ReactNode;
-  description: string;
+  /**
+   * `ReactNode` 而不是 `string`：Code 那一屏的引子里有一条命令
+   * （`agent-cli project use`），而命令要看起来像命令。收窄成字符串会让每一个
+   * 需要在引子里强调半句话的页面，要么放弃强调，要么绕开这个组件自己写一遍
+   * header——而后者正是这次改动在收的那笔债。
+   */
+  description: ReactNode;
   title: string;
 }) {
   return (
