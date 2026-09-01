@@ -1,0 +1,27 @@
+# Line endings, only where a program actually depends on them.
+#
+# Deliberately not `* text=auto`. That is the usual recommendation and it would
+# renormalise every file in the repository on the next checkout, producing a
+# diff nobody asked for in order to fix two files that can say so themselves.
+# Three rules, each for a failure that has a name:
+#
+#   *.cmd / *.bat  cmd.exe is documented to work with either, but `goto` into a
+#                  label -- which scripts/panel.cmd is built out of -- is where
+#                  LF-only batch files are known to misbehave. A Windows user
+#                  with core.autocrlf=input would otherwise check out the one
+#                  file whose whole job is to work on Windows in the one form
+#                  that might not.
+#
+#   *.sh           the mirror image, and the more common failure: a Windows
+#                  clone with core.autocrlf=true hands scripts/dev.sh to bash
+#                  with CRLF, and bash reports `/usr/bin/env: 'bash\r': No such
+#                  file or directory` -- an error that names neither the file
+#                  nor the cause.
+#
+#   *.svg          docs/assets/ is generated, and the panel inlines the same
+#                  bytes it publishes. Two checkouts disagreeing on line endings
+#                  would make the same tree build two different pages.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh  text eol=lf
+*.svg text eol=lf

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import json
 import re
 import subprocess
@@ -66,6 +67,46 @@ DEFAULT_PORT = 8770
 # --------------------------------------------------------------------------
 # 1. Reading the tree
 # --------------------------------------------------------------------------
+
+
+def _speak_utf8() -> None:
+    """Make this program's own output survive a stream that is not UTF-8.
+
+    Almost every line it prints is Chinese, and where that breaks is narrower
+    than "Windows" and worth stating precisely: a *console* stdout on Windows
+    has gone through the console API in UTF-8 since Python 3.6 and is fine. A
+    **redirected** one is not -- `panel --json > data.json`, or piping to
+    `more` -- because there Python falls back to the ANSI code page with strict
+    error handling, and on an English-locale install that is cp1252, which
+    cannot encode one character of this. The failure it produces is the worst
+    shape available: everything is built, the file is written, and then the
+    *report* raises UnicodeEncodeError, so work that succeeded looks like it
+    failed.
+
+    Reconfiguring to UTF-8 covers the redirected case exactly. On a legacy
+    conhost that has been switched to a raw code page it degrades to mojibake
+    rather than to a traceback, which is the right way round -- and the one
+    line that must survive either way, the URL, is printed as ASCII on its own.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:  # a stream someone replaced with a plain object
+            continue
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def _rel(path: Path) -> str:
+    """A repo-relative path as a string, with forward slashes on every platform.
+
+    ``str(p.relative_to(root))`` is the obvious spelling and it is wrong on
+    Windows: it yields ``docs\\assets\\arch-layers.svg``. That string is not
+    only displayed -- it is the key the panel matches on (which adapter a tool
+    was declared in), it is written into the JSON the page is built from, and it
+    is what a reader copies into an editor. ``as_posix()`` makes the whole
+    program speak one path dialect regardless of the host.
+    """
+    return path.relative_to(PROJECT_ROOT).as_posix()
 
 
 def _summary(doc: str | None) -> str:
@@ -295,12 +336,15 @@ def scan_packages() -> list[dict[str, Any]]:
         for py in sorted(pkg_dir.rglob("*.py")):
             if "__pycache__" in py.parts:
                 continue
-            rel = py.relative_to(PROJECT_ROOT)
             tree = _parse(py)
-            group = str(py.parent.relative_to(pkg_dir)) if py.parent != pkg_dir else ""
+            group = (
+                py.parent.relative_to(pkg_dir).as_posix()
+                if py.parent != pkg_dir
+                else ""
+            )
             module = Module(
                 name=py.stem,
-                path=str(rel),
+                path=_rel(py),
                 loc=_loc(py),
                 doc=_summary(ast.get_docstring(tree)) if tree else "",
                 symbols=_module_symbols(tree) if tree else [],
@@ -320,7 +364,7 @@ def scan_packages() -> list[dict[str, Any]]:
             {
                 "name": top,
                 "layer": PACKAGE_LAYER.get(top, "outer"),
-                "path": str(pkg_dir.relative_to(PROJECT_ROOT)),
+                "path": _rel(pkg_dir),
                 "loc": sum(s["loc"] for s in subs),
                 "files": sum(s["files"] for s in subs),
                 "groups": subs,
@@ -391,7 +435,7 @@ def scan_endpoints() -> list[dict[str, Any]]:
                         "path": (prefixes[owner_name] + str(tail)) or "/",
                         "handler": node.name,
                         "doc": _summary(ast.get_docstring(node)),
-                        "module": str(py.relative_to(PROJECT_ROOT)),
+                        "module": _rel(py),
                         "group": py.stem,
                     }
                 )
@@ -429,10 +473,8 @@ def scan_tools() -> list[dict[str, Any]]:
         tree = _parse(py)
         if tree is None:
             continue
-        rel = str(py.relative_to(PROJECT_ROOT))
-        kind = next(
-            (k for frag, k in kinds if frag in rel.replace("\\", "/")), "in-process"
-        )
+        rel = _rel(py)
+        kind = next((k for frag, k in kinds if frag in rel), "in-process")
         for const, value in _const_strings(tree).items():
             if not (const.endswith("_TOOL") or const.endswith("TOOL_NAME")):
                 continue
@@ -471,7 +513,7 @@ def scan_tools() -> list[dict[str, Any]]:
                             "name": str(kw.value.value),
                             "kind": "mcp",
                             "constant": f"{alias} server",
-                            "module": str(server.relative_to(PROJECT_ROOT)),
+                            "module": _rel(server),
                             "doc": _summary(ast.get_docstring(tree)),
                         }
                     )
@@ -507,7 +549,7 @@ def scan_adrs() -> list[dict[str, Any]]:
             {
                 "id": number,
                 "title": heading,
-                "path": str(md.relative_to(PROJECT_ROOT)),
+                "path": _rel(md),
                 "status": status,
                 "superseded": bool(re.search(r"被.*取代|Superseded", text)),
             }
@@ -534,7 +576,7 @@ def scan_profiles() -> list[dict[str, Any]]:
         out.append(
             {
                 "name": toml.stem.replace("config.", ""),
-                "path": str(toml.relative_to(PROJECT_ROOT)),
+                "path": _rel(toml),
                 "schema": schema,
                 "headline": " ".join(header[:3]) if header else "",
                 "mcp_servers": enabled,
@@ -578,7 +620,7 @@ def scan_guards() -> dict[str, Any]:
     if tree is None:
         return {}
     return {
-        "path": str(guard.relative_to(PROJECT_ROOT)),
+        "path": _rel(guard),
         "outer_packages": _string_set(tree, "OUTER_BOUNDARY_PACKAGES"),
         "core_allowlist": _string_set(tree, "CORE_THIRD_PARTY_ALLOWLIST"),
         "forbidden_core": _string_set(tree, "FORBIDDEN_CORE_IMPORTS"),
@@ -615,7 +657,7 @@ def scan_web() -> dict[str, Any]:
             continue
         text = f.read_text(encoding="utf-8", errors="replace")
         if re.search(r"\bfetch\(|new EventSource\(", text):
-            net_files.append(str(f.relative_to(PROJECT_ROOT)))
+            net_files.append(_rel(f))
     scripts: dict[str, str] = {}
     node = ""
     pkg = web / "package.json"
@@ -807,7 +849,7 @@ def scan_graphs() -> list[dict[str, Any]]:
             {
                 "version": version,
                 "label": label,
-                "module": str(py.relative_to(PROJECT_ROOT)),
+                "module": _rel(py),
                 "doc": _summary(ast.get_docstring(tree)),
                 "entry": consts.get("ENTRY_NODE", ""),
                 "terminal": consts.get("TERMINAL_NODE", ""),
@@ -836,7 +878,7 @@ def scan_profiles_summary() -> dict[str, Any]:
     return {
         "schema_version": m.group(1) if m else "",
         "single_valued_literals": single,
-        "path": str(settings.relative_to(PROJECT_ROOT)),
+        "path": _rel(settings),
     }
 
 
@@ -1474,6 +1516,13 @@ add("overview", "概览", "全景", () => {
       <div class="card stat"><b>${a}</b><span>${esc(b)}</span></div>`).join("")}</div>
     ${figure("arch-layers", "依赖箭头一律由外向内。核心层不认识任何框架——这不是约定，是一条会让 CI 变红的测试。")}
     <h3>怎么把它跑起来</h3>
+    <div class="note"><b>这一栏是 macOS / Linux 的写法。</b>
+      <span class="mono">scripts/dev.sh</span> 是 bash，Windows 上跑不了；这一页本身在 Windows 上开
+      <span class="mono">scripts\\panel.cmd</span>（双击也行），或者
+      <span class="mono">python scripts\\architecture_panel.py --serve</span>。
+      面板不 import 标准库以外的任何东西，所以它不需要 <span class="mono">uv sync</span>、不需要虚拟环境、
+      也不需要下面那些服务里的任何一个——机器上已经有的那个 Python 就够。
+      表里其余的命令要真正的服务，那部分目前只有 bash 一条路。</div>
     <div class="scroll"><table><thead><tr><th>命令</th><th>它做什么</th></tr></thead><tbody>
       ${DATA.dev_commands.map((c) => `<tr><td class="mono">scripts/dev.sh ${esc(c.name)}</td><td class="muted">${esc(c.doc)}</td></tr>`).join("")}
     </tbody></table></div>`;
@@ -1940,6 +1989,21 @@ def render(data: dict[str, Any], diagrams: dict[str, str]) -> str:
 # --------------------------------------------------------------------------
 
 
+class _LoopbackServer(HTTPServer):
+    """The panel's server, differing from the default in one flag.
+
+    On POSIX ``SO_REUSEADDR`` only waives the TIME_WAIT delay, which is what
+    makes "Ctrl-C, edit, run again" work without an "address already in use".
+    On Windows the same flag means something else: a second process may bind a
+    port the first is still listening on, and the two then split incoming
+    requests unpredictably -- so a second ``panel`` would appear to work while
+    half the page came from the older build. There the honest answer is to fail
+    to bind and say so.
+    """
+
+    allow_reuse_address = sys.platform != "win32"
+
+
 def serve(directory: Path, port: int, open_browser: bool) -> int:
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *a: Any, **kw: Any) -> None:
@@ -1952,9 +2016,31 @@ def serve(directory: Path, port: int, open_browser: bool) -> int:
     # server is written here instead of being `python -m http.server`: that
     # module's default binds every interface, and what this directory contains
     # is the source tree's docstrings.
-    httpd = HTTPServer(("127.0.0.1", port), Handler)
+    # The docstring above says the honest answer on Windows is to fail to bind
+    # and say so. Failing was implemented; saying so was not, and an unhandled
+    # OSError is a traceback rather than a sentence -- in a window that, when
+    # this was double-clicked from Explorer, closes on top of it.
+    try:
+        httpd = _LoopbackServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        print(f"panel: 127.0.0.1:{port} 绑不上（{exc}）。", file=sys.stderr)
+        print(f"       换个端口再试：--port {port + 1}", file=sys.stderr)
+        # WinError 10013 is not "in use" -- it is a policy refusal (a reserved
+        # range, or a firewall), and telling someone to close the other panel
+        # would send them looking for a process that does not exist.
+        if getattr(exc, "winerror", None) == 10013:
+            print(
+                "       （10013：这个端口被系统保留或被策略挡下，不是被别的进程占着）",
+                file=sys.stderr,
+            )
+        return 1
     url = f"http://127.0.0.1:{port}/"
-    print(f"架构面板: {url}  (Ctrl-C 停止)", file=sys.stderr)
+    # ASCII on purpose, and first: on a console that cannot render the line
+    # below, this one still tells a reader where the panel is.
+    print(f"panel: {url}   (Ctrl-C to stop)", file=sys.stderr)
+    print(
+        "架构面板已启动。浏览器没自动打开的话，手动访问上面那个地址。", file=sys.stderr
+    )
     if open_browser:
         webbrowser.open(url)
     try:
@@ -1967,6 +2053,11 @@ def serve(directory: Path, port: int, open_browser: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # First statement, before the parser exists: every `help=` below is Chinese,
+    # and argparse writes them from inside parse_args -- so a `--help` on a
+    # cp1252 console printed through an unreconfigured stdout, which is the one
+    # invocation a new reader is most likely to try first.
+    _speak_utf8()
     parser = argparse.ArgumentParser(
         description="Build and serve the local architecture panel."
     )
@@ -2014,7 +2105,11 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.build) if args.build else DEFAULT_OUT
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / "index.html"
-    target.write_text(render(data, load_diagrams()), encoding="utf-8")
+    # newline="\n" so the page is byte-identical on every platform: the default
+    # translates "\n" to "\r\n" on Windows, which would make the same tree
+    # produce two different files and the size printed below disagree with the
+    # one a colleague sees.
+    target.write_text(render(data, load_diagrams()), encoding="utf-8", newline="\n")
     size_kb = target.stat().st_size / 1024
     # `--build` accepts any directory, including one outside the checkout, so the
     # pretty relative path is a best effort rather than an assumption. It was an

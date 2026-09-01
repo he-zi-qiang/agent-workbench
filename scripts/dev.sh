@@ -596,8 +596,22 @@ panel)
   # provider key. It reads the working tree, writes one self-contained page and
   # serves it on loopback -- so "what is this repository" is answerable on a
   # fresh checkout, before any of the above has been started.
+  #
+  # And deliberately not "$PYTHON", which is .venv/bin/python. The venv is
+  # exactly the thing you do not have yet on the checkout where this command is
+  # most useful, so routing through it would have made the first step depend on
+  # the step it exists to precede. The panel imports nothing outside the
+  # standard library, so any python3 runs it; the venv is preferred only when it
+  # is already there, to keep one interpreter in play for people who have one.
   shift
-  exec "$PYTHON" scripts/architecture_panel.py --serve "$@"
+  if [ -x "$PYTHON" ]; then
+    exec "$PYTHON" scripts/architecture_panel.py --serve "$@"
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    exec python3 scripts/architecture_panel.py --serve "$@"
+  fi
+  echo "panel: no $PYTHON and no python3 on PATH" >&2
+  exit 1
   ;;
 
 *)

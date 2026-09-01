@@ -28,9 +28,31 @@ doing its own part, and none of them takes over the core loop.
 
 ### 0.1 One command, one offline architecture panel
 
+**macOS / Linux:**
+
 ```bash
 scripts/dev.sh panel
 ```
+
+**Windows** (`dev.sh` is bash, so there is no route through it there):
+
+```bat
+scripts\panel.cmd
+```
+
+Double-clicking it in Explorer works too. It runs from both cmd and PowerShell,
+and takes the same arguments in either (`--port 9000`, `--no-open`, `--check`).
+To skip the launcher, use `py` rather than `python`:
+
+```bat
+py -3 scripts\architecture_panel.py --serve
+```
+
+Half the launcher's reason for existing is in that difference: a Windows machine
+with **no Python installed** still has a `python.exe` on PATH — the Microsoft
+Store's execution alias, which opens a shop and exits. The launcher probes each
+candidate by *running* it rather than by asking whether the name resolves, so it
+never hands the panel to that stub.
 
 It builds a self-contained HTML page and serves it on `127.0.0.1:8770`.
 **No database, no Qdrant, no API key, no network** — it reads the working tree.
@@ -70,8 +92,24 @@ uv run python scripts/architecture_panel.py --check
 fails when something it names stops existing. So the hand-written half cannot rot
 quietly either.
 
+**It imports nothing outside the standard library**, so it opens on a machine
+that has only Python — no `uv sync`, no virtualenv, none of the repository's
+services. That property is maintained deliberately rather than by accident: the
+panel is what someone opens when they **do not yet know what the repository
+is**, and a first step that requires the environment to be built first puts that
+backwards. `tests/deployment/test_architecture_panel.py` guards it, along with
+the mistakes that only show up on Windows — path separators, the console code
+page, and a batch file's encoding and line endings.
+
+> **An honest note about Windows.** This repository's suite runs on POSIX, so
+> those are **assertions about the rules** that make the Windows behaviour hold,
+> not a record of a run on Windows. A rule is weaker evidence than a run, and
+> the tests say so in as many words.
+
 Other uses: `--build DIR` emits the static page only, `--json` prints the scanned
-data (useful for other checks), `--port` changes the port. **The listen address is
+data (useful for other checks), `--port` changes the port. Call the Python
+script directly for those three: both launchers append `--serve` themselves, so
+`--build` through one of them builds *and* serves. **The listen address is
 hard-coded to `127.0.0.1`** — the page spreads the source tree's docstrings out
 for a reader, and `python -m http.server` defaults to every interface.
 
@@ -765,7 +803,7 @@ package.
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
 | `docs/adr/` | 87 decision records, numbered 0012–0100 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
-| `scripts/` | `dev.sh` (the one place that knows this machine), `architecture_panel.py` (the panel), evaluation and benchmark scripts |
+| `scripts/` | `dev.sh` (the one place that knows this machine; bash), `panel.cmd` (the panel's Windows entry point; ASCII + CRLF), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
 ---
 
@@ -773,10 +811,15 @@ package.
 
 Prerequisites: Python 3.12 and `uv`.
 
-**Look at the whole project first** — no database, no network, no key:
+**Look at the whole project first** — no database, no network, no key, and no
+environment to build beforehand:
 
 ```bash
-scripts/dev.sh panel
+scripts/dev.sh panel          # macOS / Linux
+```
+
+```bat
+scripts\panel.cmd             :: Windows (or double-click it)
 ```
 
 **Zero-dependency demo** — byte-for-byte reproducible output:
