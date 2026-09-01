@@ -111,6 +111,27 @@ services:
     restart: "no"
     <<: *app-hardening
 
+  # The console may accept a provider key, but the API runs read-only and as a
+  # non-root user. Prepare one narrow persistent volume for that write instead
+  # of making the application filesystem writable or putting a secret in this
+  # file. The API reads the key only at startup, so a saved key takes effect on
+  # the next restart.
+  provider-key-init:
+    image: agent-workbench:local
+    build:
+      context: .
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      [
+        "chown 10001:10001 /var/lib/agent-workbench/provider-key && chmod 0700 /var/lib/agent-workbench/provider-key",
+      ]
+    volumes:
+      - provider_key_data:/var/lib/agent-workbench/provider-key
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
   api:
     image: agent-workbench:local
     build:
@@ -123,8 +144,16 @@ services:
       AW_API__PORT: "8001"
       LOCAL_PROXY_PORT: "8000"
       LOCAL_PROXY_UPSTREAM_PORT: "8001"
+      # No credential is present on a fresh stack. The Settings page writes it
+      # to the volume below; these public catalogue ids make the next API start
+      # capable of assembling Direct Chat from that stored key.
+      AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
+      AW_MODEL__MAIN__MODEL_ID: deepseek-chat
+      AW_MODEL__COMPACT__MODEL_ID: deepseek-chat
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      provider-key-init:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
@@ -134,6 +163,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
+      - provider_key_data:/var/lib/agent-workbench/provider-key
     healthcheck:
       test:
         [
@@ -209,4 +239,5 @@ volumes:
   artifact_data:
   otel_data:
   postgres_data:
+  provider_key_data:
   qdrant_data:

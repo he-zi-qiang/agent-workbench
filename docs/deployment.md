@@ -44,9 +44,17 @@ current identity adapter reads request headers. A small standard-library proxy
 is necessary for Docker NAT to reach that loopback process; its host mapping is
 still loopback-only.
 
-The default API is a control-plane/local smoke stack. The embedding extra and
-model credentials are intentionally absent, so Chat can report unavailable
-rather than pretending a real RAG/model deployment exists.
+The default API starts without a model credential. Open **Settings → Model
+key** in the console to store a DeepSeek key in the dedicated
+`provider_key_data` volume, then restart the API with
+`docker compose restart api`. The key is never written to the checkout, image,
+Compose file or command line. The public `deepseek-chat` model ids are pinned in
+the topology so that the restarted API can assemble Direct Chat.
+
+The embedding extra and its multi-gigabyte weights remain intentionally absent
+from this image. That costs knowledge-base-grounded Chat, not Direct Chat: a
+question sent with “do not use a knowledge base” reaches the configured model
+without loading an embedding runtime.
 
 **A Task Worker on that stack is a v2-only Worker, and needs the matching
 submission default.** With no embedding runtime to load, real assembly opens no
@@ -121,6 +129,17 @@ It starts `--profile demo`, not the default topology. The default one has no
 Task Worker in it, so the console opens on Chat and an empty task list and
 shows nothing of claim, lease, epoch or fencing.
 
+On the first run Chat has no provider yet. Open the identity button at the
+bottom of the navigation rail, choose **Model key**, save the key, then run:
+
+```bat
+docker compose restart api
+```
+
+Reload the console after the API is healthy. `scripts\stack.cmd down` leaves
+the named key volume intact; removing volumes explicitly removes the stored
+key as well.
+
 `tests/deployment/test_compose.py` holds the launcher to all of that. As with
 the panel's Windows tests, those are **rule assertions checked on POSIX**, not
 a run on Windows: each asserts the rule that makes the Windows behaviour hold,
@@ -181,8 +200,10 @@ this loopback-only local stack. It has no real provider, database, Qdrant or
 artifact secret. Do not copy this trust setup into any remotely reachable
 environment.
 
-Configuration belongs in `AW_*` variables. For a real provider or secret-file
-test, create an untracked directory such as `.secrets/`, set
+Configuration belongs in `AW_*` variables. The local console can write its
+provider key to the Compose-managed `provider_key_data` volume as described
+above. For a deployment-managed provider or secret-file test instead, create
+an untracked directory such as `.secrets/`, set
 `AW_SECRETS_DIR=/run/secrets`, and mount it through an uncommitted Compose
 override. Flat secret filenames follow the settings names, for example
 `AW_SECRETS__DEEPSEEK_API_KEY`. Do not put secret values in a Dockerfile,

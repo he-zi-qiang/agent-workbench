@@ -193,6 +193,41 @@ def test_the_api_and_host_proxy_use_distinct_ports() -> None:
     assert 'LOCAL_PROXY_UPSTREAM_PORT", "8001"' in proxy
 
 
+def test_the_console_can_store_a_provider_key_outside_the_image() -> None:
+    """The settings page needs one writable path in an otherwise read-only API.
+
+    No key value belongs in Compose.  What belongs here is the durable path the
+    console writes, ownership for the image's non-root user, and concrete public
+    model ids so the next API start can assemble Direct Chat from the stored key.
+    """
+
+    compose = _compose()
+    services = compose["services"]
+    api = services["api"]
+    environment = api["environment"]
+
+    assert "AW_SECRETS__DEEPSEEK_API_KEY" not in environment
+    assert environment["AW_KEY_FILE"] == ("/var/lib/agent-workbench/provider-key/key")
+    assert environment["AW_MODEL__MAIN__MODEL_ID"] == "deepseek-chat"
+    assert environment["AW_MODEL__COMPACT__MODEL_ID"] == "deepseek-chat"
+
+    key_mount = next(
+        mount
+        for mount in api["volumes"]
+        if mount["target"] == "/var/lib/agent-workbench/provider-key"
+    )
+    assert key_mount["type"] == "volume"
+    assert key_mount["source"].endswith("provider_key_data")
+
+    initializer = services["provider-key-init"]
+    assert initializer["user"] == "0:0"
+    assert key_mount["source"] in {mount["source"] for mount in initializer["volumes"]}
+    assert "10001:10001" in " ".join(initializer["command"])
+    assert api["depends_on"]["provider-key-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+
+
 def _launcher() -> str:
     """The Windows launcher's text, decoded under the rule it is written to."""
 
