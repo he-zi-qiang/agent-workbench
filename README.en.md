@@ -568,7 +568,7 @@ number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (621 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (622 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
