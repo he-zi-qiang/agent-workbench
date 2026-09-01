@@ -241,9 +241,16 @@ describe("EvaluationPage", () => {
   });
 
   it("says so rather than guessing when a report predates the corpus digest", async () => {
+    // The key is **deleted**, not merely absent from the committed fixture.
+    // Writing this as "just use the file" passed until the corpus was re-run
+    // and the file grew a `corpus_digest` — a test whose subject is "a report
+    // written before this field existed" cannot depend on a live report
+    // happening not to have it yet.
+    const beforeTheDigest: Record<string, unknown> = { ...hybridReference };
+    delete beforeTheDigest.corpus_digest;
     vi.mocked(getEvaluationReports).mockResolvedValue({
       reports: [
-        { suite: "rag", name: "hybrid-reference", payload: hybridReference },
+        { suite: "rag", name: "hybrid-reference", payload: beforeTheDigest },
         {
           suite: "rag",
           name: "hybrid-llama_index",
