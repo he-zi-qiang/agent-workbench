@@ -573,8 +573,8 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 80,685 lines of Python across 320 files, 98,456 lines of tests across 256
-files, 51,064 lines of frontend TypeScript across 139 files; 86 files under
+Scale: 80,842 lines of Python across 320 files, 98,875 lines of tests across 258
+files, 51,166 lines of frontend TypeScript across 139 files; 86 files under
 `docs/adr/`, numbered 0012–0099 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
