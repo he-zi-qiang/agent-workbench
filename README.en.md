@@ -225,11 +225,19 @@ hang off the `VectorStoreIndex` this project does build and so need no new
 import; every other guard is import-shaped. The reasoning is in
 [the ten-minute version §3.1](docs/HIGHLIGHTS.md).
 
-> **It is a denylist, not an allowlist.** `FORBIDDEN_CORE_IMPORTS` lists what is
-> banned, so **a third-party package nobody listed enters the core without a red
-> build** — which is how the `regex` above arrived. It has a good reason; "has a
-> good reason" and "is guarded" are different statements. Tracked in
-> [known gaps](docs/known-gaps.md).
+> **Third-party imports into core are an allowlist** (`CORE_THIRD_PARTY_ALLOWLIST`,
+> [ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md)):
+> the standard library, `agent_workbench` itself, and exactly two others —
+> `pydantic` (anywhere in core) and `regex` (**only `domain/workspace.py`**, for a
+> matching engine with a timeout). **Everything else fails, whether or not anybody
+> thought to ban it.**
+>
+> It became an allowlist on 2026-08-31. Before that `FORBIDDEN_CORE_IMPORTS` was a
+> *denylist*, which is how the `regex` above arrived with a green build — it has a
+> good reason, and "has a good reason" and "is guarded" are different statements.
+> The denylist stays beside it, naming the integrations this project rejected so
+> that importing one fails with "move it behind an adapter" rather than the general
+> message; a test asserts the two never overlap.
 
 ### 2.3 Which layer holds which capability
 
@@ -468,7 +476,8 @@ taken that day and the differences mean something:
 | Batch 55 (the ADR-097 wiring) | 3989 | 3201 | 1376 | 826 |
 | Batch 56 (the C-05 diagnostic) | 3993 | 3205 | 1376 | 828 |
 | Batch 57 (the boundary tests) | 3993 | 3207 | 1376 | 828 |
-| Batches 58–63 (the closing pass, this table) | **4013** | **3225** | **1376** | **842** |
+| Batches 58–63 (the closing pass) | 4013 | 3225 | 1376 | 842 |
+| Batch 64 (the boundary guard, this table) | **4017** | **3229** | **1376** | **842** |
 
 The last row's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
 (`test_api_runtime_ceilings.py`), four config-leaf reader guards
@@ -480,6 +489,12 @@ On the frontend, eight for the quick switcher (`navigation.test.ts` — 52 test 
 had **zero** coverage of `QUICK_DESTINATIONS` before it) and six for the evaluation
 page. **The five-directory row did not move**, because none of these batches added
 tests there — whether they pass is covered by the full-suite row above.
+
+The last row's +4 is ADR-099's four allowlist guards. The five-directory row was
+**re-measured anyway**, even though the new tests are not in it: that batch changed
+`src/` (two tool specs now import `WORKSPACE_WRITE_SCOPE`, and a duplicate terminal
+-state set was removed), and "no new tests there" is a different claim from "nothing
+there behaves differently".
 
 > **The real-services column was measured twice and the first one was red, which is
 > worth writing down.** The first (40m20s) ran *concurrently* with a 2h30m RAG
@@ -501,8 +516,8 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4013 passed / 12 skipped` |
-| Backend, no external services (local) | `3225 passed / 800 skipped` |
+| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4017 passed / 12 skipped` |
+| Backend, no external services (local) | `3229 passed / 800 skipped` |
 | Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped` |
 | Frontend Vitest (local, 53 files) | `842 passed` |
 
@@ -557,14 +572,15 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
 Scale: 80,685 lines of Python across 320 files, 98,456 lines of tests across 256
-files, 51,064 lines of frontend TypeScript across 139 files; 85 files under
-`docs/adr/`, numbered 0012–0098 — **with gaps**: 0050 and 0053 were claimed by the
+files, 51,064 lines of frontend TypeScript across 139 files; 86 files under
+`docs/adr/`, numbered 0012–0099 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
 ("82 files, 0012–0095") was left behind by ADR-096, the one after that
-("83 files, 0012–0096") by ADR-097, and the one after that ("84 files, 0012–0097")
-by ADR-098. **More test code than source code is deliberate** — the rule is that a test must first be shown red, and **a
+("83 files, 0012–0096") by ADR-097, the one after that ("84 files, 0012–0097")
+by ADR-098, and the one after *that* ("85 files, 0012–0098") by ADR-099 — the
+last two on the same evening. **More test code than source code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
 
 ---
@@ -580,7 +596,7 @@ test without a control case does not count**.
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics |
 | [Frontend design baseline](docs/frontend-design.md) | Console structure, protocol boundaries, responsive strategy |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it |
-| [ADR index](docs/adr/) | 85 decision records (0012–0098; 0050 and 0053 reserved, never written) |
+| [ADR index](docs/adr/) | 86 decision records (0012–0099; 0050 and 0053 reserved, never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role |
 
 Most documentation is written in Chinese; this page and

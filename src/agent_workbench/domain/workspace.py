@@ -86,6 +86,12 @@ GREP_TIMEOUT_SECONDS: Final[float] = 2.0
 #: with the edit tool: both replace what a name points at, and a permission
 #: that let you rewrite a file only if you rewrote all of it would be a
 #: distinction nobody could act on.
+#:
+#: **Shared through this name, which it was not until 2026-08-31.** Four tool
+#: specs -- `workspace_write`, `workspace_edit`, `project_write`, `project_edit`
+#: -- each spelled the string themselves, so "they share a scope" was four
+#: literals that happened to agree and nothing that would notice if one of them
+#: stopped. `PROJECT_RUN_SCOPE` next door had it right from the start.
 WORKSPACE_WRITE_SCOPE: Final[str] = "workspace:write"
 
 

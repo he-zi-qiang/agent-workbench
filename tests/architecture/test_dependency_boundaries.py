@@ -10,6 +10,7 @@ automatically.
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,8 +23,62 @@ OUTER_BOUNDARY_PACKAGES = frozenset(
     {"_config", "adapters", "apps", "bootstrap", "interfaces", "workers"}
 )
 
+
+@dataclass(frozen=True, slots=True)
+class CoreDependency:
+    """One third-party package framework-neutral code is allowed to import.
+
+    ``modules`` narrows the permission to specific files when the reason for it
+    is specific. ``None`` means "anywhere in core", which only ``pydantic``
+    earns: it is the language this project writes its invariants in, so pinning
+    it to a file list would be a list of every core module.
+    """
+
+    reason: str
+    modules: frozenset[str] | None = None
+
+
+#: **The rule.** Core may import the standard library, itself, and exactly
+#: these -- anything else fails, whether or not anybody thought to ban it.
+#:
+#: ADR-099. `FORBIDDEN_CORE_IMPORTS` below is a *denylist*, and a denylist
+#: cannot say "no" to a package nobody listed. That is not hypothetical here:
+#: `domain/workspace.py` imports `regex`, for a good reason, and the build has
+#: been green the whole time -- while both READMEs said `domain/` depends on the
+#: standard library and Pydantic, and that this boundary makes CI red. The
+#: first sentence was false and the second could not have caught it.
+#:
+#: Adding an entry is the decision. Write the reason in the entry.
+CORE_THIRD_PARTY_ALLOWLIST: dict[str, CoreDependency] = {
+    "pydantic": CoreDependency(
+        reason=(
+            "The modelling language of the domain: `DomainModel` is globally "
+            'frozen with `extra="forbid"`, and the invariants this project '
+            "cares about are expressed as types that refuse to construct. "
+            "Removing it would not move a dependency out of core, it would "
+            "move the invariants out of the type system."
+        ),
+    ),
+    "regex": CoreDependency(
+        reason=(
+            "A matching engine with a timeout, which the standard library's "
+            "`re` does not have. `GREP_TIMEOUT_SECONDS` is the reason: without "
+            "a per-match deadline a pathological pattern from a tool call "
+            "holds the event loop, and the loop is shared with every other run "
+            "in the process."
+        ),
+        modules=frozenset({"domain/workspace.py"}),
+    ),
+}
+
 # Keep this list explicit: a new concrete integration must make a conscious
 # architecture decision instead of silently leaking into framework-neutral code.
+#
+# **Kept alongside the allowlist above rather than replaced by it**, and the two
+# have different jobs: the allowlist is the rule and catches everything; this
+# names the integrations this project *considered and rejected*, so importing
+# one of them fails with "move it behind an adapter" rather than with the
+# general "nobody approved this". A test below asserts the two never disagree.
 FORBIDDEN_CORE_IMPORTS = frozenset(
     {
         # Agent/RAG/workflow frameworks
@@ -353,6 +408,106 @@ def test_core_keeps_frameworks_and_concrete_sdks_at_outer_boundaries() -> None:
         "framework-neutral core imports a concrete framework or SDK; move the "
         "integration behind an adapter:\n"
         f"{_format_import_violations(violations)}"
+    )
+
+
+def _third_party_top_level(module: str) -> str | None:
+    """The distribution a module name belongs to, or ``None`` when it is ours.
+
+    ``sys.stdlib_module_names`` rather than a hand-kept list of standard-library
+    names: a hand-kept list is the same shape of mistake this allowlist exists
+    to remove, one revision behind at all times.
+    """
+
+    top = module.split(".", 1)[0]
+    if not top or top == "agent_workbench" or top in sys.stdlib_module_names:
+        return None
+    return top
+
+
+def test_core_imports_only_the_third_party_packages_somebody_approved() -> None:
+    """ADR-099. The rule, as opposed to the list of rejections below it.
+
+    A denylist answers "is this one of the frameworks we said no to". This
+    answers "did anybody agree to this being in core at all", which is the
+    question `regex` slipped through for months while both READMEs claimed the
+    opposite and claimed a red build would say so.
+    """
+
+    core_files = _core_python_files()
+    assert core_files, "core source discovery must scan at least the package root"
+
+    violations: list[str] = []
+    for file in core_files:
+        relative = file.relative_to(PACKAGE_ROOT).as_posix()
+        for reference in _import_references(file):
+            top = _third_party_top_level(reference.module)
+            if top is None:
+                continue
+            allowed = CORE_THIRD_PARTY_ALLOWLIST.get(top)
+            if allowed is None:
+                violations.append(
+                    f"{file.relative_to(PROJECT_ROOT)}:{reference.line}: "
+                    f"imports {reference.module!r} ({top!r} is not in "
+                    "CORE_THIRD_PARTY_ALLOWLIST)"
+                )
+            elif allowed.modules is not None and relative not in allowed.modules:
+                violations.append(
+                    f"{file.relative_to(PROJECT_ROOT)}:{reference.line}: "
+                    f"imports {reference.module!r}, which is allowed in core "
+                    f"only from {sorted(allowed.modules)}"
+                )
+
+    assert not violations, (
+        "framework-neutral core imports a third-party package nobody approved. "
+        "Move it behind an adapter, or add it to CORE_THIRD_PARTY_ALLOWLIST "
+        "with the reason it belongs in core:\n" + "\n".join(sorted(violations))
+    )
+
+
+def test_every_allowlisted_core_dependency_is_still_imported() -> None:
+    """An allowlist that only grows is a denylist wearing a different hat.
+
+    Same reason `KNOWN_UNREAD_LEAVES` next door has a staleness check: a
+    permission nobody exercises should be withdrawn, not carried forward as a
+    standing exception to a rule.
+    """
+
+    imported = {
+        top
+        for file in _core_python_files()
+        for reference in _import_references(file)
+        if (top := _third_party_top_level(reference.module)) is not None
+    }
+    stale = sorted(set(CORE_THIRD_PARTY_ALLOWLIST) - imported)
+
+    assert not stale, (
+        "these packages are allowed in core and no core module imports them; "
+        f"drop the entry rather than keeping a standing permission: {stale}"
+    )
+
+
+def test_every_allowlisted_core_dependency_carries_a_reason() -> None:
+    empty = sorted(
+        name for name, entry in CORE_THIRD_PARTY_ALLOWLIST.items() if not entry.reason
+    )
+
+    assert not empty, f"allowlisted core dependencies without a reason: {empty}"
+
+
+def test_the_allowlist_and_the_rejection_list_never_disagree() -> None:
+    """Two guards, one rule -- so they may not contradict each other.
+
+    Without this, a future edit could allowlist something the denylist below
+    still rejects, and which test ran first would decide whether the build was
+    green. That is the drift this file exists to prevent, one level up.
+    """
+
+    both = sorted(set(CORE_THIRD_PARTY_ALLOWLIST) & FORBIDDEN_CORE_IMPORTS)
+
+    assert not both, (
+        "these packages are both allowed in core and named as rejected "
+        f"integrations; pick one: {both}"
     )
 
 
