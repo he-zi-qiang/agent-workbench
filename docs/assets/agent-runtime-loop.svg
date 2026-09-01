@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1256 792" width="1256" height="792" class="d" role="img" aria-label="Agent Runtime 一轮循环：取消检查、预算闸、上下文压缩、模型流、终态判定，然后准入、网关、调度、执行、写回，再回到开头">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1256" height="792" fill="none"/>
+<text x="40" y="38" class="h" text-anchor="start">Agent Runtime · 一轮循环</text>
+<text x="40" y="60" class="s" text-anchor="start">ClaudeLikeAgentRuntime._run 是一个 while True。下面是它的循环体，按代码里的顺序。</text>
+<text x="40" y="78" class="f m" text-anchor="start">runtime/agent_runtime.py · 1478 行 · 全仓唯一一处 async for over model.stream()</text>
+<rect x="1008" y="30" width="210" height="74" rx="10" class="ok"/>
+<text x="1024" y="52" class="t" text-anchor="start" fill="var(--ok)">三个终态</text>
+<text x="1024" y="70" class="f m" text-anchor="start">completed · failed · cancelled</text>
+<text x="1024" y="88" class="f" text-anchor="start">stop_reason 共 9 个值</text>
+<path d="M1113 156 L1113 108" class="edge" marker-end="url(#a)"/>
+<rect x="40" y="156" width="210" height="118" rx="10" class="paper"/><circle cx="62" cy="178" r="11" fill="none" stroke="var(--line)"/><text x="62" y="182" class="f m ai" text-anchor="middle">1</text><text x="82" y="183" class="t" text-anchor="start">取消检查</text><text x="56" y="204" class="f" text-anchor="start">cancellation.cancelled</text><text x="56" y="220" class="f" text-anchor="start">一轮里查 6 次，这是第一次</text>
+<rect x="282" y="156" width="210" height="118" rx="10" class="paper"/><circle cx="304" cy="178" r="11" fill="none" stroke="var(--line)"/><text x="304" y="182" class="f m ai" text-anchor="middle">2</text><text x="324" y="183" class="t" text-anchor="start">预算闸</text><text x="298" y="204" class="f" text-anchor="start">halt_reason_for(usage, now)</text><text x="298" y="220" class="f" text-anchor="start">步数 / token / 成本 / 截止</text><text x="298" y="236" class="f" text-anchor="start">max_tool_calls 故意不在这里问</text>
+<rect x="524" y="156" width="210" height="118" rx="10" class="acc"/><circle cx="546" cy="178" r="11" fill="none" stroke="var(--line)"/><text x="546" y="182" class="f m ai" text-anchor="middle">3</text><text x="566" y="183" class="t" text-anchor="start">上下文闸 → 压缩</text><text x="540" y="204" class="f" text-anchor="start">last_input_tokens ≥ 窗口×0.75</text><text x="540" y="220" class="f" text-anchor="start">ADR-081：压缩后仍超 → 停下</text><text x="540" y="236" class="f" text-anchor="start">压不动就说压不动，不硬答</text>
+<rect x="766" y="156" width="210" height="118" rx="10" class="acc"/><circle cx="788" cy="178" r="11" fill="none" stroke="var(--line)"/><text x="788" y="182" class="f m ai" text-anchor="middle">4</text><text x="808" y="183" class="t" text-anchor="start">模型流</text><text x="782" y="204" class="f" text-anchor="start">_stream_model → _consume</text><text x="782" y="220" class="f" text-anchor="start">一次调用，一条流，装在</text><text x="782" y="236" class="f" text-anchor="start">asyncio.timeout(deadline) 里</text>
+<rect x="1008" y="156" width="210" height="118" rx="10" class="paper"/><circle cx="1030" cy="178" r="11" fill="none" stroke="var(--line)"/><text x="1030" y="182" class="f m ai" text-anchor="middle">5</text><text x="1050" y="183" class="t" text-anchor="start">终态判定</text><text x="1024" y="204" class="f" text-anchor="start">_terminal_for_turn，8 条分支</text><text x="1024" y="220" class="f" text-anchor="start">没有工具调用 → 完成</text><text x="1024" y="236" class="f" text-anchor="start">有 → 往下走一批工具</text>
+<path d="M250 215.0 L282 215.0" class="edge" marker-end="url(#a)"/>
+<path d="M492 215.0 L524 215.0" class="edge" marker-end="url(#a)"/>
+<path d="M734 215.0 L766 215.0" class="edge" marker-end="url(#a)"/>
+<path d="M976 215.0 L1008 215.0" class="edge" marker-end="url(#a)"/>
+<path d="M1113 274 L1113 348" class="edge" marker-end="url(#a)"/>
+<text x="1100" y="300" class="f" text-anchor="end">有工具调用</text>
+<rect x="40" y="348" width="210" height="118" rx="10" class="paper"/><circle cx="62" cy="370" r="11" fill="none" stroke="var(--line)"/><text x="62" y="374" class="f m ai" text-anchor="middle">10</text><text x="82" y="375" class="t" text-anchor="start">写回与计量</text><text x="56" y="396" class="f" text-anchor="start">assistant + tool 两条消息进账本</text><text x="56" y="412" class="f" text-anchor="start">只给「被准入的」调用计费</text><text x="56" y="428" class="f" text-anchor="start">连续重复被拒 &gt; 2 次 → 结束</text>
+<rect x="282" y="348" width="210" height="118" rx="10" class="paper"/><circle cx="304" cy="370" r="11" fill="none" stroke="var(--line)"/><text x="304" y="374" class="f m ai" text-anchor="middle">9</text><text x="324" y="375" class="t" text-anchor="start">执行</text><text x="298" y="396" class="f" text-anchor="start">ToolExecutor，一次一个 handler</text><text x="298" y="412" class="f" text-anchor="start">min(工具/运行/部署) 三者取最小</text><text x="298" y="428" class="f" text-anchor="start">每 5 秒一次心跳 ToolProgress</text>
+<rect x="524" y="348" width="210" height="118" rx="10" class="paper"/><circle cx="546" cy="370" r="11" fill="none" stroke="var(--line)"/><text x="546" y="374" class="f m ai" text-anchor="middle">8</text><text x="566" y="375" class="t" text-anchor="start">调度</text><text x="540" y="396" class="f" text-anchor="start">plan_tool_batches（纯函数）</text><text x="540" y="412" class="f" text-anchor="start">只读并行 ≤ 4</text><text x="540" y="428" class="f" text-anchor="start">写/外部/破坏性一律独占成组</text>
+<rect x="766" y="348" width="210" height="118" rx="10" class="acc"/><circle cx="788" cy="370" r="11" fill="none" stroke="var(--line)"/><text x="788" y="374" class="f m ai" text-anchor="middle">7</text><text x="808" y="375" class="t" text-anchor="start">Tool Gateway</text><text x="782" y="396" class="f" text-anchor="start">prepare → authorize</text><text x="782" y="412" class="f" text-anchor="start">解析 · 大小 · schema · 钩子</text><text x="782" y="428" class="f" text-anchor="start">策略最多 3 轮，然后才谈审批</text>
+<rect x="1008" y="348" width="210" height="118" rx="10" class="paper"/><circle cx="1030" cy="370" r="11" fill="none" stroke="var(--line)"/><text x="1030" y="374" class="f m ai" text-anchor="middle">6</text><text x="1050" y="375" class="t" text-anchor="start">准入</text><text x="1024" y="396" class="f" text-anchor="start">propose：每一个都留痕</text><text x="1024" y="412" class="f" text-anchor="start">工具额度切一刀，超出的直接拒</text><text x="1024" y="428" class="f" text-anchor="start">同参数第 3 次 → 拒（断路器）</text>
+<path d="M1008 407.0 L976 407.0" class="edge" marker-end="url(#a)"/>
+<path d="M766 407.0 L734 407.0" class="edge" marker-end="url(#a)"/>
+<path d="M524 407.0 L492 407.0" class="edge" marker-end="url(#a)"/>
+<path d="M282 407.0 L250 407.0" class="edge" marker-end="url(#a)"/>
+<path d="M40 407.0 L20 407.0 L20 215.0 L40 215.0" class="edge-a" marker-end="url(#aa)"/>
+<text transform="rotate(-90 32 258)" x="32" y="258" class="f ai" text-anchor="middle">下一轮</text>
+<rect x="22" y="514" width="1212" height="216" rx="10" class="panel"/><text x="40" y="540" class="h m" text-anchor="start">循环上的五道闸</text><text x="40" y="559" class="s" text-anchor="start">闸长在循环里，不在调用方那边——调用方记得检查，是这条路上最容易忘的一件事</text>
+<rect x="34" y="572" width="228" height="144" rx="10" class="paper"/>
+<text x="50" y="596" class="t" text-anchor="start">预算</text>
+<text x="50" y="613" class="f m" text-anchor="start">domain/runs.py</text>
+<text x="50" y="634" class="f" text-anchor="start">三个谓词分别管三处：</text>
+<text x="50" y="649" class="f" text-anchor="start">开始一轮前、这轮 token</text>
+<text x="50" y="664" class="f" text-anchor="start">结算后、派发工具前。</text>
+<text x="50" y="679" class="f" text-anchor="start">额度花光时工具从请求里</text>
+<text x="50" y="694" class="f" text-anchor="start">撤下，而不是留着被拒</text>
+<rect x="276" y="572" width="228" height="144" rx="10" class="paper"/>
+<text x="292" y="596" class="t" text-anchor="start">截止</text>
+<text x="292" y="613" class="f m" text-anchor="start">runtime/budgets.py</text>
+<text x="292" y="634" class="f" text-anchor="start">运行截止与运行时信封</text>
+<text x="292" y="649" class="f" text-anchor="start">取内层的那个，并记住</text>
+<text x="292" y="664" class="f" text-anchor="start">是哪一个赢了：前者是</text>
+<text x="292" y="679" class="f" text-anchor="start">budget_exceeded，后者是</text>
+<text x="292" y="694" class="f" text-anchor="start">可重试的 provider_error</text>
+<rect x="518" y="572" width="228" height="144" rx="10" class="paper"/>
+<text x="534" y="596" class="t" text-anchor="start">上下文</text>
+<text x="534" y="613" class="f m" text-anchor="start">runtime/compaction.py</text>
+<text x="534" y="634" class="f" text-anchor="start">超过窗口 × 0.75 触发压缩：</text>
+<text x="534" y="649" class="f" text-anchor="start">头条永远留下，切点向后</text>
+<text x="534" y="664" class="f" text-anchor="start">推到协议边界，摘要以</text>
+<text x="534" y="679" class="f" text-anchor="start">assistant 身份回到对话——</text>
+<text x="534" y="694" class="f" text-anchor="start">不假借用户的口</text>
+<rect x="760" y="572" width="228" height="144" rx="10" class="paper"/>
+<text x="776" y="596" class="t" text-anchor="start">取消</text>
+<text x="776" y="613" class="f m" text-anchor="start">agent_runtime.py</text>
+<text x="776" y="634" class="f" text-anchor="start">一轮里查 6 次。被取消时</text>
+<text x="776" y="649" class="f" text-anchor="start">已准备好的调用逐个变成</text>
+<text x="776" y="664" class="f" text-anchor="start">「cancelled」的 ToolResult</text>
+<text x="776" y="679" class="f" text-anchor="start">——它们仍然欠模型一个</text>
+<text x="776" y="694" class="f" text-anchor="start">答复，不能凭空消失</text>
+<rect x="1002" y="572" width="228" height="144" rx="10" class="paper"/>
+<text x="1018" y="596" class="t" text-anchor="start">重复调用</text>
+<text x="1018" y="613" class="f m" text-anchor="start">agent_runtime.py</text>
+<text x="1018" y="634" class="f" text-anchor="start">两种机制：同一轮里重复</text>
+<text x="1018" y="649" class="f" text-anchor="start">的 tool_call_id 直接判整轮</text>
+<text x="1018" y="664" class="f" text-anchor="start">失败；跨轮同参数第 3 次</text>
+<text x="1018" y="679" class="f" text-anchor="start">被拒，连续被拒超过 2 次</text>
+<text x="1018" y="694" class="f" text-anchor="start">运行结束（带着证据）</text>
+<text x="22" y="762" class="s" text-anchor="start">不变量：模型见过的每一个 tool_call_id 都以恰好一个 ToolResult 收尾——未知工具、被拒、超时、批量中途取消，每一种都产生结果而不是缺口。</text>
+<text x="22" y="780" class="f" text-anchor="start">结果按模型自己的调用顺序回填（align_results），尽管执行是真并行的。</text>
+</svg>

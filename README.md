@@ -10,19 +10,79 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 | 你是谁 | 从哪读 |
 |---|---|
+| 想在十分钟内看清整个项目 | [**本地架构面板**](#零先把整个项目看一遍)——一条命令，离线页面，数字全部现算 |
 | 想看成色与证据 | [**十分钟版本**](docs/HIGHLIGHTS.md)——真实运行的事件流、门禁数字、四个技术判断 |
-| 想立刻跑起来 | [快速开始](#三快速开始)，一条命令，不联网、不连数据库 |
+| 想读懂 Agent 本身怎么跑的 | [Agent Harness](#二agent-harness一次运行被谁裹着) → [Agent Runtime](#三agent-runtime唯一的那条工具循环) → [Tool Gateway](#四tool-gateway一次工具调用要穿过的门) |
+| 想立刻跑起来 | [快速开始](#九快速开始)，一条命令，不联网、不连数据库 |
 | 想知道**没做什么** | [**已知缺口**](docs/known-gaps.md)——五类分类，每条附位置与"做完"的判据 |
 | 想读设计依据 | [文档地图](docs/README.md)、[架构基线](docs/architecture-baseline.md)、[ADR 索引](docs/adr/) |
 
 ---
 
-## 一、功能
+## 零、先把整个项目看一遍
+
+### 0.1 一条命令，一个离线的架构面板
+
+```bash
+scripts/dev.sh panel
+```
+
+它构建一个自包含的 HTML 并在 `127.0.0.1:8770` 上提供服务。**不需要数据库、不需要
+Qdrant、不需要 API key、不联网**——它读的是工作树本身。十二个分区：
+
+| 分区 | 里面是什么 |
+|---|---|
+| 概览 | 规模数、启动命令、全景分层图 |
+| 分层与守卫 | 七层各自的边界，以及核心层第三方白名单、具名拒绝表、模型流持有者名单的**实际内容** |
+| Agent Runtime | 循环图、一轮循环的每一步、五道闸各自的落点、`runtime/` 每个模块 |
+| Tool Gateway | 四个阶段、三个答案、每一个拒绝出口 |
+| 两条主链路 | Chat 与 Task 的流转，以及子代理委派 |
+| 工作流图 | 两张图的节点与边，**从 `_STATIC_EDGES` 与编译器的条件边目标表里读出来画的** |
+| 模块浏览器 | 320 个模块，可搜路径 / 摘要 / 符号名；每行的说明是该模块 docstring 的第一行 |
+| HTTP 接口 | 71 个端点，从路由装饰器解析 |
+| 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
+| 配置画像 | 十个 profile，以及 82 条写成单值 `Literal` 的不变量 |
+| 决策记录 | 87 份 ADR，可搜 |
+| 门禁与规模 | 测试目录、控制台 feature、进程入口 |
+
+**面板上每一个数字都是构建那一刻数出来的，没有一个是写在页面里的。** 这不是讲究：
+这个仓库已经被"写在无关事实旁边的数字"咬过一次——`CLAUDE.md` 里的 `458/458` 在测试
+数破八百之后还活了几个月，因为一个写在别处的数字没有任何东西会在它过期时失败。面板
+是比一个段落大得多的暴露面，所以它一行数字都不许手写。
+
+余下那一半——"循环上的五道闸""网关的四个阶段"这类**关于架构而不是关于文件**的话——
+写在 `scripts/architecture_panel.py` 的 `NARRATIVE` 里，但每一条都点名一个真实路径与
+符号，并且：
+
+```bash
+uv run python scripts/architecture_panel.py --check
+```
+
+会在它点名的东西不存在时失败。所以手写的那一半也不能悄悄烂掉。
+
+其它用法：`--build DIR` 只产出静态页面，`--json` 只吐扫描出的数据（可以拿去做别的
+检查），`--port` 换端口。**监听地址写死在 `127.0.0.1`**——这个页面把源码树的 docstring
+铺开给人看，而 `python -m http.server` 的默认绑定是每一个网卡。
+
+### 0.2 三十秒版本
+
+<img src="docs/assets/arch-layers.svg" alt="Agent Workbench 分层图：web 与 apps/adapters 在外层，ports 是唯一接缝，core 的 runtime/workflows/application/domain 不认识任何框架" width="100%">
+
+依赖箭头一律**由外向内**。核心层不认识任何框架——这不是约定，是一条会让 CI 变红的
+测试（[`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)）。
+
+> **两处如实说明。** `workflows` 与 `application` 是一对**互相引用的邻居**而非严格
+> 上下层（各有 3–4 处互相 import），画成单向箭头就是画错了。另外 `evaluation/` 是
+> core 侧的自足小包（只 import 自己），不在主链上，图里没画。
+
+---
+
+## 一、这是什么：两种产品形态
 
 ### 1.1 Chat：带权限校验的知识库问答
 
 - **多轮对话**，会话与消息持久化在 PostgreSQL，`chat_turns` 是幂等事实源。
-- **检索问答**：固定两步检索（`chat.retrieval_shape` 可选 `agentic`，**默认
+- **检索问答**：固定两步检索（`chat.retrieval_shape` 可选 `agentic` / `routed`，**默认
   `fixed`**——固定形态才可复现评测）。答案给出引用，每条带 `chunk_id`、
   `document_id` 和 `document_version`。
 - **权限贯穿全程**：检索候选按 ACL 过滤，答案发布前**再复核一次** source revision
@@ -39,13 +99,6 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 提交一个目标，Agent 自己拆解、检索、干活、产出文件，中途可以停下来等人批准。
 
-**两张图，提交时选定并冻结**：
-
-| 图 | 节点链路 | 用途 |
-|---|---|---|
-| 固定研究图 | `understand → plan → route →`{`research_internal`\|`research_external`}`→ synthesize → critic → quality_gate → approval → export` | 检索、综合、自我批评式的研究报告 |
-| `v2_general` | `understand → work → review →`(`approval`)`→ export` | 通用干活：读工具、写工作区、渲染文档 |
-
 - **提交预判（triage）**：`POST /v1/tasks/triage` 让模型先判该走哪张图，判不准就问人，
   失败回落默认值。
 - **人在环中（HITL）**：`export` 这类外部副作用需要人批准。图在 LangGraph interrupt
@@ -58,11 +111,7 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 - **只读取用外部世界**（默认关闭）：`fetch_page` 与 `download_document` 都是 GET，
   取用前过**解析后**的地址闸门——只有全局可路由地址放行，重定向逐跳过闸。
 - **产物导出**：`.docx` 等文件进 ArtifactStore，可在控制台直接读（文字预览）与下载。
-- **子代理派生**（默认关闭）：一次运行可以在循环中途派生另一次运行，把一个聚焦的
-  子问题交出去。子运行走的是**同一个** Runtime——递归的是调用层数，不是循环的份数。
-  三道闸写在类型里：子代理的工具是父代理工具的**交集**；到达深度上限时委派工具**从
-  工具表里消失**（孙子从没见过它，而不是某个计数器被正确地加过一次）；子信封只能
-  **降低**风险上限，没有参数能抬高它。
+- **子代理派生**（默认关闭）：见 [§6.3](#63-多-agent一次委派是一次运行不是一个新循环)。
 - **全程留痕**：每次工具调用都留下 `ToolProposed → PermissionResolved → ToolStarted
   → ToolCompleted` 四件套，**被拒的那次也留痕**，而不是消失。
 
@@ -79,22 +128,38 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 ### 1.4 Web 控制台
 
-React + TypeScript，八个页面：**Chat**、**Tasks**（任务时间线与生命周期）、
-**Code**（编码会话与文件预览）、**知识库**（资料与上传）、**用量**（三个模式各花了
-多少 token 和钱）、**效果评测**（评测报告）、**计算机**（屏幕控制的边界与会话面板）、
-**运行状态**。
+React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加载：
+
+| 路由 | 页面 | 说明 |
+|---|---|---|
+| `/chat`、`/chat/:sessionId` | Chat | 会话、引用回看、SSE |
+| `/work`、`/work/:taskId` | Tasks | 任务时间线与生命周期 |
+| `/code/:sessionId?` | Code | 编码会话与文件预览 |
+| `/knowledge` | 知识库 | 资料与上传 |
+| `/usage` | 用量 | 三个模式各花了多少 token 和钱 |
+| `/evaluation` | 效果评测 | 评测报告 |
+| `/computer` | 计算机 | 屏幕控制的边界与会话面板（ADR-095） |
+| `/system` | 运行状态 | 健康与配置投影 |
+
+`/code/:sessionId?` 是**一条**带可选参数的路由而不是两条兄弟路由：写成两条时，第一次
+发送触发的 `/code → /code/:id` 会重挂整个页面，把还开着的那一轮的 `running` 标志丢掉。
 
 一次运行做了什么会折叠成阶段，展开能看到原始事件与 payload——**折叠只改称呼，不丢
 事件**。任务发生过委派时，时间线上方多出一个「参与的 Agent」面板：按谁派生谁的树列出
 每个运行、各自的状态与花费，选中一行就把下面的执行过程收窄到那一个运行。
 
+前端**唯一出网的地方**是 `web/src/api/` 下的两个文件（`client.ts` 12 处 `fetch(`、
+`sessionStream.ts` 1 处）。SSE 用的是 `fetch` + `response.body.getReader()`，全树没有
+一个 `EventSource`。别处出现 `fetch(` 就是这条边界破了。
+
 ### 1.5 接口与工具
 
-**HTTP API**（FastAPI）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`（提交、查询、
-时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、`/v1/search`、
-`/v1/approvals`、`/v1/artifacts`（含 `/preview`）、`/v1/projects`、`/v1/code`、
-`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、`/v1/evaluation`、
-`/health/live|ready`。
+**HTTP API**（FastAPI，**71 个端点**）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`
+（提交、查询、时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、
+`/v1/search`、`/v1/approvals`、`/v1/artifacts`（含 `/preview` 与 `/pdf`）、
+`/v1/projects`、`/v1/code`、`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、
+`/v1/evaluation`、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
+「HTTP 接口」页，它是从路由装饰器解析出来的，不是抄的。
 
 **命令行**：`agent-cli`（演示与提交）、`agent-api`、`agent-task-worker`、
 `agent-ingestion-worker`、`agent-config-check`、`agent-evidence`，以及四个自有 MCP
@@ -119,88 +184,269 @@ server：`agent-word-mcp`、`agent-web-mcp`、`agent-sandbox-mcp`、`agent-compu
 
 ---
 
-## 二、架构
+## 二、Agent Harness：一次运行被谁裹着
 
-### 2.1 一句话与全景图
+"唯一一条工具循环"说的是这条循环的**实现**只有一份，不是它只能被进入一层。外面这几层
+每一层只做一件事，而且都实现同一个 [`ports/agent_executor.py`](src/agent_workbench/ports/agent_executor.py)
+里的 `AgentExecutor` 协议——所以加一层不改调用方，删一层也不改。
 
-**两种产品形态共用一份自研 Agent Runtime，而这份 Runtime 拥有全仓库唯一一条
-`模型 → 工具 → 结果 → 模型` 循环。** LangGraph、LlamaIndex、MCP 一律从
-Ports/Adapters 进来，谁都不许在这条循环里占一轮。
+<img src="docs/assets/agent-harness.svg" alt="Agent Harness：调用方 → DelegationScopingExecutor → BudgetedAgentExecutor → BoundedParallelExecutor → ClaudeLikeAgentRuntime → ToolGateway → ToolExecutor → handler" width="100%">
 
-依赖箭头一律**由外向内**。核心层不认识任何框架——这不是约定，是一条会让 CI 变红的
-测试。
+### 2.1 执行器栈
 
-```mermaid
-flowchart TB
-    subgraph OUT["外层 · 框架只能活在这里"]
-        direction TB
-        APPS["apps + bootstrap\n进程边界与配置装配\n启动即验伪"]
-        ADP["adapters\n一个目录一个外部世界\n23 个子目录"]
-    end
+| 层 | 落点 | 它只做这一件事 |
+|---|---|---|
+| 调用方 | 图节点 / Chat 回合 / Code 会话 | 拿到的是一个 `AgentExecutor`，不知道下面有几层，也不需要知道 |
+| `DelegationScopingExecutor` | [`application/delegation.py`](src/agent_workbench/application/delegation.py) | 为每一次运行进入一个委派作用域。它裹的是**执行器**而不是节点：能不能委派是"运行"的属性，于是以后任何一个新的调用方都自动被覆盖。子运行的深度比父大 1，正是因为进作用域那一刻 ContextVar 还持有父的上下文 |
+| `BudgetedAgentExecutor` | [`workflows/task_handlers.py`](src/agent_workbench/workflows/task_handlers.py) | ADR-040：每次 agent 调用先向 Registry 记一笔账，而且**在拿并发名额之前**——记账的那个往返不该占着一个名额发生。目前只记录，还不按次数拒绝 |
+| `BoundedParallelExecutor` | 同上 | 同时最多几次 agent 调用。子代理有**自己的第二个池**：共用父的池会死锁——父在一次工具调用里等着，名额却一直被它占着，而子在排队等那个只有父返回才会释放的名额 |
+| `ClaudeLikeAgentRuntime` | [`runtime/agent_runtime.py`](src/agent_workbench/runtime/agent_runtime.py) | **循环本身**（[§3](#三agent-runtime唯一的那条工具循环)） |
+| `ToolGateway` | [`runtime/tool_gateway.py`](src/agent_workbench/runtime/tool_gateway.py) | 一次工具调用的四个阶段（[§4](#四tool-gateway一次工具调用要穿过的门)） |
+| `ToolExecutor` | [`runtime/tool_executor.py`](src/agent_workbench/runtime/tool_executor.py) | 跑一个**已经被授权**的 handler，带超时与 5 秒心跳，保证恰好一个 `ToolResult` 离开 |
+| handler | `adapters/tools/` · `adapters/mcp/` | 17 个进程内工具，加上经 MCP 接入的那些。它们看不见上面任何一层 |
 
-    subgraph CORE["核心层 · 禁止 import 任何框架"]
-        direction TB
-        RT["runtime\nAgent Runtime\n⚑ 全仓唯一的工具循环"]
-        WF["workflows\n图与画像\n边是数据 · 路由是纯函数"]
-        APP["application\n用例编排\n发布围栏 · 崩溃恢复"]
-        DOM["domain\n领域不变量\n构造失败即拒绝"]
-    end
+同一份协议还有三个别的实现：`DeferredExecutor`（一格占位，装配期把环剪开）、
+`ArtifactPersistingExecutor`（把纯文本的完成结果落成产物，不动协议）、
+`FakeAgentExecutor`（脚本化的测试替身，零依赖演示与门禁用它）。
 
-    PORTS["ports · Protocol 契约（37 个模块）\n唯一的跨层接缝：只认协议，不认厂商"]
+### 2.2 组合根在启动时把它装起来
 
-    WEB["web\n前端七面\n只投影，不发明"]
+装配发生在 `apps/*/composition.py` 与 `bootstrap/`，三件事值得单独说：
 
-    EXT["外部世界\nPostgreSQL（事实源） · Qdrant（派生副本）\nLangGraph（控制平面） · LlamaIndex（仅检索机制）\nMCP 服务器 · 模型供应商"]
+- **工具注册表是不可变的。** 跑起来之后不会多出一个工具——否则"当时有哪些工具"这个
+  问题，对一份已经写完的事件日志就没有答案了。撤销走的是**实时授权**，在下一次决定
+  时生效，而不是改这张表。
+- **`DeferredExecutor` 把环剪开。** 启动运行的那个工具必须在网关读的注册表里；网关被
+  构造进运行时；而运行时正是那个工具需要的东西。总得有个东西先被命名再存在，这里就是
+  那个地方——一格占位而不是一个闭包，因为占位没被绑定时的失败要能说清是谁没绑。
+- **MCP 目录在进程启动时冻结一次。** Worker 起来之后再启动的 server，那个 Worker 这
+  辈子都看不到它——一个健康的 Worker 缺着它存在的理由那件工具。所以 `demo-worker`
+  先探两个 server 再启动。
 
-    APPS --> ADP
-    ADP -->|实现| PORTS
-    PORTS -->|被依赖| RT
-    PORTS --> WF
-    PORTS --> APP
-    RT --> DOM
-    WF <-->|互为邻居| APP
-    APP --> DOM
-    WF --> DOM
-    ADP <--> EXT
-    WEB -->|HTTP + SSE| APPS
+### 2.3 一个协议，所以"委派"不需要任何人守规矩
+
+因为每一层都实现同一个 `AgentExecutor`，委派工具的 handler 拿到的**就是这一摞里的同一
+个执行器**。"一次委派是一次运行，不是一个新循环"于是不是一句纪律，而是一个装配事实
+（[ADR-082](docs/adr/0082-a-delegation-is-a-run-not-a-new-loop.md)）。
+
+---
+
+## 三、Agent Runtime：唯一的那条工具循环
+
+`ClaudeLikeAgentRuntime._run` 是一个 `while True`。它的循环体检查五道闸，跑**恰好一次**
+模型流，把这次调用映射成一个终态或者一批工具调用，把这批调用交给 Tool Gateway 的四个
+阶段，再把结果按模型自己的调用顺序回填，然后进入下一轮。
+
+<img src="docs/assets/agent-runtime-loop.svg" alt="Agent Runtime 一轮循环：取消检查、预算闸、上下文压缩、模型流、终态判定，然后准入、网关、调度、执行、写回，再回到开头" width="100%">
+
+**两个不变量在每一条路径上都成立**，模块 docstring 把它们写在第一段：
+
+1. 模型见过的每一个 `tool_call_id` 都以**恰好一个** `ToolResult` 收尾。未知工具、被拒、
+   handler 抛异常、超时、批量中途取消——每一种都产生结果而不是缺口，因为模型无论如何
+   都在等那个 id，而一个缺席的答复是一段永远接不下去的对话。
+2. 结果按模型自己的调用顺序提交，尽管执行是**真并行**的（`plan_tool_batches` +
+   `asyncio.gather`）。
+
+### 3.1 一轮循环，按顺序
+
+| # | 这一步 | 落点 | 跳闸时发生什么 |
+|---|---|---|---|
+| 1 | 取消检查 | `cancellation.cancelled` | 一轮里查**六次**，这是第一次 |
+| 2 | 预算闸（开始这一轮之前） | `domain/runs.py::halt_reason_for` | `budget_exceeded` + 对应的 `StopReason`。`max_tool_calls` **故意不在这里问**：一个用光了工具额度的运行，仍然应该有一轮把答案写出来 |
+| 3 | 上下文闸 | `context_reason_for`（ADR-080） | 看的是**上一次请求实际有多大**，不是累计 token——累计值随轮数近似平方增长，用它判断窗口会越判越早 |
+| 4 | 压缩（只在 3 跳闸时） | `runtime/compaction.py`（ADR-081） | 头一条永远留下；切点向后推到协议边界，绝不把 `tool_use` 和它的结果劈开；摘要以 **assistant** 身份回到对话。压不动就停下，`stop_reason="context_limit"` |
+| 5 | 取消再查一次 | — | 专门放在压缩调用之后：一个被取消的摘要器不能被记成"上下文超限" |
+| 6 | 决定这一轮广告哪些工具 | `budget.tool_allowance_spent` | 额度花光时工具**从请求里撤下**，而不是留着被拒——模型看不见的工具不会被反复提议 |
+| 7 | 模型流 | `_stream_model` → `_consume` | 一次调用，一条流，整段套在 `asyncio.timeout(deadline)` 里。全仓唯一一处 `async for` 消费模型流 |
+| 8 | 计量这一轮 | `ledger.usage.merged(...)` | `last_input_tokens` 与累计用量**分开记**，因为第 3 步问的是前者 |
+| 9 | 终态判定 | `_terminal_for_turn`（8 条分支） | 没有工具调用 → 完成；有 → 往下走一批 |
+| 10 | 准入 | `gateway.propose` + 两个断路器 | 每一个被提议的调用都先留痕，**包括下一步就要被拒的**。然后工具额度切一刀；同名同参数第 3 次也拒 |
+| 11 | 网关 | `prepare` → `authorize` | [§4](#四tool-gateway一次工具调用要穿过的门) |
+| 12 | 调度 | `runtime/tool_scheduler.py`（纯函数，70 行） | 连续的只读调用凑一组、最多 4 个；写 / 外部 / 破坏性一律**独占成组** |
+| 13 | 执行 | `ToolExecutor` | 时限取「工具声明 / 运行剩余 / 部署上限」三者最小；每 5 秒一次心跳 |
+| 14 | 对齐与写回 | `domain/tools.py::align_results` | 按模型自己的调用顺序回填；只给**被准入的**调用计费 |
+| 15 | 断路器结算 | `repeat_refusals > 2` | 结束运行——**并且是在把那些拒绝写进消息之后**才结束，所以运行终止时手里还握着它被告知过什么 |
+
+第 10 步的顺序值得单独看：**签名计数在其它检查之前就加**。理由写在代码里——一次拒绝
+对模型很便宜（几乎不花 token，完全没有副作用），所以一个反复重提同一个被拒调用的模型
+会一路烧到步数上限；先计数才能让断路器在第三次就合上。
+
+### 3.2 循环上的五道闸
+
+| 闸 | 它拦的是什么 | 落点 |
+|---|---|---|
+| **预算** | 步数、token、成本、截止。三个谓词分管三处：开始一轮前、这轮 token 结算后、派发工具前。预算是**值**，请求只能收紧不能放宽。声明了成本上限却没有价目表时，运行在第一次调用之前就被拒——一个执行不了的上限不如没有 | `domain/runs.py` |
+| **截止** | 「运行截止」与「运行时信封」取内层的那个，并且**记住是哪一个赢的**：前者是 `budget_exceeded`，后者是可重试的 `provider_error`。模型 profile 自己的超时刻意不在这里，它在 adapter 里，嵌在这道界限之内 | `runtime/budgets.py` |
+| **上下文** | 超过窗口 × 0.75 触发压缩。压缩本身是一次普通的模型调用（profile 为 `compact`），它的 token 与成本**失败时照样计入**——供应商已经收了这笔钱；但 `steps` 不加，因为循环没有前进一步 | `runtime/compaction.py` |
+| **取消** | 一轮里查六次。被取消时，已经准备好的调用逐个变成 `cancelled` 的 `ToolResult`——它们仍然欠模型一个答复，不能凭空消失 | `agent_runtime.py::_refuse_cancelled` |
+| **重复调用** | **两种机制**。同一轮里重复的 `tool_call_id` 直接判整轮失败（那是供应商的错，不是模型的选择）；跨轮的同名同参数第 3 次被拒，连续被拒超过 2 次运行结束 | `agent_runtime.py` |
+
+### 3.3 状态机与终态
+
+一次运行的位置由一张写死的转移表管着，非法的边直接抛 `InvalidStateTransition`：
+
+```
+building_context  → model_streaming
+model_streaming   → validating_tools | completed
+validating_tools  → authorizing | recording_results
+authorizing       → executing_tools | recording_results
+executing_tools   → recording_results
+recording_results → model_streaming | compacting
+compacting        → model_streaming
 ```
 
-> **两处如实说明。** `workflows` 与 `application` 是一对**互相引用的邻居**而非严格
-> 上下层（各有 3–4 处互相 import），画成单向箭头就是画错了。另外 `evaluation/` 是
-> core 侧的自足小包（只 import 自己），不在主链上，图里没画。
+每一个非终态还额外有到 `failed` 与 `cancelled` 的边。**终态恰好三个**——`completed`、
+`failed`、`cancelled`——而 `StopReason` 有九个值：`completed`、`max_steps`、
+`max_tool_calls`、`token_budget`、`cost_budget`、`context_limit`、`deadline`、
+`cancelled`、`error`。**没有"看起来成功"这一档。**
 
-### 2.2 每一层是什么
+注意 `building_context → compacting` **不是**一条合法的边，而它不可达也不是巧合：
+`context_reason_for` 在 `last_input_tokens <= 0` 时返回 `None`，所以压缩只可能从
+`recording_results` 起跳。
+
+### 3.4 `runtime/` 的十一个模块
+
+| 模块 | 行 | 它拥有什么 |
+|---|---|---|
+| `agent_runtime.py` | 1478 | 循环、账本、五道闸、终态映射、压缩调用 |
+| `tool_gateway.py` | 1184 | 一次工具调用的全部审查与派发 |
+| `tool_executor.py` | 365 | 一个 handler、它的超时、它的心跳 |
+| `compaction.py` | 275 | 压缩里**不需要模型**的那一半：切哪里、给摘要器看什么、省了多少 |
+| `schema_validation.py` | 249 | 支持的 JSON Schema 子集（17 个关键字、7 种类型）与参数校验 |
+| `hook_bus.py` | 156 | 部署方提供的 `before_tool` 检查，超时与失败都算拦下 |
+| `fake_executor.py` | 141 | 脚本化替身：零依赖演示与门禁靠它逐字节可复现 |
+| `budgets.py` | 136 | 截止的算术：内层的赢，并记住是哪一个 |
+| `state.py` | 103 | 上面那张转移表 |
+| `tool_scheduler.py` | 70 | 只读并行 / 写独占的分组，纯函数 |
+| `__init__.py` | 45 | 导出 |
+
+**独占不是调度器的判断**：`ToolSpec.validate_risk_consistency` 在**构造期**就拒绝一个
+非只读却声明可并行的规格，也拒绝一个不带任何权限范围的写工具。调度器只是照着读。
+
+### 3.5 一条守卫，两种形状
+
+`tests/architecture/test_dependency_boundaries.py::test_the_model_tool_loop_has_exactly_one_owner`
+用两种互不重叠的方式守同一句话：
+
+- **按形状**：AST 遍历核心层，找 `async for` 且其迭代对象是 `.stream(...)` 调用（或一个
+  绑定到它的名字——运行时把迭代器存进变量以便关闭它），断言结果集**恰好等于**
+  `{"runtime/agent_runtime.py"}`。
+- **按词汇**：整棵产品树里，凡是 import `agent_workbench.ports.model` 的模块都必须在
+  `MODEL_STREAM_OWNERS`（7 个）里；并且有一条对照断言要求 `agent_runtime.py` **确实**
+  出现在被观察到的集合里，这样一个坏掉的 import 提取器不能让一次空扫描看起来干净。
+
+它的 docstring 顺带写清了 ADR-082 立足的那条区分：**"一条工具循环"约束的是有多少份
+实现，不是它可以被进入多深。**
+
+---
+
+## 四、Tool Gateway：一次工具调用要穿过的门
+
+原生 handler、MCP 工具、LangChain 工具都以同一个 `ToolBinding` 到达这里，所以"这次能不
+能跑、用这些参数、在此刻"只有一个实现。默认是**拒绝**，依据是**提交时冻结**的授权信封。
+
+<img src="docs/assets/tool-gateway-pipeline.svg" alt="Tool Gateway 的四个阶段：propose、prepare、authorize、invoke，以及每个阶段的拒绝出口与留下的事件" width="100%">
+
+### 4.1 四个阶段
+
+| 阶段 | 做什么 | 值得知道的那一点 |
+|---|---|---|
+| `advertise` | **每次运行一次**，不是每次调用一次 | 未注册的名字抛 `UnknownToolError`；带 `operation_key` 的（会记账本的副作用）抛 `PolicyDeniedError`——[ADR-075](docs/adr/0075-a-ledgered-effect-is-issued-not-proposed.md)：那种工具由节点**签发**，从不摆到模型面前让它提议 |
+| ① `propose` | 记下参数字节数与 SHA-256 | **包括下一步就要被拒的那些**。被拒的调用从事件流里消失，等于把"有人试过这件事"也一起删了 |
+| ② `prepare` | 解析绑定 → 参数 ≤ 65,536 字节 → JSON Schema 校验 → `before_tool` 钩子 | 钩子若改写了参数，大小与 schema **再查一遍**；钩子只能改参数，改不了工具名，也改不了 `tool_call_id`。钩子的异常**只有类型名跨过边界**——后端的异常消息里带过 DSN |
+| ③ `authorize` | 最多 3 轮策略决定 | 每一轮都发一条 `PermissionResolved`。"需要审批"是**粘性**的：后一轮忘了重复也撤不掉 |
+| ③b 审批 | 有闸就等，没闸就拒 | 闸给回的答案要落在合法词表里才算数——一个不认识的词不能靠"它不等于 deny"变成许可。超时、取消、闸自己报错，都记成 deny 并留痕 |
+| ④ `invoke` | 派发；账本工具多一道 | 见 [§4.4](#44-账本副作用距不可逆那一行再授权一次) |
+
+### 4.2 三个答案，没有第四个
+
+`ports/policy.py` 的 `PolicyEngine` 只有一个方法，返回三种效果之一：
+
+| 效果 | 含义 | 之后发生什么 |
+|---|---|---|
+| `allow` | 在提交时冻结的信封之内，且权限范围齐备 | 进入调度与执行；账本工具还要在派发前再问一次 |
+| `deny` | 未知工具 / 不在提交时的信封里 / 缺少权限范围 | 留下 `PermissionResolved` 与 `ToolFailed`。**哪一个范围缺**刻意不写进 `reason_code` |
+| `allow_with_modified_input` | 策略改写了参数——这是一个**决定**，不是副作用 | 按 schema 重新校验改写后的参数，然后**再问一次**。3 轮不收敛就拒 |
+
+改写必须重新校验并重新决定，否则"改写"就成了同时绕过两道检查的那条路。
+
+仓库里目前只有一个实现：`adapters/policy/envelope.py::EnvelopePolicyEngine`，53 行，
+三个拒绝理由一个通过理由。它的 docstring 老实写着自己**还没做**的那部分——信封 ∩
+设置策略下限 ∩ 实时 ACL ∩ 实时注册表的完整 deny-overrides 求交。
+
+### 4.3 三层收窄
+
+```
+提交时冻结的授权信封                    ⊇   节点画像 ∩ 信封              ⊇   子代理信封
+task_runs.submitted_authorization_envelope   permitted_tools(profile, …)      child_envelope(parent, …)
+每次恢复重新施加                             画像只做交集                     风险上限只能降
+```
+
+三层每一层都是**交集**，没有一层能变宽。`AuthorizationEnvelope.permits` 的默认值也是
+拒绝形状的：`allowed_tools=()`、`max_tool_risk="read"`、
+`approval_required_risks=("write","external","destructive")`。它先看 `denied_tools`
+（拒绝优先），再要求在 `allowed_tools` 里，最后比风险等级——**所以把一个工具的风险调
+高，就等于在不改任何信封的前提下把它从所有历史 Task 里收回。**
+
+### 4.4 账本副作用：距不可逆那一行，再授权一次
+
+带 `operation_key` 的工具走一条更长的路：
+
+1. 没有账本 / 没有 task / 没有 lease epoch → 直接拒（"没有可以记在上面的东西"）。
+2. `operation_key` 从**最终参数**算出来，不是从 `tool_call_id`——重发的同一个请求要能
+   认出自己。
+3. 记意图。同一个 key 换了参数再来 → `invalid_tool_input`；账本说这件事已经做过 →
+   `tool_failed`，**不会再做第二遍**。
+4. **第二次授权**，距不可逆那一行只有一步：只认 `allow` 且不再要求审批。这一次的改写
+   **不予采纳**——已经记下的意图必须描述真正发生的那次调用；这一次又要求审批也不再问
+   人——那会让一个抖动的策略把同一个人问两遍。任何一种拒绝都先把这条操作记成**失败**
+   再拒绝，因为"什么都没派发"本身也是知识。
+5. 派发、记结果。答不上来的那几种错误（超时 / 取消 / 超预算）标记**待人工对账**——
+   对一次外部写入而言，"没收到答复"不等于"没有发生"。
+
+### 4.5 两件在构造期就会失败的事
+
+- 任一工具的 `input_schema` 用了不支持的关键字 → **进程起不来**，而不是这次调用失败。
+  一个执行不了的 schema 是一个不存在的检查。
+- 有 `operation_key` 的绑定却没有账本 → `ValueError`，并且**点名**是哪几个工具。
+
+---
+
+## 五、分层与守卫
+
+### 5.1 每一层是什么
 
 | 层 | 它是什么 | 允许依赖 | 被禁止什么（括号内是强制它的守卫） |
 |---|---|---|---|
-| **domain**<br/>`domain/` | 把"什么状态根本不该存在"写进类型本身，让不变量由**构造失败**保证，而不是靠每个调用方记得检查 | 标准库、Pydantic、domain 自身，**外加一个 `regex`**（`domain/workspace.py` 用它带超时的匹配引擎撑起 `GREP_TIMEOUT_SECONDS`；标准库 `re` 没有超时） | 任何框架/SDK；任何 I/O；可变或接受未知字段（`DomainModel` 全局 `frozen=True, extra="forbid"`）；`TaskState` 不得长出消息记录或框架对象——它要能写进图 checkpoint |
-| **ports**<br/>`ports/`（37 个） | 用 `typing.Protocol` 把"系统需要什么能力"和"谁来提供"分开 | 仅 domain、标准库、Pydantic | 写任何实现（这里没有 SQL、没有 HTTP、没有向量库调用）；`ports/model.py` 的导入受 `MODEL_STREAM_OWNERS` 白名单管制 |
-| **runtime**<br/>`runtime/` | 全仓唯一一份工具循环：把一次运行跑到**终态**，并在循环上装齐预算、截止、上下文、取消、重复调用五道闸 | 仅 domain + ports | import 任何框架；**任何模块（含 adapters）不得再写第二份消费模型流的循环**；把 "allow, pending approval" 当 allow 直接派发 |
-| **workflows**<br/>`workflows/` | 控制流写成能单独读、单独测的**声明**：边是数据、路由是纯函数、每个 agent 能看什么够到什么是一张写死的表 | domain、ports、application | import langgraph（图的编译只在 `adapters/langgraph/`）；画像扩权（`permitted_tools` 只做交集，没有能反转方向的参数）；节点回头向注册表要当前 epoch |
-| **application**<br/>`application/` | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
+| **domain**<br/>`domain/`（25 个模块） | 把"什么状态根本不该存在"写进类型本身，让不变量由**构造失败**保证，而不是靠每个调用方记得检查 | 标准库、Pydantic、domain 自身，**外加一个 `regex`**（`domain/workspace.py` 用它带超时的匹配引擎撑起 `GREP_TIMEOUT_SECONDS`；标准库 `re` 没有超时） | 任何框架/SDK；任何 I/O；可变或接受未知字段（`DomainModel` 全局 `frozen=True, extra="forbid"`）；`TaskState` 不得长出消息记录或框架对象——它要能写进图 checkpoint |
+| **ports**<br/>`ports/`（38 个模块，48 个 Protocol） | 用 `typing.Protocol` 把"系统需要什么能力"和"谁来提供"分开 | 仅 domain、标准库、Pydantic | 写任何实现（这里没有 SQL、没有 HTTP、没有向量库调用）；`ports/model.py` 的导入受 `MODEL_STREAM_OWNERS` 白名单管制 |
+| **runtime**<br/>`runtime/`（11 个模块） | 全仓唯一一份工具循环：把一次运行跑到**终态**，并在循环上装齐预算、截止、上下文、取消、重复调用五道闸 | 仅 domain + ports | import 任何框架；**任何模块（含 adapters）不得再写第二份消费模型流的循环**；把 "allow, pending approval" 当 allow 直接派发 |
+| **workflows**<br/>`workflows/`（10 个模块） | 控制流写成能单独读、单独测的**声明**：边是数据、路由是纯函数、每个 agent 能看什么够到什么是一张写死的表 | domain、ports、application | import langgraph（图的编译只在 `adapters/langgraph/`）；画像扩权（`permitted_tools` 只做交集，没有能反转方向的参数）；节点回头向注册表要当前 epoch |
+| **application**<br/>`application/`（34 个模块） | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
 | **adapters**<br/>`adapters/`（22 个目录 + 两个散装模块） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
-| **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | 让"一份 TOML"变成"若干个各自只拿到自己那一份、启动时就能验伪的独立进程" | core 四层 + adapters + 框架 | `os.environ` **只允许出现在 bootstrap 包内**；`Settings` 类型不得越过 `projections.py` 继续传播；TOML 里禁止写库连接串；单值 `Literal` 表达的不变量改不动——要改先写 ADR |
+| **apps + bootstrap + workers** | 让"一份 TOML"变成"若干个各自只拿到自己那一份、启动时就能验伪的独立进程" | core 四层 + adapters + 框架 | `os.environ` **只允许出现在 bootstrap 包内**；`Settings` 类型不得越过 `projections.py` 继续传播；TOML 里禁止写库连接串；单值 `Literal` 表达的不变量改不动——要改先写 ADR |
 | **web**<br/>`web/src/` | 把后端那套事实翻译成人能核对的界面，而不是自己再造一份执行模型 | `web/src/api/`（唯一出网处）、后端 HTTP + SSE | 直连数据库或向量库（`fetch` 只出现在两个文件里）；折叠事件时丢弃事件——原始 payload 必须仍可达 |
 
-这条边界是一条**会让 CI 变红**的测试
-（[`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)），
-它连**方法调用**都禁——不过那一半是**两个写死的属性名**（`as_query_engine` /
-`as_chat_engine`），因为它们挂在本项目确实会建的 `VectorStoreIndex` 上、不需要新的
-import；其余守卫都只处理 import 形态。理由见
-[十分钟版本 §3.1](docs/HIGHLIGHTS.md#31-让越权在类型上不可能而不是靠信任)。
+### 5.2 守卫的实际内容
 
-> **第三方 import 进核心层是一张白名单**（`CORE_THIRD_PARTY_ALLOWLIST`，
-> [ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md)）：
-> 标准库、`agent_workbench` 自己，以及**恰好两个**——`pydantic`（核心层任何地方）与
-> `regex`（**只限 `domain/workspace.py`**，为的是一个带超时的匹配引擎）。
-> **别的一律红，无论有没有人想到过要禁它。**
->
-> 这条 2026-08-31 才改成白名单。此前 `FORBIDDEN_CORE_IMPORTS` 是**黑名单**，
-> 于是上面那个 `regex` 一路绿灯进来——它有正当理由，而"有正当理由"和"被守住"是两件事。
-> 黑名单保留在旁边，管的是具名拒绝的诊断（"把这次集成挪到 adapter 后面去"），
-> 并有一条测试断言两张表不许相交。
+那条会让 CI 变红的测试是
+[`tests/architecture/test_dependency_boundaries.py`](tests/architecture/test_dependency_boundaries.py)。
+它管四张表，[面板](#零先把整个项目看一遍)的「分层与守卫」页把它们的当前内容直接列出来：
 
-### 2.3 哪个能力落在哪一层
+- **核心层第三方白名单**只有 **`pydantic`** 与 **`regex`** 两条（[ADR-099](docs/adr/0099-a-denylist-cannot-say-no-to-what-nobody-listed.md)），
+  外加标准库和 `agent_workbench` 自己。**名单之外一律红，无论有没有人想到过要禁它。**
+- **具名拒绝表**（34 条：`crewai`、`langchain*`、`langgraph`、`llama_index`、`fastapi`、
+  `anthropic`、`docx`……）不管"拒绝"，白名单已经拒绝了；它管**诊断信息**——报错说的是
+  "把这次集成挪到 adapter 后面去"，而不是一句泛泛的越界。有一条测试断言这两张表不许相交。
+- **方法调用守卫**只有**两个写死的属性名**：`as_query_engine` 与 `as_chat_engine`。
+  它们挂在本项目确实会建的 `VectorStoreIndex` 上、不需要新的 import，所以 import 形态
+  的守卫看不见它们。其余守卫都只处理 import 形态。
+- **模型流持有者**是七个模块的白名单。名单之外拿不到模型流，也就写不出第二条工具循环。
+
+> 白名单这条是 2026-08-31 才改的。此前是**黑名单**，于是上面那个 `regex` 一路绿灯进来——
+> 它有正当理由，而"有正当理由"和"被守住"是两件事。
+
+### 5.3 哪个能力落在哪一层
 
 能力用人话写，落点是真实模块。
 
@@ -228,96 +474,68 @@ import；其余守卫都只处理 import 形态。理由见
 | 看得到**谁派生了谁、子代理做到哪了** | application `run_tree.py`（完全从事件重建，不另存一份） | web `RunPanel.tsx`（ADR-083） |
 | 配置写错、能力声明与代码不符，**进程直接起不来** | bootstrap `settings.py` 跨域校验 + 单值 `Literal` | 全层（`agent-config-check` 离线跑三套 profile） |
 
-### 2.4 一次 Chat 问答的流转
+---
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant W as web
-    participant A as apps/api
-    participant AP as application
-    participant AD as adapters
-    participant R as runtime
+## 六、两条主链路
 
-    W->>A: 提问（Idempotency-Key）
-    A->>AP: 幂等认领回合、拿租约、定截止
-    AP->>AD: 稠密臂 + 稀疏臂并行召回
-    AD-->>AP: 两路候选
-    Note over AP,AD: RRF 融合在进程内跑一次\n按 (-score, chunk_id) 定序
-    AP->>AD: PostgreSQL ACL 过滤
-    Note right of AD: ⚑ 授权发生在这里\n并带出每个文档的 source_revision
-    AP->>AD: 重排（只对已授权候选，只返回分数）
-    AP->>R: 渲染上下文，生成
-    R->>AD: 模型流（agentic 形态走完整工具循环）
-    R-->>AP: 答案与引用
-    Note over AP: 全程把模型文本从事件流里挡住\n引用过滤为"点名过且确实展示过"的
-    AP->>AD: 发布围栏：一个事务里复核 revision + ACL
-    AD-->>AP: AnswerCommitted / UngroundedAnswerCommitted / AnswerWithheld
-    AP-->>W: SSE 渲染、引文回看
-```
+### 6.1 一次 Chat 问答
 
-**这条路径的要点是倒数第二步**：撤权发生在生成之后、发布之前时，系统**扣下答案**
-（`AnswerWithheld`）而不是把它发出去。答案、助手历史、回合终态在同一个事务里提交。
+<img src="docs/assets/chat-flow.svg" alt="Chat 问答链路：幂等认领、双臂召回、RRF 融合、PostgreSQL ACL 过滤、重排、生成、引用校验、发布围栏" width="100%">
 
-### 2.5 一次 Task 运行的流转
+**两个位置决定了这条链路的性质。**
 
-```mermaid
-flowchart LR
-    S["提交\n租户级幂等键 + 输入指纹\n冻结 graph_version\n授权信封随 Task 存下"] --> C
-    C["Worker 竞争认领\nFOR UPDATE SKIP LOCKED\n拿到租约与 epoch"] --> J
-    J["认领后判定\nRegistry 状态 + checkpoint 位置\n无 I/O 纯函数"] --> G
-    G["按冻结版本编译并执行图"] --> N
-    N["每个节点\n重取身份与信封\n画像工具 ∩ 信封"] --> E
-    E["AgentExecutor\n→ 工具网关 → 事件 + checkpoint"] --> AP
-    AP{"需要审批？"} -->|是| I["interrupt\nwaiting_approval"]
-    I --> L["决定写进权威账本\n跨进程恢复后重新施加"]
-    AP -->|否| T["TaskSucceeded / TaskFailed\n显式终态，没有「看起来成功」"]
-    L --> T
-    E -.崩溃/超时.-> X["租约过期\n另一个 Worker 换 新 epoch 重认领\n从 checkpoint 续跑"]
-    X --> G
-```
+第一个是**第 4 步**：授权发生在 PostgreSQL 过滤那一刻，而重排排在它之后。顺序本身就是
+保证——重排器不可能引入一段提问者无权读的文本，因为它根本没见过那些候选。
 
-**两张图，提交时选定并冻结：**
+第二个是**倒数第二步**：撤权发生在生成之后、发布之前时，系统**扣下答案**
+（`AnswerWithheld`）而不是把它发出去。发布围栏在**一个事务**里复核 revision 与 ACL，
+锁序是会话 → 回合 → 文档（按 id 排序）→ 事件流；答案、助手历史、回合终态一起提交。
 
-| 图 | 节点链路 |
-|---|---|
-| `v1` 研究图 | `understand → plan → route →`{`research_internal` ∥ `research_external`}`→ synthesize → critic → quality_gate → approval → export` |
-| `v2` 通用图 | `understand → work → review →`（`approval`）`→ export`，`review` 可回边到 `work` |
+三种终态各自是一条事件：`AnswerCommitted`（有据，带引用）、
+`UngroundedAnswerCommitted`（无据，并且**明说**自己没有接地）、`AnswerWithheld`。
+另有两条离线的恢复路径：`ChatTurnReaper` 终结过期的 `running` 回合，
+`ChatPendingReleaseRecovery` 在原来那个 HTTP 客户端早就走了之后，把卡在
+`release_pending` 的回合逐行重新驱动完。
 
-条件节点是 `route` / `quality_gate` / `approval`；两条研究分支在 `synthesize` 处以
-**排序并集** fan-in，因而可交换、可重入。
+### 6.2 一次 Task 运行
+
+<img src="docs/assets/task-flow.svg" alt="Task 运行链路：提交冻结授权信封与图版本，SKIP LOCKED 认领拿租约与 epoch，执行图，审批中断，崩溃后另一个 Worker 换新 epoch 从检查点续跑" width="100%">
+
+**两张图，提交时选定并冻结**（节点与边是[面板](#零先把整个项目看一遍)从
+`_STATIC_EDGES` 与编译器的条件边目标表里读出来画的，不是抄的）：
+
+| 图 | 节点链路 | 条件节点 |
+|---|---|---|
+| `v1` 固定研究图（10 节点） | `understand → plan → route ⇉ {research_internal ∥ research_external} → synthesize → critic → quality_gate → approval → export` | `route`、`quality_gate`、`approval` |
+| `v2_general`（5 节点） | `understand → work → review →`（`approval`）`→ export` | `review`、`approval` |
+
+- `route` 的路由函数**永远返回两条分支**——它是固定 fan-out，不是一次选择。两条分支在
+  `synthesize` 处以**排序并集**（`merge_refs`）fan-in，因而可交换、可结合、幂等。
+- `quality_gate` 是一条四出口的条件边：`approval` / `export` / `synthesize`（改稿回边）
+  / `END`。走 `END` 的那一支是"不需要报告"或"改稿次数用完"，自 ADR-060 起它算**成功**
+  而不是失败。`approval` 是两出口，`END` 那一支是人否决了——全图唯一一次刻意的终态失败。
+- 两张图的 `review`/`quality_gate` 回边**共用同一份改稿额度**，不是各有一份。
+- **条件节点不跑 agent**：`profile_for()` 对一个纯路由节点直接抛 `KeyError`。
+- `approval` 是**全图唯一的中断点**。`workflow.export_requires_approval` 为假时这道闸
+  被**跳过**，而不是被伪造成一条通过记录——不会凭空多出一行审批。
 
 **可靠性机制**：执行租约 + 心跳 + epoch fencing、事务 Outbox、自研 PostgreSQL
-checkpointer（带 fencing）、retry / dead-letter、advisory execution guard、
-per-stream gap-free 事件序列与幂等 `event_key`。
+checkpointer（带 fencing，检查点自身也有版本与升级路径，[ADR-100](docs/adr/)）、
+retry / dead-letter、advisory execution guard、per-stream gap-free 事件序列与幂等
+`event_key`。
 
 节点在**领取时**拿到的不可变 `ExecutionLease` 下写入——不是每次向 Registry 问最新
-epoch，否则失去租约的 Worker 会用顶替者的 epoch 通过账本围栏。
+epoch，否则失去租约的 Worker 会用顶替者的 epoch 通过账本围栏，而那正是围栏要挡的那件事。
 
-### 2.6 多 Agent：一次委派是一次运行，不是一个新循环
+### 6.3 多 Agent：一次委派是一次运行，不是一个新循环
 
-ADR-082 起，一次运行可以在循环中途派生另一次运行。**默认关**
-（`multi_agent.delegation_enabled = false`）。
+<img src="docs/assets/delegation.svg" alt="子代理委派：父运行调用 delegate_agent，子运行在同一个 AgentExecutor 里跑，三道闸分别是工具交集、深度上限时移除委派工具、信封只能收紧" width="100%">
 
-```mermaid
-flowchart TB
-    subgraph P["父运行 run_2e769ec…（图节点 work）"]
-        direction TB
-        P1["ToolStarted delegate_agent"] --> P2["AgentDelegated → analyst"]
-        P2 -.-> P3["AgentCompleted"]
-        P3 --> P4["ToolCompleted\n子代理的报告作为工具结果回到模型"]
-    end
-    subgraph K["子运行 run_9d8ac05…（同一个 stream，自己的 run_id）"]
-        direction TB
-        K1["RunStarted"] --> K2["ModelStarted / ModelCompleted"] --> K3["RunCompleted"]
-    end
-    P2 ==> K1
-    K3 ==> P3
-```
+[ADR-082](docs/adr/0082-a-delegation-is-a-run-not-a-new-loop.md) 起，一次运行可以在循环
+中途派生另一次运行。**默认关**（`multi_agent.delegation_enabled = false`）。
 
-关键在于它**不是**第二个执行器：委派工具的 handler 调用的是**同一个**
-`AgentExecutor`，所以"唯一工具循环"这条主张没有被破坏——递归的是调用层数，不是循环
-的份数。
+关键在于它**不是**第二个执行器：委派工具的 handler 调用的是[§2](#二agent-harness一次运行被谁裹着)
+那一摞里的**同一个** `AgentExecutor`——递归的是调用层数，不是循环的份数。
 
 三道闸都写在类型里，而不是靠调用方记得：
 
@@ -325,42 +543,124 @@ flowchart TB
 |---|---|
 | 子代理够不到父代理够不到的工具 | `permitted_child_tools` 是**交集**，没有能反转方向的参数 |
 | 递归会停 | 到达深度上限时，**把委派工具从子代理的工具表里拿掉**——孙子从没见过那个工具，而不是某个计数器被正确地加了一次 |
-| 委派不能用来逃出信封 | `child_envelope` 只能**降低**风险上限，没有任何参数能抬高它 |
+| 委派不能用来逃出信封 | `child_envelope` 只能**降低**风险上限（默认压到 `read`），`denied_tools` 与审批要求原样往下传 |
 
-子运行写进**父运行同一条事件流**，用自己的 `run_id`。于是"谁派生了谁"可以从事件流
-里重建（ADR-083）：
+子代理有**自己的第二个并发池**：共用父的池会死锁，理由写在
+`apps/task_worker/composition.py` 里。装配还会在启动时拒绝一个
+`max_children_per_run ** max_delegation_depth > max_agent_invocation_attempts_per_task`
+的部署——一个自己就能把自己撑爆的配置，不该等到运行时才发现。
+
+子运行写进**父运行同一条事件流**，用自己的 `run_id`。于是"谁派生了谁"可以从事件流里
+重建（ADR-083），而不必另存一份树：
 
 - `GET /v1/tasks/{id}/runs` —— 运行树，导航用
 - `GET /v1/tasks/{id}/timeline?run_id=…` —— 只看某一个运行，索引查找
 - 控制台的**「参与的 Agent」面板**把这棵树画出来，选中一行就把下面的执行过程收窄到
   那一个运行
 
-### 2.7 技术栈
+---
 
-| 层 | 选型 | 职责边界 |
-|---|---|---|
-| Agent Runtime | **自研** | Tool Loop、Policy、预算、取消——**不外包** |
-| 工作流控制面 | LangGraph | 编译控制流声明；`TaskState` 字段即图通道 |
-| 检索 | 自研 + LlamaIndex Adapter | LlamaIndex 只做检索契约，**默认未启用** |
-| 向量库 | Qdrant | dense / sparse 存储；融合在本进程内做 |
-| Embedding | BGE-M3 | dense + lexical，缺权重**拒绝构造** |
-| 重排 | BGE reranker | 跑在授权之后，返回按位对齐的分数 |
-| 模型 | DeepSeek（OpenAI 兼容） | 流式；服务端 `web_search` 不引入第二把 key |
-| 持久化 | PostgreSQL 16 + Alembic | 会话、任务、事件、checkpoint、outbox |
-| 工具协议 | MCP SDK v2 | Streamable HTTP，启动时冻结成本地 binding |
-| 前端 | React + TypeScript + Vite | Chat / Tasks / Code / 知识库 / 评测 / 计算机 / 运行状态 / 用量 |
-| 可观测 | OpenTelemetry | Port + OTLP Adapter，核心层不导入 SDK |
+## 七、事件：一份协议，四个消费者
 
-配置为**单一 schema（当前 `1.19`）**，跨域校验在启动时完成；声称的能力与代码不符
-会**在配置加载阶段失败**，而不是躺在那里没人读。
+CLI 输出、SSE、审计轨迹和 OpenTelemetry 消费的是**同一批事件**，没有谁另发明一套
+回调。事件描述发生了什么，**不决定执行走到哪**：会话存储拥有聊天历史，LangGraph
+checkpointer 拥有工作流位置，这份日志只拥有观察。
+
+**37 个事件类型，其中恰好 3 个是 transient**：`ModelDelta`、`ModelThinkingDelta`、
+`ToolProgress`。
+
+> **durability 是事件类型的属性，不是调用方的选择**（`EVENT_DURABILITY` 是一张写死
+> 的表）。调用方不能把一条 token delta 提升进持久日志，也不能把一个终态降级出去。
+> 逐 token 写行会让一次聊天变成写放大问题；而**只有持久事件带序号**，所以 SSE 游标
+> 是 `(stream_id, 最后一个持久事件的序号)`，断线重连从那里续读。
+
+一次工具调用留下的四件套：
+
+```
+ToolProposed  →  PermissionResolved  →  ToolStarted  →  ToolCompleted / ToolFailed
+（每一个被提议的     （每一轮策略一条）      （派发那一刻）      （成功或失败，
+  调用，包括就要                                              带 duration_ms）
+  被拒的那些）
+```
+
+**被拒的那次也留痕**：`refuse()` 构造一个失败的 `ToolResult` 并照样走 `_record`，所以
+它留下的是"走到第几步被拦下"，而不是从事件流里消失。需要审批时另外插入
+`PermissionRequested` + `RunPaused` + `ToolApprovalDecided`，**包括超时的那次**。
+
+`ToolProgress` 有两个生产者，含义不同：handler 自己报的 `report(message, percent)`
+（规范化后发出，空的丢弃、超 256 字符截断、百分比钳到 0..100，绝不把异常抛回
+handler），以及执行器每 5 秒一次的心跳——**心跳不带百分比**，因为"已过时间 ÷ 声明超时"
+看起来像进度而它不是（[ADR-068](docs/adr/0068-a-running-tool-owes-the-reader-a-sign-of-life.md)）。
+
+`record_step_inputs`（ADR-019，默认关）控制三处正文预览：`ModelStarted.prompt_preview`、
+`ToolProposed.argument_preview`、`ToolCompleted.output_preview`。而
+`ToolCompleted.truncated` / `workspace_writes` / `project_writes` **刻意不在这个开关
+后面**——它们是结构，不是正文。
 
 ---
 
-## 三、快速开始
+## 八、进程、配置与本机拓扑
+
+<img src="docs/assets/process-topology.svg" alt="本机拓扑：浏览器与控制台、agent-api、两个 Worker、共享的 PostgreSQL 与 Qdrant 与模型供应商、四个只绑 loopback 的 MCP server" width="100%">
+
+### 8.1 配置是契约，不是一袋值
+
+单一 schema（当前 **`1.19`**），跨域校验在启动时完成：一个配置声称、而代码没有的能力，
+**在配置加载阶段就失败**，而不是躺在那里没人读。
+
+`config/config.<name>.toml`，由 `AW_CONFIG_FILE` 选择，**十个**：`local`（无 MCP）、
+`word-local`、`web-local`、`code-local`、`computer-local`、`sandbox-local`、
+`demo-local`（并集，控制台跑的就是它），加上 `default`/`test`/`production`。
+
+这些 profile 是**分开的文件而不是一个开关**：每一份都会把自己的工具名冻进每一个新提交
+的 Task 授权信封，所以一个更宽的 profile 会加宽这个部署上的**每一个** Task。
+
+`agent-config-check --profile` 只接受三个名字——`development`、`test`、`production`；
+其余七个用 `--config config/config.<name>.toml` 校验。
+
+**82 条不变量写成单值 `Literal`**（`bootstrap/settings.py`），比如
+`registry_backend = "postgresql"`、`claim_strategy = "skip_locked"`、
+`runtime.executor = "claude_like"`、`max_parallel_write_tools = 1`。它们在类型上只有一
+个合法值：**改它们不是改一行配置，是先写一份 ADR**。完整清单在[面板](#零先把整个项目看一遍)
+的「配置画像」页。
+
+`database.dsn`、`guard_dsn`、`listen_dsn` 在 `FORBIDDEN_TOML_PATHS` 里，只能来自环境——
+连接串是凭据，即使今天这一份没有密码。`os.environ` 只允许出现在 `bootstrap` 包内。
+
+### 8.2 仓库导览
+
+| 目录 | 里面是什么 |
+|---|---|
+| `src/agent_workbench/domain/` | 25 个模块。不变量写进类型 |
+| `src/agent_workbench/ports/` | 38 个模块、48 个 Protocol。唯一的跨层接缝 |
+| `src/agent_workbench/runtime/` | 11 个模块。**唯一的工具循环**与 Tool Gateway |
+| `src/agent_workbench/workflows/` | 10 个模块。两张图、agent 画像、审批中断点、执行租约作用域 |
+| `src/agent_workbench/application/` | 34 个模块。Chat 回合、Task 生命周期、编码会话、崩溃恢复、运行树 |
+| `src/agent_workbench/adapters/` | 22 个目录 + 2 个散装模块。一个目录接一个外部世界 |
+| `src/agent_workbench/apps/` | `agent-api`、三个 worker/CLI，以及四个自有 MCP server |
+| `src/agent_workbench/bootstrap/` | 16 个模块。设置、投影、各类工厂、启动期校验 |
+| `tests/` | 20 个目录。`architecture/` 是让越界变红的那个，`contracts/` 是"一个契约，每种实现"的那个，`e2e/` 是杀掉 Worker 再看它恢复的那个 |
+| `web/src/` | 八个 feature、八个页面；出网只在 `api/` 的两个文件里 |
+| `config/` | 十个 profile |
+| `migrations/` | 32 个 Alembic 版本，单 head |
+| `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
+| `docs/adr/` | 87 份决策记录，编号 0012–0100（0050 与 0053 预留未写） |
+| `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
+| `scripts/` | `dev.sh`（本机唯一知道环境的地方）、`architecture_panel.py`（面板）、评测与基准脚本 |
+
+---
+
+## 九、快速开始
 
 前置：Python 3.12 与 `uv`。
 
-**零依赖演示**——不需要数据库、不需要联网、不需要 API key，输出逐字节可复现：
+**先看一眼整个项目**——不需要数据库、不需要联网、不需要 key：
+
+```bash
+scripts/dev.sh panel
+```
+
+**零依赖演示**——输出逐字节可复现：
 
 ```bash
 uv run agent-cli demo
@@ -379,18 +679,26 @@ uv run agent-cli demo --deny
 uv run agent-config-check --profile development && uv run ruff format --check . && uv run ruff check . && uv run pyright && uv run pytest
 ```
 
+`.env` 不是可选的：上面第一条命令没有它就停在 `3 validation errors for
+LoadedSettings`，读起来像 checkout 坏了，而它不是。
+
 **完整本机拓扑**（PostgreSQL、Qdrant、API、Worker、控制台）见
 [本机运行手册](docs/running-locally.md)；容器化演示见
 [Compose 部署](docs/deployment.md)——API 只映射到 `127.0.0.1:8000`。
 
+**门禁与规模的实测数字**在 [HIGHLIGHTS §2](docs/HIGHLIGHTS.md#2-门禁与规模)，
+本 README 不复制它们——一个抄在别处的数字没有任何东西会在它过期时失败。要一份**此刻**
+的现算数，开[面板](#零先把整个项目看一遍)。
+
 ---
 
-## 四、边界
+## 十、边界
 
 > [!WARNING]
 > **当前 Identity Adapter 只信任请求头**，因此 `agent-api` 只能用于受控的本机开发，
 > 不得暴露到局域网或公网。监听地址与 Compose 端口均限制为 loopback，但那只是防止
 > 意外暴露的机制，**不是身份认证**（[ADR-044](docs/adr/0044-no-remote-no-production-identity.md)）。
+> 架构面板同样只绑 `127.0.0.1`：它把源码树的 docstring 铺开给人看。
 
 能力状态只按 `Planned → Implemented → Tested → Demonstrated` 升级，
 **没有可链接的测试或演示证据不得升级**。当前明确未完成的包括：生产身份认证与远程
@@ -400,6 +708,9 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 提交时冻结的固定图。LlamaIndex 检索、MCP、沙箱、只读取用、联网搜索与子代理派生
 **均默认关闭**，各有其不能打开的理由。
 
+`before_tool` 钩子的边界写在这里：协议、总线、超时都在，**仓库自己不提供任何一个钩子
+实现**——那是部署方的扩展点，不是一个已经在用的特性。
+
 当前 Compose 只用于本机演示，不能作为生产部署或生产级多 Worker 的证明。
 
 **逐条的分类、仓库位置与"做完了算什么样"，见[已知缺口](docs/known-gaps.md)**；
@@ -407,10 +718,29 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 
 ---
 
-## 五、文档
+## 十一、技术栈
+
+| 层 | 选型 | 职责边界 |
+|---|---|---|
+| Agent Runtime | **自研** | Tool Loop、Policy、预算、取消——**不外包** |
+| 工作流控制面 | LangGraph | 编译控制流声明；`TaskState` 字段即图通道 |
+| 检索 | 自研 + LlamaIndex Adapter | LlamaIndex 只做检索契约，**默认未启用** |
+| 向量库 | Qdrant | dense / sparse 存储；融合在本进程内做 |
+| Embedding | BGE-M3 | dense + lexical，缺权重**拒绝构造** |
+| 重排 | BGE reranker | 跑在授权之后，返回按位对齐的分数 |
+| 模型 | DeepSeek（OpenAI 兼容） | 流式；服务端 `web_search` 不引入第二把 key |
+| 持久化 | PostgreSQL 16 + Alembic | 会话、任务、事件、checkpoint、outbox |
+| 工具协议 | MCP SDK v2 | Streamable HTTP，启动时冻结成本地 binding |
+| 前端 | React + TypeScript + Vite | 八个页面；Node 24.x（`engines` 钉 24.14.0） |
+| 可观测 | OpenTelemetry | Port + OTLP Adapter，核心层不导入 SDK |
+
+---
+
+## 十二、文档
 
 | 文档 | 用途 |
 |---|---|
+| **[本地架构面板](#零先把整个项目看一遍)** | `scripts/dev.sh panel`——现算的全景，离线 |
 | [十分钟版本](docs/HIGHLIGHTS.md) | 真实事件流、门禁数字、技术判断 |
 | [已知缺口](docs/known-gaps.md) | **没做的部分**，五类分类，附判据 |
 | [实施状态](docs/status.md) | 逐 PR 的实现与测试证据 |

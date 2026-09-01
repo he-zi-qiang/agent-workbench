@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1244 600" width="1244" height="600" class="d" role="img" aria-label="Chat 问答链路：幂等认领、双臂召回、RRF 融合、PostgreSQL ACL 过滤、重排、生成、引用校验、发布围栏">
+<style>
+.d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+@media (prefers-color-scheme:dark){.d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}}
+:root[data-theme="dark"] .d{--ink:#ecece8;--soft:#b5b5ae;--faint:#8f8f88;--line:#45453f;--line2:#33332f;--paper:#1c1c1b;--panel:#232321;--sunken:#2a2a27;--accent:#d98265;--accent-bg:#2c1b14;--ok:#6cba8b;--ok-bg:#12291b;--warn:#d6a45c;--warn-bg:#2d210d;--bad:#e58e88;--bad-bg:#361b19;--info:#8fb7c6;--info-bg:#16262d}
+:root[data-theme="light"] .d{--ink:#282825;--soft:#57574f;--faint:#7c7c74;--line:#cfcfc9;--line2:#e5e5e1;--paper:#ffffff;--panel:#f4f4f1;--sunken:#ececE8;--accent:#b75d42;--accent-bg:#f8eee9;--ok:#2f7a54;--ok-bg:#edf5f0;--warn:#8a5c1f;--warn-bg:#faf2e4;--bad:#a94a46;--bad-bg:#fbeceb;--info:#3f6472;--info-bg:#eef3f5}
+.d text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;fill:var(--ink)}
+.d .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+.d .h{font-size:14.5px;font-weight:600}
+.d .t{font-size:12.5px}
+.d .s{font-size:11.5px;fill:var(--soft)}
+.d .f{font-size:10.5px;fill:var(--faint)}
+.d .paper{fill:var(--paper);stroke:var(--line)}
+.d .panel{fill:var(--panel);stroke:var(--line2)}
+.d .sunk{fill:var(--sunken);stroke:var(--line2)}
+.d .acc{fill:var(--accent-bg);stroke:var(--accent)}
+.d .ok{fill:var(--ok-bg);stroke:var(--ok)}
+.d .warn{fill:var(--warn-bg);stroke:var(--warn)}
+.d .bad{fill:var(--bad-bg);stroke:var(--bad)}
+.d .info{fill:var(--info-bg);stroke:var(--info)}
+.d .edge{stroke:var(--line);stroke-width:1.4;fill:none}
+.d .edge-a{stroke:var(--accent);stroke-width:1.8;fill:none}
+.d .dash{stroke-dasharray:4 4}
+.d .ai{fill:var(--accent)}
+.d .oi{fill:var(--ok)}
+.d .wi{fill:var(--warn)}
+.d .bi{fill:var(--bad)}
+.d .ii{fill:var(--info)}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--line)"/></marker>
+<marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--accent)"/></marker>
+</defs>
+<rect width="1244" height="600" fill="none"/>
+<text x="24" y="36" class="h" text-anchor="start">一次 Chat 问答</text>
+<text x="24" y="58" class="s" text-anchor="start">要点在倒数第二步：撤权发生在生成之后、发布之前时，系统扣下答案，而不是把它发出去。</text>
+<rect x="24" y="96" width="288" height="126" rx="10" class="paper"/><circle cx="46" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="46" y="122" class="f m ai" text-anchor="middle">1</text><text x="66" y="123" class="t" text-anchor="start">幂等认领回合</text><text x="40" y="144" class="f" text-anchor="start">Idempotency-Key → 稳定 run_id</text><text x="40" y="160" class="f" text-anchor="start">重放已提交的回合直接返回原答案</text><text x="40" y="176" class="f" text-anchor="start">同一会话不允许并行的活跃回合</text>
+<rect x="330" y="96" width="288" height="126" rx="10" class="paper"/><circle cx="352" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="352" y="122" class="f m ai" text-anchor="middle">2</text><text x="372" y="123" class="t" text-anchor="start">两条臂并行召回</text><text x="346" y="144" class="f" text-anchor="start">稠密向量 + 稀疏词法，各取 top_k×4</text><text x="346" y="160" class="f" text-anchor="start">Qdrant 是派生副本，不是事实源</text>
+<rect x="636" y="96" width="288" height="126" rx="10" class="paper"/><circle cx="658" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="658" y="122" class="f m ai" text-anchor="middle">3</text><text x="678" y="123" class="t" text-anchor="start">RRF 融合</text><text x="652" y="144" class="f" text-anchor="start">在本进程内跑一次，纯函数</text><text x="652" y="160" class="f" text-anchor="start">按 (-score, chunk_id) 定序 → 同分也可复现</text><text x="652" y="176" class="f" text-anchor="start">融合归属写在配置的单值 Literal 里</text>
+<rect x="942" y="96" width="288" height="126" rx="10" class="acc"/><circle cx="964" cy="118" r="11" fill="none" stroke="var(--line)"/><text x="964" y="122" class="f m ai" text-anchor="middle">4</text><text x="984" y="123" class="t" text-anchor="start">PostgreSQL ACL 过滤</text><text x="958" y="144" class="f" text-anchor="start">⚑ 授权发生在这里，不在别处</text><text x="958" y="160" class="f" text-anchor="start">只留 source_revision 完全一致的候选</text><text x="958" y="176" class="f" text-anchor="start">并把每份文档的 revision 带出来</text>
+<rect x="942" y="268" width="288" height="126" rx="10" class="acc"/><circle cx="964" cy="290" r="11" fill="none" stroke="var(--line)"/><text x="964" y="294" class="f m ai" text-anchor="middle">8</text><text x="984" y="295" class="t" text-anchor="start">发布围栏</text><text x="958" y="316" class="f" text-anchor="start">一个事务里复核 revision + ACL</text><text x="958" y="332" class="f" text-anchor="start">锁序：会话 → 回合 → 文档 → 事件流</text><text x="958" y="348" class="f" text-anchor="start">文档按 id 排序取行锁，避免死锁</text><text x="958" y="364" class="f" text-anchor="start">答案、助手历史、回合终态一起提交</text>
+<rect x="636" y="268" width="288" height="126" rx="10" class="paper"/><circle cx="658" cy="290" r="11" fill="none" stroke="var(--line)"/><text x="658" y="294" class="f m ai" text-anchor="middle">7</text><text x="678" y="295" class="t" text-anchor="start">引用校验</text><text x="652" y="316" class="f" text-anchor="start">只认「模型点名过 AND 确实展示过」的段落</text><text x="652" y="332" class="f" text-anchor="start">编造的引用被计数，但不会返回</text>
+<rect x="330" y="268" width="288" height="126" rx="10" class="paper"/><circle cx="352" cy="290" r="11" fill="none" stroke="var(--line)"/><text x="352" y="294" class="f m ai" text-anchor="middle">6</text><text x="372" y="295" class="t" text-anchor="start">生成</text><text x="346" y="316" class="f" text-anchor="start">渲染上下文 → AgentExecutor（同一个 Runtime）</text><text x="346" y="332" class="f" text-anchor="start">固定形态：授权信封为空</text><text x="346" y="348" class="f" text-anchor="start">agentic 形态：只给一个 knowledge_search</text><text x="346" y="364" class="f" text-anchor="start">模型文本在发布前从事件流里挡住</text>
+<rect x="24" y="268" width="288" height="126" rx="10" class="paper"/><circle cx="46" cy="290" r="11" fill="none" stroke="var(--line)"/><text x="46" y="294" class="f m ai" text-anchor="middle">5</text><text x="66" y="295" class="t" text-anchor="start">重排</text><text x="40" y="316" class="f" text-anchor="start">只对已授权的候选打分，15 秒超时</text><text x="40" y="332" class="f" text-anchor="start">失败按输入顺序放行，不假装排过</text><text x="40" y="348" class="f" text-anchor="start">所以不可能引入提问者无权读的段落</text>
+<path d="M312 159.0 L330 159.0" class="edge" marker-end="url(#a)"/>
+<path d="M330 331.0 L312 331.0" class="edge" marker-end="url(#a)"/>
+<path d="M618 159.0 L636 159.0" class="edge" marker-end="url(#a)"/>
+<path d="M636 331.0 L618 331.0" class="edge" marker-end="url(#a)"/>
+<path d="M924 159.0 L942 159.0" class="edge" marker-end="url(#a)"/>
+<path d="M942 331.0 L924 331.0" class="edge" marker-end="url(#a)"/>
+<path d="M1086.0 222 L1086.0 268" class="edge" marker-end="url(#a)"/>
+<path d="M168.0 394 L168.0 434" class="edge" marker-end="url(#a)"/>
+<rect x="24" y="434" width="392" height="56" rx="8" class="ok"/>
+<text x="40" y="458" class="t m" text-anchor="start">AnswerCommitted</text>
+<text x="40" y="476" class="f" text-anchor="start">有据，带引用</text>
+<rect x="428" y="434" width="392" height="56" rx="8" class="warn"/>
+<text x="444" y="458" class="t m" text-anchor="start">UngroundedAnswerCommitted</text>
+<text x="444" y="476" class="f" text-anchor="start">无据，明说自己没有接地</text>
+<rect x="832" y="434" width="392" height="56" rx="8" class="bad"/>
+<text x="848" y="458" class="t m" text-anchor="start">AnswerWithheld</text>
+<text x="848" y="476" class="f" text-anchor="start">生成之后被撤权 → 扣下不发</text>
+<path d="M168.0 434 L168.0 420 L618 420 L618 434" class="edge"/>
+<path d="M618 420 L1028 420 L1028 434" class="edge"/>
+<text x="24" y="528" class="s" text-anchor="start">「答不上来就说答不上来」是评测里单独考核的一项：没把握时给出的是拒答，而不是一个像模像样的答案。</text>
+<text x="24" y="550" class="f" text-anchor="start">联网兜底用过网页的回答不计为接地，界面上区分显示。</text>
+<text x="24" y="578" class="f m" text-anchor="start">application/chat.py · application/retrieval.py · application/answer_release.py · adapters/vector/fusion.py</text>
+</svg>
