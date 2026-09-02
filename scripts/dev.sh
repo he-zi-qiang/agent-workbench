@@ -253,15 +253,26 @@ _start() {
 
 _wait_http() {
   # _wait_http <url> <deadline seconds> <label>
-  local url=$1 deadline=$2 label=$3 waited=0
-  while [ "$waited" -lt "$deadline" ]; do
-    if curl -sf -o /dev/null --max-time 2 "$url" 2>/dev/null; then
-      echo "  $label ready after ${waited}s" >&2
-      return 0
-    fi
-    sleep 2
-    waited=$((waited + 2))
-  done
+  #
+  # Through `docker/wait_for_http.py` rather than `curl`, for two reasons. The
+  # first is reuse: that file is how the container topology waits for Qdrant,
+  # and a second implementation of "poll until 2xx or give up" would be a
+  # second set of semantics to keep in step -- the argument ADR-104 made about
+  # the web-search probe, applied again.
+  #
+  # The second is that `curl` is not guaranteed. A minimal WSL or container
+  # image may not have it, and the failure was indistinguishable from a broken
+  # API: with `curl` absent the loop simply never succeeded, spun for the full
+  # deadline, and then reported that the API had not answered -- naming the
+  # wrong thing for five minutes. The interpreter this needs is the one
+  # `_setup` has already guaranteed, and it imports nothing outside the
+  # standard library.
+  local url=$1 deadline=$2 label=$3
+  if WAIT_FOR_HTTP_URL="$url" WAIT_FOR_HTTP_DEADLINE_SECONDS="$deadline" \
+    "$PYTHON" docker/wait_for_http.py >/dev/null 2>&1; then
+    echo "  $label answered $url" >&2
+    return 0
+  fi
   echo "  $label did not answer $url within ${deadline}s" >&2
   return 1
 }

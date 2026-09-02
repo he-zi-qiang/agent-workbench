@@ -360,3 +360,32 @@ def test_with_retrieval_is_an_accepted_flag_and_an_unknown_one_is_not() -> None:
     assert bad.returncode == 2
     assert "unknown option" in bad.stderr
     assert "--with-retrieval" in bad.stderr, "the refusal should spell it right"
+
+
+def test_the_readiness_wait_needs_no_curl() -> None:
+    """`curl` is not guaranteed on a minimal WSL or container image.
+
+    While the wait used it, its absence was indistinguishable from a broken
+    API: the loop never succeeded, spun for the full 300-second deadline, and
+    then reported that the API had not answered -- naming the wrong thing for
+    five minutes. It now goes through `docker/wait_for_http.py`, which is both
+    the helper the container topology already uses for Qdrant and a file that
+    imports nothing outside the standard library.
+    """
+
+    executable = [
+        line
+        for line in DEV_SCRIPT.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    calls_curl = [line for line in executable if "curl" in line]
+
+    # The one that may remain is the sentence telling somebody how to install
+    # uv, which is advice rather than something this script runs.
+    assert all("astral.sh/uv/install.sh" in line for line in calls_curl), calls_curl
+    assert any("docker/wait_for_http.py" in line for line in executable)
+
+    waiter = ROOT / "docker" / "wait_for_http.py"
+    source = waiter.read_text(encoding="utf-8")
+    for third_party in ("import httpx", "import requests", "import aiohttp"):
+        assert third_party not in source, third_party
