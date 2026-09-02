@@ -64,7 +64,13 @@ The current count lives in [HIGHLIGHTS.md §2](docs/HIGHLIGHTS.md#2-门禁与规
 
 `scripts/dev.sh` is the single place that knows this machine's environment (the three DSNs, the proxy handling, the provider key). Read its header comment before adding a launch path.
 
+**`up` owns the start order, and two parts of it are load-bearing rather than tidy**: `demo-api` probes the sandbox MCP server before it will start, and a Worker freezes its MCP catalogue once at startup. `docs/running-locally.md` used to carry that order in prose and got it wrong — its console list never named `sandbox-server`, so following it exactly made `demo-api` die on a probe the doc did not mention.
+
 ```bash
+scripts/dev.sh up                 # THE ONE COMMAND: setup, services, migrate, MCP
+                                  # servers, API, ingest, worker -- in the order the
+                                  # console needs. --plan prints it without starting.
+scripts/dev.sh down / status / logs <name>
 scripts/dev.sh services           # then: scripts/dev.sh migrate
 scripts/dev.sh api                # control plane; --without-chat skips the embedding runtime
 scripts/dev.sh ingest             # ingestion worker; ALSO bootstraps the Qdrant collection/alias
