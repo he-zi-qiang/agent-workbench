@@ -71,6 +71,7 @@ from agent_workbench.apps.api.sse import TooManyLiveSubscribersError
 from agent_workbench.apps.api.state import STATE_ATTRIBUTE
 from agent_workbench.apps.api.web import mount_console, resolve_web_directory
 from agent_workbench.bootstrap import load_settings, provider_key
+from agent_workbench.bootstrap import switches as console_switches
 from agent_workbench.bootstrap.projections import ApiRuntimeConfig, project_api
 from agent_workbench.domain.errors import (
     NotFoundError,
@@ -392,7 +393,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     # process a person started on purpose is a different question, and
     # this is one -- the same question `scripts/dev.sh` has been
     # answering for the shell since before Python could.
-    config = project_api(load_settings(provider_key_file=provider_key.key_file()))
+    # The switches file for the same reason, and beside the key on purpose
+    # (ADR-103): one directory to own, one volume to mount.
+    config = project_api(
+        load_settings(
+            provider_key_file=provider_key.key_file(),
+            switches_file=console_switches.switches_file(),
+        )
+    )
     # Not a degraded mode that hides a misconfiguration. `build_model` refuses to
     # start a process whose model it could not call, and that refusal is correct
     # -- a process that answers nothing while passing its health check turns a

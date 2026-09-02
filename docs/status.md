@@ -27,6 +27,136 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-01（第六十八批）：附加的零件可以从控制台上拨动，拨的是下一次启动
+
+第六十七批让「运行状态」页列出十二行能力，每一处缺失带原因、带补法。使用者看着一排
+灰色的「缺失」问：附加项既然像零件，为什么看得见却选不了。
+
+这一批回答它：[ADR-103](./adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)。
+它**部分推翻 ADR-102 §4.4**（「不给这份报告加写口」），推翻的边界写在那份 ADR 的 §4。
+
+### 1. 零件分两种，只有一种有开关
+
+每一行多一个 `provision`：`switch` / `install` / `key` / `none`。**四个开关**——
+`research.enabled`、`triage.enabled`、`code.enabled`、`multi_agent.delegation_enabled`——
+判据只有一条：在设置模型里是一个普通的 `bool`，且它为真所需要的一切已经在进程里。
+`sandbox.enabled` 也是个 `bool`，但它为真意味着一台能开容器的 MCP 服务在跑，Compose 栈
+里没有；给它一个开关是承诺一件这一侧兑现不了的事，所以它标「需要安装」。
+
+联网搜索的两行（对话、任务）共用**同一个**开关，页面上两行都画它，服务端回的是整份清单，
+页面整份替换——自己只改一行的 cache 会让另一行说谎。
+
+### 2. 拨的是下一次启动：`stored` 与 `active`
+
+进程在组装期读一次配置。所以每个开关是两个布尔（文件为下次记的值、这个进程正在用的值）
+加一句「重启 agent-api 与 agent-task-worker 后这个选择才会生效」——和 ADR-101 对 key
+的做法一字不改。`null` 是第三个位置，页面叫「不指定」，它是真实的状态：下次启动照环境
+变量与配置文件走，在 Docker 栈上意味着 ADR-102 §3 那个「探到 key 就打开」的脚本继续决定。
+
+存下的开关排在 TOML 之上、环境之下。出厂文件对四个开关全写 `false`——输给它的开关是
+谁也拨不动的开关；而操作者导出的值是这台部署自己的决定，页面把「文件说开、进程却关着」
+报成 `overridden`，写明「启动环境里显式给了这个值，压过了这里的选择」。
+
+### 3. 搁置，而不是拒绝启动
+
+`research.enabled=true` 在没有 key 时是启动错误。给控制台一个能写它的开关，等于把
+ADR-102 §3 挡在容器启动脚本外面的那个陷阱搬回来，只是这次挖坑的是使用者自己。所以
+加载器多一条规则：一个存下的「开」，如果验证器会因为没有 key 拒绝它，就**搁置**——不
+应用、照旧存着、记下原因、让那一行说出来。判定用的是验证器自己的规则：先不带这个开关
+构造一次设置，问那个对象 `provider_key_is_configured()`，再决定第二次带不带。
+
+容器启动脚本据此让路：`docker/provider_key_present.py` 改名 `decide_web_search.py`，只在
+环境未设**且**文件里没有 `research.enabled` 时才探 key；文件里记了值——开或关——它就退出，
+并把走了哪条路打到 stderr。
+
+### 4. 一个文件，一个卷，三个容器，一个 `restart`
+
+开关文件放在 key 旁边（`switches.json`），位置从 `AW_KEY_FILE` 推出；声明了「没有 key
+文件」的部署也就没有开关文件。Compose 里两个 Worker 挂上 API 已经在用的 `provider_key_data`
+——`--demo` Worker 两个文件都不用，但 Worker 是注册信封允许的那些工具的进程，这个标志哪天
+摘掉，「联网搜索是开的」在两个容器里必须是同一句话。`scripts\stack.cmd restart` 只重启
+读配置一次的三个进程，几秒钟；`down` 再起会重新构建镜像。
+
+### 5. 一个自己写出来的 bug
+
+第一版 `load_settings` 在内层类里写 `stored_switches: ClassVar = dict(stored_switches)`，
+右边那个名字在类体里解析不到外层函数的局部变量——类体看不见同名的闭包变量——于是**每一次**
+`load_settings` 都 NameError，22 条测试红，包括与开关无关的整份 `test_local_console_profile.py`。
+改名为 `switches_from_file`，并在那三行旁边写下为什么三个名字必须与函数级的不同。
+pyright 同时抓到 `_secret_is_configured` 是受保护方法：搁置规则问的是验证器自己的问题，
+所以给了它一个公开的问法 `provider_key_is_configured()`，而不是在类外复述占位串规则。
+
+**第二个，是在真的栈上看出来的。** Compose 验证做完，浏览器里那一页还写着「这次启动：关」
+和「启动环境里显式给了这个值」，而同一秒 `curl` 到的接口说 `active=True`、`overridden=False`。
+页面没错，是**旧的**：能力清单的查询 `staleTime: Infinity`——第六十七批定的「不轮询，
+只有重启才会变」——而它顺带把 `refetchOnWindowFocus` 也挡掉了。这一批之前那是对的；
+这一批之后，**重启正是这一页会让人去做的事**：拨了开关、去终端 `stack.cmd restart`、回到
+标签页——回来时看到的必须是新进程的答案。改法两处：回到标签页时总是重读一次
+（`refetchOnWindowFocus: "always"`，不是轮询），以及「重新检查」那个按钮把能力清单一起
+重读——一个刚重启过 API 的人按的就是它。多一条测试钉住按钮那半。
+
+### 6. 明确没做
+
+- **不热加载**、**不做认证**、**不产生事件**（D-07 的范围据此扩到开关，编号不变）。
+- **不给安装型零件开关**，也不给核心行开关：核心缺失是半个产品不在，不是一个选择。
+- **不改 `scripts/dev.sh`**：它导出的 `AW_RESEARCH__ENABLED=true` 会压过存下的开关，
+  页面把那一格报成 `overridden` 并说出原因。让脚本读文件是可以做的，但那会让原生路径和
+  容器路径各有一套「谁让路给谁」。
+
+### 7. 证据：在真的 Compose 栈上拨、重启、看行变化
+
+另起一个 project（`aw-verify`，端口 8010，镜像 tag `verify`，从这棵树构建），不碰在跑
+的那套。每一步读的都是 `GET /v1/system/capabilities` 的原文：
+
+| 步骤 | 看到什么 |
+|---|---|
+| 全新的栈，没有 key，什么也没存 | 四个开关全部 `stored=None active=False`，三个要模型的标着「先存 key」；启动脚本打印 `no provider key yet` |
+| `PUT /switches/multi_agent.delegation_enabled` 与 `…/research.enabled`（仍然没有 key） | 两行 `stored=True active=False restart_required=True`；卷里出现 `switches.json`，两个键 |
+| 重启 API 与两个 Worker | 启动脚本打印 `research.enabled is stored as true … the settings loader decides`；委派 **`active=True`、行变成可用**；联网搜索两行 **`held=yes`**，`active=False`，`restart_required=False`——存着，没兑现，说了为什么 |
+| 存一把一次性 key，再重启 | 联网搜索两行 **`active=True`、可用**，`held=no`，所有 `blocked` 清空；直接对话可用 |
+| 以 `AW_RESEARCH__ENABLED=false` 重建 API（文件仍说开） | 两行 `stored=True active=False` **`overridden=True`**：环境压过了文件，页面说的正是这句 |
+| `DELETE /switches/research.enabled` | `stored=None`、`restart_required=True`——收回也是一次会改变下次启动的写 |
+| 清掉环境变量再重建 API（文件里没有 research，key 在） | 启动脚本打印 `provider key present and nothing stored for research.enabled: chat web_search is on`；行 `stored=None active=True`——「不指定」在 Docker 栈上就是让 ADR-102 §3 的脚本继续决定 |
+| 进 Worker 容器看 | `/var/lib/agent-workbench/provider-key/` 里 `key` 与 `switches.json` 都在，`AW_KEY_FILE` 指着它 |
+
+**再从浏览器里拨一次，而不是只用 `curl`。** 重建镜像（带上 §5 的第二个修法）之后，
+在同一套栈的「运行状态」页上点「对话联网搜索」那一行的「关闭」：**两行**（对话、任务）
+同时变成「这次启动：开 · 下次启动：关」，各自带出「重启 agent-api 与 agent-task-worker
+后这个选择才会生效」，而「这次启动：开」一个字没动；容器里的 `switches.json` 随即是
+`{"multi_agent.delegation_enabled": true, "research.enabled": false}`。一个开关、两行、
+一次写、零次热生效——这一段的全部设计在一张截图里。
+
+**验证脚本自己的一个坑**，写下来免得下次再追：`#!/bin/sh` 下 `VAR=x some_function` 的赋值
+在 POSIX 模式（macOS 的 /bin/sh）会留在函数返回之后，于是「恢复默认环境」那一步其实没有
+恢复，读出一个脚本造成的 `overridden=True`。用 `env -u VAR` 重做，才得到上表倒数第二行。
+
+### 8. 门禁
+
+| 环境 | 结果 |
+|---|---|
+| 后端，真实 PostgreSQL + Qdrant（本机，空载重跑） | `4122 passed / 12 skipped`（14 分 50 秒） |
+| 同上，更早一次，**负载下**（两次镜像构建、两次前端全套与它并行） | `4120 passed / 2 failed / 12 skipped`（26 分 57 秒） |
+| 后端，不起任何外部服务 | `3334 passed / 800 skipped`（1 分 19 秒） |
+| CI 那组五个服务型目录 | `1408 passed / 2 skipped`（13 分 19 秒） |
+| 前端 Vitest（55 个文件，空载重跑） | `863 passed` |
+
+四列差额 +34 / +34 / +10 / +6 全部是本批的测试，逐个文件的归属在
+[HIGHLIGHTS §2](./HIGHLIGHTS.md#2-门禁与规模)。静态门禁全绿：`ruff format --check`、
+`ruff check`、pyright strict 0 错误、ESLint `--max-warnings 0`、`tsc -b`、production
+build；十个配置档在各自要求的环境下 `agent-config-check` 全过（`production` 要 CI 那
+一组变量，`code-local` 要一把 key——都是它们自己文件里写着的要求，不是本批的）。
+
+**负载下红的两条，照实记。** `test_sandbox_isolation.py::test_an_endless_script_is_killed_and_a_quick_one_is_not`
+（第六十六批那条沙箱注记的同一家：CPU 被抢光时它测的是机器有多忙）和
+`test_code_api.py::test_a_process_that_cannot_serve_code_says_so`（B-13 的同一家）。两条
+在空载机器上单独重跑 **3 / 3 绿**，各约两分钟一轮；本批没碰沙箱也没碰 Code 路由。
+空载全套重跑：**4122 全绿**（上表第一行）。负载那一次照旧留在表里，它是真实发生过的一次
+测量，不是该被盖掉的数字。
+
+**前端全套在负载下也红过一次**（`CodePage.test.tsx` 的一条计数断言，期望 2 次调用得到 3 次），
+单独跑三次 76 / 76，空载全套 863 / 863。写下来是因为它和上面两条是同一件事：这台机器
+上并行跑重活会让计时敏感的断言变红，[记忆里](../CLAUDE.md)早就有这一条，这一批又撞上一次。
+
 ## 2026-09-01（第六十七批）：一台部署要说得出自己没装配起什么
 
 Windows 上双击 `scripts\stack.cmd`，Docker 栈起来，控制台六页都在，Chat 能答，任务

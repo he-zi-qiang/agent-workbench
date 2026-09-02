@@ -758,6 +758,24 @@ export async function getDeploymentCapabilities(
   return apiRequest(identity, "/v1/system/capabilities");
 }
 
+/**
+ * 拨一个零件的开关（ADR-103）：`true`/`false` 记下选择，`null` 收回它。
+ *
+ * 写的是**下次启动**的事，这个进程什么也不会变——所以服务端回的是整份能力清单，
+ * 里面每个开关都带着 `restart_required`，页面用它替换手里那份，而不是自己猜。
+ */
+export async function setDeploymentSwitch(
+  identity: PrincipalIdentity,
+  switchId: string,
+  enabled: boolean | null,
+): Promise<DeploymentCapabilitiesResponse> {
+  const path = `/v1/system/switches/${encodeURIComponent(switchId)}`;
+  if (enabled === null) {
+    return apiRequest(identity, path, { method: "DELETE" });
+  }
+  return apiRequest(identity, path, { method: "PUT", body: { enabled } });
+}
+
 export async function getTask(
   identity: PrincipalIdentity,
   taskId: string,

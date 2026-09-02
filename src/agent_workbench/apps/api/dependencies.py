@@ -133,6 +133,7 @@ from agent_workbench.application.projects import ProjectService
 from agent_workbench.application.provider_key import ProviderKeyStore
 from agent_workbench.application.retrieval import RetrievalService
 from agent_workbench.application.sub_agents import CODE_SUB_AGENTS
+from agent_workbench.application.switches import SwitchStore
 from agent_workbench.application.task_inputs import TaskInputService, TaskInputStore
 from agent_workbench.application.task_triage import TaskTriageService
 from agent_workbench.application.tasks import SubmittedSemantics, TaskService
@@ -408,6 +409,12 @@ class ApiDependencies:
     #: could reach in order to configure one.
     provider_keys: ProviderKeyStore = field(
         default_factory=lambda: ProviderKeyStore(key_file=None, checkout_root=None)
+    )
+    #: Where the console's switches live (ADR-103). Always present for the
+    #: reason the key store is: the page that flips a switch has to exist on
+    #: the deployment that has none flipped.
+    switches: SwitchStore = field(
+        default_factory=lambda: SwitchStore(path=None, checkout_root=None)
     )
 
     @property
@@ -826,6 +833,14 @@ def build_dependencies(
             ),
             reports_root=Path(config.evaluation.reports_root),
             runs_enabled=config.evaluation.runs_enabled,
+        ),
+        switches=SwitchStore(
+            path=(
+                Path(config.switches_file) if config.switches_file is not None else None
+            ),
+            checkout_root=(
+                Path(config.checkout_root) if config.checkout_root is not None else None
+            ),
         ),
         provider_keys=ProviderKeyStore(
             key_file=(

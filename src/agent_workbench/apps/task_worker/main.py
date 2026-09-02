@@ -20,6 +20,7 @@ from agent_workbench.apps.task_worker.composition import (
 )
 from agent_workbench.apps.task_worker.runner import TaskWorkerRunner
 from agent_workbench.bootstrap import load_settings, provider_key
+from agent_workbench.bootstrap import switches as console_switches
 from agent_workbench.bootstrap.projections import project_task_worker
 
 EXIT_OK = 0
@@ -50,7 +51,13 @@ async def serve(*, demo: bool) -> None:
 
     # See `apps/api/main.py`: the key file is a launcher-level fact, so
     # it is named at the entry point rather than read inside the loader.
-    settings = load_settings(provider_key_file=provider_key.key_file())
+    settings = load_settings(
+        provider_key_file=provider_key.key_file(),
+        # The Worker freezes nothing itself, but it registers the tools the
+        # API's envelope allows -- `external_search` exists here only when
+        # research is on -- so it reads the same console switches (ADR-103).
+        switches_file=console_switches.switches_file(),
+    )
     config = project_task_worker(settings)
     dependencies = await build_task_worker_dependencies(config, demo=demo)
     listener: TaskReadyListener | None = None

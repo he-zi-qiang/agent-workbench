@@ -228,6 +228,8 @@ as two separate facts: the model client is built once at composition, so a key
 stored now takes effect at the next start, and a switch that says "saved" while
 nothing changes reads as broken.
 
+The System pane lists what this deployment can and cannot do ([ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)) and sorts the optional parts into two kinds: **switch-shaped** ones (web search, triage, Code sessions, delegation) can be flipped on their own row, and what they flip is the **next** start, with "this start" and "next start" written as two answers ([ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)); **install-shaped** ones (MCP tools, the sandbox, retrieval) say "needs installing", because no switch could honour them.
+
 What a run did is folded into stages, and expanding one shows the raw events and
 payloads — **folding renames, it never drops an event**. When a Task delegated,
 an "agents involved" panel appears above the timeline: a tree of who spawned whom
@@ -247,7 +249,7 @@ consumed with `fetch` + `response.body.getReader()`; there is not one
 `/v1/artifacts` (with `/preview` and `/pdf`), `/v1/projects`, `/v1/code`,
 `/v1/usage`, `/v1/computer` (a read-only reverse proxy, ADR-095),
 `/v1/evaluation`, `/v1/settings` (the model key, ADR-101),
-`/v1/system` (what this deployment did not assemble, ADR-102), `/health/live|ready`. The itemized list is on the
+`/v1/system` (what this deployment did not assemble, ADR-102; flipping a part's switch, ADR-103), `/health/live|ready`. The itemized list is on the
 [panel](#0-see-the-whole-thing-first)'s HTTP page, parsed from the route
 decorators rather than transcribed.
 
@@ -904,9 +906,9 @@ evidence are in [the ten-minute version](docs/HIGHLIGHTS.md) (Chinese).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-The last row was measured **2026-09-01** on batch 67's tree; the rows above it on
-`main`, **2026-08-31**. Five sets were taken that day and the differences mean
-something:
+The last two rows were measured **2026-09-01** on their own batches' trees; the
+rows above them on `main`, **2026-08-31**. Five sets were taken that day and the
+differences mean something:
 
 | Point | Real services | Offline | Five dirs | Frontend |
 |---|---|---|---|---|
@@ -918,9 +920,22 @@ something:
 | Batch 64 (the boundary guard) | 4017 | 3229 | 1376 | 842 |
 | Batch 65 (the last dead symbols) | 4020 | 3232 | 1376 | 842 |
 | Batch 66 (the checkpoint migration) | 4032 | 3244 | 1376\* | 842 |
-| Batch 67 (the capability report, this table) | **4088** | **3300** | **1398** | **857** |
+| Batch 67 (the capability report) | 4088 | 3300 | 1398 | 857 |
+| Batch 68 (the part switches, this table) | **4122**\*\* | **3334** | **1408** | **863** |
 
-**Half of the last row's +56 / +56 / +22 / +15 is not its own.** Twelve changes
+**The last row's +34 / +34 / +10 / +6 is entirely its own**, file by file: eight in
+`tests/config/test_switches_store.py`, six in `test_stored_switches_load.py`, eight
+in `test_web_search_decision.py`, ten more in `tests/api/test_system_capabilities.py`
+and two more in `tests/deployment/test_compose.py` — +34 offline; the five-directory
+column gains only ten because only the `tests/api` file lives there; on the
+frontend, `SystemPage.test.tsx` +6 (five for the switch, one for the recheck
+button). The real-services column is the **idle rerun**, 4122 in 14m50s with nothing
+failing; an earlier run on the same tree, taken *under load* (two image builds and
+two full frontend runs beside it), came out `4120 passed / 2 failed`, and the two
+reds are in the \*\* note below the second table. Both runs are 4122 tests,
+4088 + 34.
+
+**Half of batch 67's +56 / +56 / +22 / +15 is not its own.** Twelve changes
 landed on `main` after this table was last refreshed (ADR-101's stored key, the
 Windows launcher, the architecture panel, four batches of frontend styling) without
 recording numbers, so that difference is theirs plus this batch's. **This batch's own
@@ -977,15 +992,30 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4088 passed / 12 skipped` (21m29s) |
-| Backend, no external services (local) | `3300 passed / 800 skipped` (1m37s) |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1398 passed / 2 skipped` (20m34s)\* |
-| Frontend Vitest (local, 55 files) | `857 passed` |
+| Backend, real PostgreSQL + Qdrant (local, idle rerun) | `4122 passed / 12 skipped` (14m50s)\*\* |
+| Backend, no external services (local) | `3334 passed / 800 skipped` (1m19s) |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1408 passed / 2 skipped` (13m19s)\* |
+| Frontend Vitest (local, 55 files, idle rerun) | `863 passed` |
 
-These four were measured **2026-09-01** on batch 67's tree, machine idle. The
-previous edition (2026-08-31, batch 66) was `4032 / 3244 / 1376 / 842`, and twelve
-changes that recorded no numbers sit between the two — the paragraph under the
-table above accounts for the difference.
+These four were measured on the evening of **2026-09-01** on batch 68's tree,
+machine idle; the first row also has a red run under load on the same tree (\*\*). The previous edition (same day,
+batch 67) was `4088 / 3300 / 1398 / 857`, and the whole difference is this batch's
+own tests — the paragraph under the table above attributes them file by file.
+
+> \*\* **Batch 68's real-services column is a red run under load, recorded as it
+> happened.** The two reds:
+> `tests/apps/test_sandbox_isolation.py::test_an_endless_script_is_killed_and_a_quick_one_is_not`
+> (the same family as the 2026-08-31 sandbox note below — it measures whether a
+> container is killed within a deadline, and on a starved CPU it measures how busy
+> the machine is) and one test in `test_code_api.py` (the B-13 family). Two `docker
+> build`s and two full frontend runs were running beside it. Both pass **3 / 3** when
+> rerun alone on an idle machine, about two minutes a round. The change touches
+> neither the sandbox nor the Code routes.
+>
+> **The idle full rerun: `4122 passed / 12 skipped / 0 failed`, 14m50s.** The table
+> records that one, as batch 66 did; the load run stays in this note because it is a
+> measurement that really happened on this tree, not a number for the next one to
+> paper over.
 
 > The frontend row spent an edition outside this table, below the B-13 footnote,
 > where it rendered as a stray line rather than a row. It is back in the table.
@@ -1002,6 +1032,13 @@ table above accounts for the difference.
 > **2026-09-01: two more runs on batch 67's tree, both green** (`1396`, `1398`,
 > about 20 minutes each). Still no reproduction and still no error text, so B-13
 > stays open — two passes are not a fix, they only rule out "red every time".
+>
+> **On batch 68's tree**: the five directories were green (`1408`, 13m19s, idle),
+> while the *full* suite under load lost **one** `test_code_api.py` test
+> (`test_a_process_that_cannot_serve_code_says_so`, see \*\*), which passed three
+> times alone. This time its assertion is known — it counts a warning line a real
+> assembly prints — but the failing run's error text is still not captured. B-13
+> stays open.
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -1037,7 +1074,7 @@ the class of error this document keeps having to correct.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 857 above is also a **local** run, on the same node as the previous edition: the
+installed on this machine. The 863 above is also a **local** run, on the same node as the previous edition: the
 v24.8.0 kept in the repository's own `var/toolchain`, not the system `26.7.0`. The
 previous edition's note about `NODE_OPTIONS=--no-experimental-webstorage` therefore
 **does not describe this measurement** — it records the workaround needed when the

@@ -71,9 +71,19 @@ tests/architecture/test_config_ownership.py
 > 进程环境变量
 > mounted secret files
 > .env（仅 development/test）
+> 控制台存下的 provider key（AW_KEY_FILE 指向的文件，ADR-101）
+> 控制台存下的开关（同一目录下的 switches.json，ADR-103）
 > AW_CONFIG_FILE 指定的 TOML overlay
 > config.default.toml
 ```
+
+后两行只在显式传了 `provider_key_file` / `switches_file` 的入口（`agent-api`、
+`agent-task-worker`）才会被读；测试套件与 `agent-config-check` 从不传，所以不会
+捡到某台机器上控制台里做过的选择。`switches.json` 是一张从配置路径到布尔的平面表
+（`{"research.enabled": true}`），只认四个开关（`research.enabled`、`triage.enabled`、
+`code.enabled`、`multi_agent.delegation_enabled`），不认识的键在启动时按文件名拒绝。
+其中 `research.enabled=true` 在没有 provider key 时会被**搁置**而不是让启动失败——
+理由与 ADR-102 §3 相同，见 [ADR-103](./adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md) §3.3。
 
 嵌套环境变量使用双下划线：
 

@@ -29,7 +29,9 @@ from agent_workbench.adapters.tools.export_artifact import (
 from agent_workbench.adapters.tools.external_search import (
     TOOL_NAME as EXTERNAL_SEARCH_TOOL,
 )
+from agent_workbench.application.switches import SWITCHES
 from agent_workbench.bootstrap import provider_key
+from agent_workbench.bootstrap import switches as console_switches
 from agent_workbench.bootstrap.paths import CHECKOUT_ROOT
 from agent_workbench.bootstrap.settings import ModelPricingSettings, Settings
 from agent_workbench.domain.agents import DELEGATE_TOOL
@@ -757,6 +759,25 @@ class IngestionWorkerRuntimeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class SwitchState:
+    """One console switch (ADR-103), as this process loaded it.
+
+    Three facts that are three questions. ``active`` is the value this process
+    runs with, wherever it came from. ``stored_at_start`` is what the console's
+    file said when this process loaded -- ``None`` when it said nothing, which
+    is a state and not a missing value. ``held`` is non-empty when the file
+    said "on" and the loader deliberately did not apply it, with the sentence
+    the row should show. The report compares these against the file *now* to
+    tell "a restart is owed" apart from "the environment overrode this".
+    """
+
+    path: str
+    active: bool
+    stored_at_start: bool | None
+    held: str
+
+
+@dataclass(frozen=True, slots=True)
 class ApiRuntimeConfig:
     """Everything the API process needs, and nothing else."""
 
@@ -851,6 +872,11 @@ class ApiRuntimeConfig:
     # tool that fails, an absence, so a deployment that configured nothing
     # cannot spend money by accident.
     research: ResearchConfig | None = None
+    #: The four console switches and the file they live in (ADR-103). The
+    #: file as a `str` for the reason `provider_key_file` is one; `None` when
+    #: the deployment declared no key file, since the switches sit beside it.
+    switches: tuple[SwitchState, ...] = ()
+    switches_file: str | None = None
     #: Where this process looks for the sandbox, when a coding session may call
     #: it (ADR-057). `None` whenever `code.sandbox_enabled` is false, so the two
     #: cannot describe different intentions -- this is the address, that is the
@@ -1166,6 +1192,47 @@ def _project_embedding(settings: Settings) -> EmbeddingConfig:
     )
 
 
+def _switches_file() -> str | None:
+    resolved = console_switches.switches_file()
+    return str(resolved) if resolved is not None else None
+
+
+def _setting_at(settings: Settings, path: str) -> bool:
+    """The boolean at a dotted settings path such as ``multi_agent.delegation_enabled``.
+
+    Read off the loaded object rather than off the file, so it reports the
+    value the process runs with wherever that value came from.
+    """
+
+    cursor: object = settings
+    for part in path.split("."):
+        cursor = getattr(cursor, part)
+    assert isinstance(cursor, bool), path
+    return cursor
+
+
+def _project_switches(settings: Settings) -> tuple[SwitchState, ...]:
+    """Every switch, read off the loaded object and the loader's own record.
+
+    `stored_switches` and `held_switches` are class attributes `load_settings`
+    sets on the class it builds; a `Settings` constructed directly (the test
+    suite's usual path) carries the empty defaults, which reads as "nothing was
+    stored" -- true of a process that never looked.
+    """
+
+    stored = type(settings).stored_switches
+    held = type(settings).held_switches
+    return tuple(
+        SwitchState(
+            path=spec.path,
+            active=_setting_at(settings, spec.path),
+            stored_at_start=stored.get(spec.path),
+            held=held.get(spec.path, ""),
+        )
+        for spec in SWITCHES
+    )
+
+
 def _provider_key_file() -> str | None:
     """The key file as a string, because a projection carries no ``Path``.
 
@@ -1199,6 +1266,8 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         provider_key_file=_provider_key_file(),
         checkout_root=str(CHECKOUT_ROOT) if CHECKOUT_ROOT is not None else None,
+        switches=_project_switches(settings),
+        switches_file=_switches_file(),
         record_step_inputs=settings.runtime.record_step_inputs,
         context_soft_limit_ratio=settings.runtime.context_soft_limit_ratio,
         context_compaction_enabled=settings.runtime.context_compaction_enabled,

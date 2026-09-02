@@ -10,6 +10,7 @@ rem      scripts\stack.cmd            build, start, wait for healthy, open the c
 rem      scripts\stack.cmd down       stop everything and remove the containers
 rem      scripts\stack.cmd logs       follow the logs
 rem      scripts\stack.cmd status     what is running
+rem      scripts\stack.cmd restart    restart the API and both Workers, nothing else
 rem
 rem  Two conventions this file keeps, inherited from scripts/panel.cmd and for
 rem  the same reasons:
@@ -63,6 +64,7 @@ if errorlevel 1 (
 if /i "%~1"=="down"   goto :down
 if /i "%~1"=="logs"   goto :logs
 if /i "%~1"=="status" goto :status
+if /i "%~1"=="restart" goto :restart
 
 rem  Build with `docker build`, then `compose up` WITHOUT --build. That split
 rem  looks redundant and is not.
@@ -130,7 +132,8 @@ rem  read as a broken provider key. The page names every absence and what it
 rem  would take to fix it; this line is only the pointer to it.
 echo   Not everything is on: this image has no embedding runtime and no MCP
 echo   servers. The console's System page lists what this stack did or did not
-echo   assemble, why, and what to change.
+echo   assemble, why, and what to change. Optional parts that are only a
+echo   switch can be flipped there; then: scripts\stack.cmd restart
 echo.
 rem  /ui/ rather than the bare root. The root answers 307 to the same place, so
 rem  either works today. Naming the real path means this line does not depend
@@ -151,6 +154,16 @@ goto :popped
 
 :status
 docker compose --profile demo ps
+set "RC=%errorlevel%"
+goto :popped
+
+:restart
+rem  A key saved on the settings page, or a switch flipped on the System page,
+rem  is read at the next start of the processes that read configuration once:
+rem  the API and the Workers (ADR-101, ADR-103). Restart exactly those three.
+rem  PostgreSQL, Qdrant and the collector keep running, so this takes seconds,
+rem  where `down` and a fresh start would take the image build again.
+docker compose --profile demo restart api task-worker task-worker-b
 set "RC=%errorlevel%"
 goto :popped
 

@@ -65,6 +65,7 @@
 | [ADR-099 黑名单说不出「没人列过的那个也不行」](./0099-a-denylist-cannot-say-no-to-what-nobody-listed.md) | 核心层依赖守卫是黑名单，于是 `domain/workspace.py` 的 `import regex` 一路绿灯，而中英两版 README 同时写着「只依赖标准库与 Pydantic」和「这条边界会让 CI 变红」；是改口径还是改守卫 | 接受，改成白名单：核心层只许 import 标准库、自己与一张写明理由的清单；`FORBIDDEN_CORE_IMPORTS` 保留做具名拒绝的诊断，并断言两表不许相交；白名单也要能变小 |
 | [ADR-100 检查点给自己的布局编号，不借用域的那个](./0100-a-checkpoint-versions-its-own-layout.md) | 改 `TaskState` 里任何字段都会让在飞的 Task 无法恢复，而这条路没有任何迁移机制；补一条，还是接受「域模型冻结」 | 接受，补升级路径并**给检查点自己的版本轴**——抬 `DOMAIN_SCHEMA_VERSION` 会把整段事件历史隔离掉（那张注册表是空的）。第一条升级步就是它的第一个真实用户：删掉 `TaskStep.depends_on`。真实库里 85 个带计划的检查点，不迁移 0 个能载入、迁移后 85 个都能 |
 | [ADR-102 一台部署要说得出自己没装配起什么](./0102-a-deployment-says-what-it-could-not-assemble.md) | 一台把一半能力装配失败的部署，从控制台上看和一台完好的一模一样；缺席的能力只在启动日志、在模型不提起某件工具、在一句「我没有联网查询功能」里说得出自己——三条使用者一条都看不到 | 接受，新增 `GET /v1/system/capabilities`：三状态（`unknown` 不是缺失的四舍五入）、两层级（核心缺失才是红的）、只说名字不说地址；任务那几行直接读授权信封本身。同时把 Chat 联网搜索的开关从 Compose 里拿出来——它在没有 key 时会让全新的栈起不来，而存 key 的页面就在那个拒绝启动的进程里；新登记 D-08 |
+| [ADR-103 附加的零件可以从控制台上拨动，拨的是下一次启动](./0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md) | ADR-102 的清单只读，§4.4 写了「不给这份报告加写口」；使用者问：附加项既然像零件，为什么看得见却选不了 | 接受，**部分推翻 ADR-102 §4.4**：四个开关型零件（`research` / `triage` / `code` / `delegation`）可以从「运行状态」拨，拨的是**下一次启动**，`stored` 与 `active` 两个布尔照 ADR-101 的样子分开说；安装型零件只标「需要安装」。存下的开关排在 TOML 之上、环境之下（被压过就报 `overridden`）；没有 key 的 `research.enabled=true` 被**搁置**而不是让下次启动拒绝；容器启动脚本为存下的选择让路 |
 
 > **这张表在 ADR-054 之后就断了：0055–0074 与 0077–0089 都没有行。**（ADR-075、
 > 0076、0090、0091、0092、0093、0094 与 0095 各是自己那一批顺手补的，不代表表已经跟上。）那些 ADR 都在同一个

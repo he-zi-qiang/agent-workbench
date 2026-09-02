@@ -146,7 +146,8 @@ services:
       LOCAL_PROXY_UPSTREAM_PORT: "8001"
       # No credential is present on a fresh stack. The Settings page writes it
       # to the volume below; these public catalogue ids make the next API start
-      # capable of assembling Direct Chat from that stored key.
+      # capable of assembling Direct Chat from that stored key. The console's
+      # switches (ADR-103) land in the same directory, as `switches.json`.
       AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
       AW_MODEL__MAIN__MODEL_ID: deepseek-chat
       AW_MODEL__COMPACT__MODEL_ID: deepseek-chat
@@ -194,14 +195,25 @@ services:
     image: agent-workbench:local
     profiles: ["demo"]
     command: ["agent-task-worker", "--demo"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      # The same key file and, beside it, the same switches file the API reads
+      # (ADR-101, ADR-103). A `--demo` Worker uses neither -- its handlers are
+      # synthetic -- but a Worker is the process that *registers* the tools an
+      # envelope allows, so the day this flag comes off, "external_search is
+      # on" has to mean the same thing in both containers. Mounting it now
+      # makes that a one-flag change rather than a topology change.
+      AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      provider-key-init:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
+      - provider_key_data:/var/lib/agent-workbench/provider-key
     <<: *app-hardening
 
   # A second Worker, and the only reason it exists is to be a second one.
@@ -219,14 +231,20 @@ services:
     image: agent-workbench:local
     profiles: ["demo"]
     command: ["agent-task-worker", "--demo"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      # Same as task-worker, and for the same reason.
+      AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      provider-key-init:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
+      - provider_key_data:/var/lib/agent-workbench/provider-key
     <<: *app-hardening
 
   ingestion-worker:

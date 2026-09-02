@@ -514,6 +514,38 @@ export interface DeploymentCapability {
   remedy: string;
   /** 值得点名的名字（任务能调用的 MCP 工具），从不是地址。 */
   detail: string[];
+  /**
+   * 这个零件是怎么来的（ADR-103）。`switch`：存一个布尔就够，`switch` 字段就是它；
+   * `install`：要一台服务、一个 socket 或另一个镜像，这一页上没有任何东西能补上；
+   * `key`：只差 Provider Key，它有自己的那一格；`none`：没什么可补。
+   */
+  provision: "switch" | "install" | "key" | "none";
+  switch: DeploymentSwitch | null;
+}
+
+/**
+ * 一个可以从控制台拨动的零件（ADR-103）。
+ *
+ * `stored` 是文件里为下次启动记下的值——`null` 表示什么也没记，那是一个状态而不是
+ * 缺值：下次启动照环境变量和配置文件走。`active` 是**这个进程**正在用的值。它们是
+ * 两个字段，因为它们是两个问题；并成一个，页面就会声称一秒钟前拨的开关已经生效。
+ */
+export interface DeploymentSwitch {
+  /** 它移动的那个配置路径，例如 `research.enabled`。两行可以共用一个。 */
+  id: string;
+  stored: boolean | null;
+  active: boolean;
+  /** 文件在这个进程读过它之后变了。 */
+  restart_required: boolean;
+  restart_hint: string;
+  /** 非空：启动时文件说「开」，而加载器有意没有应用它（没有 key 的联网搜索），附原因。 */
+  held: string;
+  /** 启动时文件说了一个值，进程却以相反的值在跑，且原因不是 `held`：环境变量压过了它。 */
+  overridden: boolean;
+  /** 「开」只有在有 Provider Key 时才装配得起来。 */
+  needs_model: boolean;
+  /** 现在就知道「开」不会生效的原因；从不是拒绝写入的理由。 */
+  blocked: string;
 }
 
 export interface DeploymentCapabilitiesResponse {

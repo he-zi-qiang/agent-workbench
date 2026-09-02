@@ -434,9 +434,9 @@ def test_the_api_launcher_decides_web_search_by_probing_for_a_key() -> None:
     """
 
     launcher = _api_launcher()
-    assert "docker/provider_key_present.py" in launcher
+    assert "docker/decide_web_search.py" in launcher
     enabling = launcher.index("AW_RESEARCH__ENABLED=true")
-    probe = launcher.index("provider_key_present.py")
+    probe = launcher.index("decide_web_search.py")
     assert probe < enabling, "research is enabled before anything looked for a key"
     # An explicit value from the operator survives: only unset/empty is decided.
     assert 'if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then' in launcher
@@ -456,3 +456,42 @@ def test_compose_hands_the_operators_own_research_value_through() -> None:
 
     raw = COMPOSE_FILE.read_text(encoding="utf-8")
     assert 'AW_RESEARCH__ENABLED: "${AW_RESEARCH__ENABLED-}"' in raw
+
+
+def test_both_workers_read_the_key_and_the_switches_the_api_reads() -> None:
+    """One directory, one volume, three containers (ADR-101, ADR-103).
+
+    A `--demo` Worker uses neither file, but a Worker is the process that
+    registers the tools an envelope allows, so the day the flag comes off,
+    "external_search is on" has to mean the same thing in every container.
+    """
+
+    services = _compose()["services"]
+    api_key_file = services["api"]["environment"]["AW_KEY_FILE"]
+    for name in ("task-worker", "task-worker-b"):
+        worker = services[name]
+        assert worker["environment"]["AW_KEY_FILE"] == api_key_file, name
+        mount = next(
+            m
+            for m in worker["volumes"]
+            if m["target"] == "/var/lib/agent-workbench/provider-key"
+        )
+        assert mount["source"].endswith("provider_key_data"), name
+        assert worker["depends_on"]["provider-key-init"]["condition"] == (
+            "service_completed_successfully"
+        ), name
+
+
+def test_the_windows_launcher_can_restart_just_the_processes_that_read_config() -> None:
+    """A saved key or a flipped switch is read at the next start of three
+    processes, and `down` followed by a fresh start would rebuild the image."""
+
+    restarts = [
+        line for line in _launcher_commands() if "compose" in line and "restart" in line
+    ]
+    assert restarts == [
+        "docker compose --profile demo restart api task-worker task-worker-b"
+    ], restarts
+    assert 'if /i "%~1"=="restart" goto :restart' in _launcher_commands()
+    # Listed where the other subcommands are, so a person finds it.
+    assert "scripts\\stack.cmd restart" in _launcher()

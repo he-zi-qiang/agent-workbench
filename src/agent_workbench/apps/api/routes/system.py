@@ -42,14 +42,26 @@ narrows to what a Worker holds, and that is the other process again.
 and ``sparse_unavailable`` describe how well retrieval works, not whether it
 exists. A page that listed them beside a missing capability would teach its
 reader that a downgrade and an absence are the same kind of fact.
+
+**One write, and what it writes is a wish (ADR-103).** ``PUT /switches/{id}``
+records that the *next* start should assemble an optional part; nothing in
+this process changes. ADR-102 §4 had refused any write here on the ground that
+a console which can change capabilities has no single answer to "what is this
+deployment" -- and the answer that keeps it single is the one ADR-101 found for
+the key: the file is for the next start, the report says stored and running
+as two fields, and an operator's environment still wins. Only switch-shaped
+parts get a switch. A part that needs a server, a socket or another image
+says ``install``, because a switch for it would be a promise this side cannot
+keep.
 """
 
 from __future__ import annotations
 
 from typing import Final, Literal
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME as EXPORT_ARTIFACT_TOOL,
@@ -57,6 +69,7 @@ from agent_workbench.adapters.tools.export_artifact import (
 from agent_workbench.adapters.tools.external_search import (
     TOOL_NAME as EXTERNAL_SEARCH_TOOL,
 )
+from agent_workbench.application.switches import SwitchRefused, spec_for
 from agent_workbench.apps.api.dependencies import ApiDependencies
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.agents import DELEGATE_TOOL
@@ -99,7 +112,53 @@ _EMBEDDING_REMEDY: Final[str] = (
     "那是一个几 GB 的可选依赖。"
 )
 
+#: The four switch ids, spelled once. They are settings paths, and the row
+#: that carries one is the row that setting assembles.
+RESEARCH_SWITCH: Final[str] = "research.enabled"
+TRIAGE_SWITCH: Final[str] = "triage.enabled"
+CODE_SWITCH: Final[str] = "code.enabled"
+DELEGATION_SWITCH: Final[str] = "multi_agent.delegation_enabled"
+
+#: Same words as the key's hint, because it is the same fact: these processes
+#: read their configuration once.
+_RESTART_HINT: Final[str] = "重启 agent-api 与 agent-task-worker 后这个选择才会生效。"
+_NEEDS_MODEL: Final[str] = (
+    "这一项要有模型才装配得起来：先在「模型密钥」里存一把 key，再重启。"
+)
+
 router = APIRouter(prefix=SYSTEM_PREFIX, tags=["system"])
+
+
+class CapabilitySwitch(BaseModel):
+    """A part the console may switch, and the two answers about it.
+
+    ``stored`` is what the console's file says for the next start -- ``None``
+    when it says nothing, which is a state: the start then follows the
+    environment and the configuration files. ``active`` is what *this* process
+    runs with. They are two fields because they are two questions, and a page
+    that merged them would claim a switch flipped a second ago is in effect.
+    """
+
+    #: The settings path this switch moves, e.g. ``research.enabled``. Two
+    #: rows may share one (Chat's and the Task's web search are one setting).
+    id: str
+    stored: bool | None
+    active: bool
+    #: True when the file changed since this process read it.
+    restart_required: bool
+    restart_hint: str = ""
+    #: Non-empty when the file said "on" at start and the loader deliberately
+    #: did not apply it -- ``research.enabled`` with no key -- with the reason.
+    held: str = ""
+    #: True when the file said something at start and the process runs with
+    #: the opposite for a reason other than ``held``: an exported variable or
+    #: a higher source decided. Flipping the switch here cannot change that.
+    overridden: bool = False
+    #: Whether "on" only assembles with a provider key present.
+    needs_model: bool = False
+    #: Why "on" would not take effect right now, when that is already known.
+    #: Never a reason to refuse the write: the file records a wish.
+    blocked: str = ""
 
 
 class Capability(BaseModel):
@@ -129,6 +188,13 @@ class Capability(BaseModel):
     #: Names, when a row has any worth naming -- the MCP tools a Task may call.
     #: Never an address.
     detail: tuple[str, ...] = ()
+    #: How this part is provided (ADR-103). ``switch``: a stored boolean is all
+    #: it takes, and ``switch`` below is that boolean. ``install``: a server,
+    #: a socket or another image -- nothing on this page can supply it.
+    #: ``key``: only the provider key, which has its own panel. ``none``:
+    #: nothing to provide.
+    provision: Literal["switch", "install", "key", "none"] = "none"
+    switch: CapabilitySwitch | None = None
 
 
 class DeploymentCapabilitiesResponse(BaseModel):
@@ -141,6 +207,14 @@ class DeploymentCapabilitiesResponse(BaseModel):
     capabilities: tuple[Capability, ...]
 
 
+class SwitchRequest(BaseModel):
+    """The choice, and nothing else that could be smuggled alongside it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 @router.get("/capabilities", response_model=DeploymentCapabilitiesResponse)
 async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
     """Everything this process knows about what it can and cannot do."""
@@ -151,46 +225,136 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
     # describing itself -- but a route that skipped the identity adapter would
     # be the one route in the API a caller could reach without one.
     dependencies.principals.resolve(request)
+    return _capabilities(dependencies)
+
+
+@router.put("/switches/{switch_id}", response_model=DeploymentCapabilitiesResponse)
+async def store_switch(
+    switch_id: str, request: Request, body: SwitchRequest
+) -> DeploymentCapabilitiesResponse | JSONResponse:
+    """Record what the next start should do about one optional part.
+
+    Answers with the whole report rather than the one switch, because the row
+    a switch moves is what the person is looking at, and two rows may share
+    one switch. Nothing in this process changes; the report says so in
+    ``restart_required``.
+    """
+
+    dependencies = dependencies_of(request)
+    dependencies.principals.resolve(request)
+    if spec_for(switch_id) is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"没有叫 {switch_id!r} 的开关"},
+        )
+    try:
+        dependencies.switches.set(switch_id, body.enabled)
+    except SwitchRefused as refused:
+        # 400 for the reason the key route gives: every refusal is about the
+        # request or a deployment choice the caller can see, in a sentence.
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(refused)}
+        )
+    return _capabilities(dependencies)
+
+
+@router.delete("/switches/{switch_id}", response_model=DeploymentCapabilitiesResponse)
+async def withdraw_switch(
+    switch_id: str, request: Request
+) -> DeploymentCapabilitiesResponse | JSONResponse:
+    """Take the console's choice back, so the next start follows the environment."""
+
+    dependencies = dependencies_of(request)
+    dependencies.principals.resolve(request)
+    if spec_for(switch_id) is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"没有叫 {switch_id!r} 的开关"},
+        )
+    try:
+        dependencies.switches.set(switch_id, None)
+    except SwitchRefused as refused:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(refused)}
+        )
+    return _capabilities(dependencies)
+
+
+def _switch_views(dependencies: ApiDependencies) -> dict[str, CapabilitySwitch]:
+    """Every switch, as the file says now against what the process loaded."""
+
+    try:
+        stored_now = dependencies.switches.read()
+        unreadable = ""
+    except SwitchRefused as refused:
+        # The page must not die on the file it exists to explain. Every switch
+        # reads as undecided and says why, and nothing is called "owed".
+        stored_now = {}
+        unreadable = f"读不到已存的开关：{refused}"
+    active_key = dependencies.config.model.api_key is not None
+    stored_key = dependencies.provider_keys.status(active_key=None).stored
+    model_present = active_key or stored_key
+
+    views: dict[str, CapabilitySwitch] = {}
+    for state in dependencies.config.switches:
+        spec = spec_for(state.path)
+        if spec is None:  # pragma: no cover - the projection iterates SWITCHES
+            continue
+        stored = stored_now.get(state.path)
+        restart_required = not unreadable and stored != state.stored_at_start
+        views[state.path] = CapabilitySwitch(
+            id=state.path,
+            stored=stored,
+            active=state.active,
+            restart_required=restart_required,
+            restart_hint=_RESTART_HINT if restart_required else "",
+            held=state.held,
+            overridden=(
+                state.stored_at_start is not None
+                and state.stored_at_start != state.active
+                and not state.held
+            ),
+            needs_model=spec.needs_model,
+            blocked=unreadable
+            or (_NEEDS_MODEL if spec.needs_model and not model_present else ""),
+        )
+    return views
+
+
+def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesResponse:
     config = dependencies.config
     allowed = tuple(
         str(name) for name in config.task.default_authorization_envelope.allowed_tools
     )
     mcp_tools = tuple(name for name in allowed if name not in _BUILT_IN_TASK_TOOLS)
     web_search_available = dependencies.serves_chat and config.research is not None
+    switches = _switch_views(dependencies)
+    research_held = (
+        switches[RESEARCH_SWITCH].held if RESEARCH_SWITCH in switches else ""
+    )
 
-    rows: list[Capability] = [
+    rows = [
         Capability(
             id="chat.direct",
             title="直接对话",
             tier="core",
             state="available" if dependencies.serves_chat else "absent",
-            reason=""
-            if dependencies.serves_chat
-            else (dependencies.chat_unavailable or ""),
+            reason=dependencies.chat_unavailable or "",
             remedy=(
                 ""
                 if dependencies.serves_chat
                 else "在「系统」页保存 Provider Key，然后重启 API 进程。"
             ),
+            provision="key",
         ),
         Capability(
             id="chat.knowledge_base",
             title="知识库问答（RAG）",
             tier="core",
             state="available" if dependencies.rag_unavailable is None else "absent",
-            # Not `rag_unavailable` forwarded blindly, and the difference showed
-            # up the first time this ran against a real Compose stack. With no
-            # provider key the whole of Chat fails to assemble, and assembly
-            # records the *model* error into `rag_unavailable` too -- so this row
-            # read "no API key" on a deployment where the true answer is "this
-            # image has no embedding runtime, and a key would not change it".
-            # A reason that names the wrong cause is worse than no reason: it
-            # sends somebody to buy credit for a feature the image cannot run.
-            reason=(
-                ""
-                if dependencies.rag_unavailable is None
-                else _rag_reason(dependencies)
-            ),
+            reason=""
+            if dependencies.rag_unavailable is None
+            else _rag_reason(dependencies),
             remedy=(
                 ""
                 if dependencies.rag_unavailable is None
@@ -200,6 +364,7 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
                 if not dependencies.serves_chat
                 else ""
             ),
+            provision="install" if not dependencies.serves_search else "key",
         ),
         Capability(
             id="knowledge.search",
@@ -209,32 +374,27 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             reason=(
                 ""
                 if dependencies.serves_search
-                else "这个进程没有装配检索，上传的文档无法被搜索。"
+                else "这个进程没有装配检索运行时（embedding extra 或 Qdrant 缺席）。"
             ),
-            # The same sentence as the row above, spelled out rather than
-            # "同上": these rows are grouped by tier and a reader can meet this
-            # one first, at which point a back-reference points at nothing.
             remedy="" if dependencies.serves_search else _EMBEDDING_REMEDY,
+            provision="install",
         ),
         Capability(
             id="task.submit",
             title="提交任务",
             tier="core",
-            # Unconditional by assembly: `task_service` is not optional on
-            # `ApiDependencies`, so this row is `available` in every process
-            # that serves routes at all. It is here so the two halves of Task
-            # -- may I submit one, and will anybody run it -- are two rows a
-            # reader can see disagree.
+            # The registry and the graph version are assembled unconditionally;
+            # the only thing submission needs from outside is PostgreSQL, and
+            # /health/ready already answers for that.
             state="available",
         ),
         Capability(
             id="task.worker",
             title="任务 Worker",
             tier="core",
-            # See the module docstring: this process has no channel through
-            # which a Worker reports itself, so it cannot tell "no Worker" from
-            # "a Worker started with --demo" from "a real Worker". None of the
-            # three is worth guessing at.
+            # Not a rounding of the other two. The API cannot see another
+            # process, and a Worker that is up, healthy and synthetic looks
+            # exactly like one that is real from here.
             state="unknown",
             reason=(
                 "本部署没有 Worker 上报通道：从 API 看不出有没有 Worker 在跑，"
@@ -257,6 +417,8 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             reason=(
                 ""
                 if web_search_available
+                else research_held
+                if research_held and dependencies.serves_chat
                 else (
                     "没有配置 [research]，所以这个进程根本没造过 web_search 这件工具"
                     "——模型不是拒绝联网，是手上没有它。"
@@ -268,10 +430,13 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
                 ""
                 if web_search_available
                 else (
-                    "先有 Provider Key，再让 API 带 AW_RESEARCH__ENABLED=true 启动。"
-                    "没有 key 时这个开关会让进程直接拒绝启动，所以两者必须同时具备。"
+                    "打开这一行的开关（或让 API 带 AW_RESEARCH__ENABLED=true 启动），"
+                    "有 Provider Key 之后重启。没有 key 时这个开关会被搁置而不是让进程"
+                    "拒绝启动。"
                 )
             ),
+            provision="switch",
+            switch=switches.get(RESEARCH_SWITCH),
         ),
         Capability(
             id="code.sessions",
@@ -290,7 +455,9 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             ),
             remedy=""
             if dependencies.serves_code
-            else "配置 [code] enabled 并提供 Provider Key。",
+            else "打开这一行的开关并提供 Provider Key，然后重启 API。",
+            provision="switch",
+            switch=switches.get(CODE_SWITCH),
         ),
         Capability(
             id="task.external_search",
@@ -300,6 +467,8 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             reason=(
                 ""
                 if EXTERNAL_SEARCH_TOOL in allowed
+                else research_held
+                if research_held
                 else (
                     "下一个任务的授权信封里没有 external_search，"
                     "研究节点提议它只会被自己的信封拒绝。"
@@ -309,10 +478,12 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
                 ""
                 if EXTERNAL_SEARCH_TOOL in allowed
                 else (
-                    "API 与 Worker 都要带 AW_RESEARCH__ENABLED=true 启动；"
-                    "信封在提交那一刻冻结。"
+                    "打开「联网搜索」开关——它和「对话联网搜索」是同一个——"
+                    "然后重启 API 与 Worker；信封在提交那一刻冻结。"
                 )
             ),
+            provision="switch",
+            switch=switches.get(RESEARCH_SWITCH),
         ),
         Capability(
             id="task.mcp_tools",
@@ -329,8 +500,10 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
                 else (
                     "启动 Word/web MCP 服务，并用声明了它们的配置档启动 API 与 Worker"
                     "（scripts/dev.sh demo-api / demo-worker）。"
+                    "Compose 栈里没有这两个服务。"
                 )
             ),
+            provision="install",
         ),
         Capability(
             id="task.sandbox",
@@ -348,6 +521,7 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
                     "并在配置里打开 [sandbox]。"
                 )
             ),
+            provision="install",
         ),
         Capability(
             id="task.delegation",
@@ -359,7 +533,9 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             else "multi_agent.delegation_enabled 为假。",
             remedy=""
             if DELEGATE_TOOL in allowed
-            else "在配置里打开 [multi_agent] delegation_enabled。",
+            else "打开这一行的开关，然后重启 API 与 Worker。",
+            provision="switch",
+            switch=switches.get(DELEGATION_SWITCH),
         ),
         Capability(
             id="task.triage",
@@ -374,8 +550,10 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
             remedy=(
                 ""
                 if dependencies.triage is not None
-                else "打开 [triage] enabled 并提供 Provider Key。"
+                else "打开这一行的开关并提供 Provider Key，然后重启 API。"
             ),
+            provision="switch",
+            switch=switches.get(TRIAGE_SWITCH),
         ),
     ]
     return DeploymentCapabilitiesResponse(capabilities=tuple(rows))
@@ -403,8 +581,14 @@ def _rag_reason(dependencies: ApiDependencies) -> str:
 
 
 __all__ = [
+    "CODE_SWITCH",
+    "DELEGATION_SWITCH",
+    "RESEARCH_SWITCH",
     "SYSTEM_PREFIX",
+    "TRIAGE_SWITCH",
     "Capability",
+    "CapabilitySwitch",
     "DeploymentCapabilitiesResponse",
+    "SwitchRequest",
     "router",
 ]
