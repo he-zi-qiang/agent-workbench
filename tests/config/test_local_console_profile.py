@@ -466,9 +466,15 @@ def test_the_usage_banner_lists_every_demo_command() -> None:
     }
     banner = _dev("")
 
-    for command in ("demo-check", "demo-api", "demo-worker"):
-        assert command in documented
-        assert command in banner.stdout
+    # Every one of them, not a sample. This test used to check three names and
+    # passed on 2026-09-02 while `panel` -- the last line of the header -- had
+    # just been pushed outside the `sed` range by a command added above it. A
+    # sample cannot catch the failure this test exists for, because the range
+    # only ever loses the entries at its edge.
+    missing = sorted(name for name in documented if name not in banner.stdout)
+    assert not missing, f"documented but outside the sed range: {missing}"
+    for command in ("up", "down", "demo-check", "demo-api", "demo-worker", "panel"):
+        assert command in documented, command
 
 
 CODE_CONFIG = ROOT / "config/config.code-local.toml"

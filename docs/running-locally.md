@@ -33,6 +33,17 @@ stop     scripts/dev.sh down
 第 7 步是那几分钟的去处：API 要先把 BGE-M3 读进来才开始服务。把用时逐步打出来，就是
 为了让「它是不是卡住了」有一个不用猜的答案。
 
+**要知识库检索得多一个字。** `up` 不会替你下载几个 GB：
+
+```bash
+scripts/dev.sh up --with-retrieval
+```
+
+不加这个字也能起，但那台部署**没有检索**——而这正是从浏览器里看不出来的那种缺失：
+路由全在、`/health/ready` 回 200、起动还更快（5 秒对两分钟，2026-08-30 实测），只是
+上传永远变不成可检索，而摄取 worker 在第一行就退出。所以 `up` 在开始之前先探一次并
+把结论说出来（第 2 步），`--plan` 也会说。
+
 配套的三条：
 
 | 命令 | 做什么 |
@@ -82,7 +93,7 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 | | Compose（`scripts\stack.cmd` / `docker compose`） | 原生（`scripts/dev.sh up`） |
 |---|---|---|
 | 机器要装什么 | 只要 Docker Desktop | Python 3.12 + `uv`（`up` 自己调 uv 装） |
-| 知识库检索 | **没有**——镜像 `uv sync` 不带 `embedding` extra | 有，真实 BGE-M3 + 重排 |
+| 知识库检索 | **没有**——镜像 `uv sync` 不带 `embedding` extra | 有，真实 BGE-M3 + 重排，但要 `up --with-retrieval` |
 | MCP 工具（Word / web / 沙箱） | **没有**——拓扑里没有这三台 server | 三台都起，且在 Worker 之前 |
 | Task Worker | 两个都是 `--demo` 合成 Worker | 真实图 |
 | 改一行代码要多久 | 重新 `docker build`，分钟级 | 重启一个进程，秒级 |

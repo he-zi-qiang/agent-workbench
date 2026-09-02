@@ -308,3 +308,55 @@ def test_status_does_not_call_a_recycled_pid_running(tmp_path: Path) -> None:
     assert result.returncode == 0
     row = next(line for line in result.stdout.splitlines() if line.startswith("ingest"))
     assert "gone" in row, row
+
+
+def _plan_text(*flags: str, with_key: bool) -> str:
+    result = _run(
+        "up",
+        "--plan",
+        *flags,
+        environment={ENV_VAR: "contract-only-not-a-real-key"} if with_key else {},
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_plan_says_whether_this_start_will_have_retrieval() -> None:
+    """The absence this stack cannot show you afterwards.
+
+    A process with no `embedding` extra serves every route, answers
+    `/health/ready` 200, and comes up in five seconds instead of two minutes --
+    measured 2026-08-30. From a browser it is a fast, healthy console that
+    happens to retrieve nothing: an upload never becomes searchable, and the
+    only complaint is in the ingestion worker's log, which exits on its first
+    line.
+
+    `up` cannot fix that for you -- the extra is gigabytes -- but it must not
+    stay quiet about it, which is ADR-102's rule applied to a launcher.
+    """
+
+    line = next(
+        line
+        for line in _plan_text(with_key=True).splitlines()
+        if line.startswith("retrieval:")
+    )
+
+    assert "real BGE-M3" in line or "ABSENT" in line, line
+    if "ABSENT" in line:
+        assert "--with-retrieval" in line, "it must name the way out"
+
+
+def test_with_retrieval_is_an_accepted_flag_and_an_unknown_one_is_not() -> None:
+    """`--plan` with the flag must still start nothing, so this is safe to run.
+
+    The negative half matters as much: a typo that is silently ignored would
+    leave somebody believing they asked for the extra when they did not, and
+    they would find out four minutes later from an empty search.
+    """
+
+    assert _plan_text("--with-retrieval", with_key=True).startswith("profile:")
+
+    bad = _run("up", "--plan", "--with-retreival")
+    assert bad.returncode == 2
+    assert "unknown option" in bad.stderr
+    assert "--with-retrieval" in bad.stderr, "the refusal should spell it right"

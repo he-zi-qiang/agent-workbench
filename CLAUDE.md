@@ -67,7 +67,11 @@ The current count lives in [HIGHLIGHTS.md §2](docs/HIGHLIGHTS.md#2-门禁与规
 **`up` owns the start order, and two parts of it are load-bearing rather than tidy**: `demo-api` probes the sandbox MCP server before it will start, and a Worker freezes its MCP catalogue once at startup. `docs/running-locally.md` used to carry that order in prose and got it wrong — its console list never named `sandbox-server`, so following it exactly made `demo-api` die on a probe the doc did not mention.
 
 ```bash
-scripts/dev.sh up                 # THE ONE COMMAND: setup, services, migrate, MCP
+scripts/dev.sh up [--with-retrieval]  # THE ONE COMMAND. Without the flag the
+                                  # `embedding` extra is NOT installed and this
+                                  # deployment has no retrieval -- invisible from
+                                  # the browser, so `up` probes and says so.
+                                  # setup, services, migrate, MCP
                                   # servers, API, ingest, worker -- in the order the
                                   # console needs. --plan prints it without starting.
 scripts/dev.sh down / status / logs <name>
