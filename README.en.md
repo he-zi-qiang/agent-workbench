@@ -66,11 +66,11 @@ Twelve sections:
 | Tool Gateway | The four phases, the three answers, every refusal exit |
 | The two request paths | Chat and Task, plus sub-agent delegation |
 | Workflow graphs | Both graphs' nodes and edges, **drawn from `_STATIC_EDGES` and the compiler's conditional-edge target lists** |
-| Module browser | 320 modules, searchable by path, summary or symbol name; each line's summary is the first line of that module's own docstring |
-| HTTP surface | 75 endpoints, parsed from the route decorators |
+| Module browser | 326 modules, searchable by path, summary or symbol name; each line's summary is the first line of that module's own docstring |
+| HTTP surface | 77 endpoints, parsed from the route decorators |
 | Tool catalogue | In-process and MCP tools, read from the constant that declares each name |
 | Config profiles | Ten profiles, and the 82 invariants written as single-valued `Literal`s |
-| Decision records | 87 ADRs, searchable |
+| Decision records | 91 ADRs, searchable |
 | Gates and scale | Test directories, console features, process entry points |
 
 **Every number on that page is counted at build time; not one of them is typed
@@ -243,7 +243,7 @@ consumed with `fetch` + `response.body.getReader()`; there is not one
 
 ### 1.5 Interfaces and tools
 
-**HTTP API** (FastAPI, **75 endpoints**): `/v1/chat` (sessions, messages, SSE),
+**HTTP API** (FastAPI, **77 endpoints**): `/v1/chat` (sessions, messages, SSE),
 `/v1/tasks` (submit, query, timeline, run tree, cancel, triage),
 `/v1/knowledge-bases`, `/v1/uploads`, `/v1/search`, `/v1/approvals`,
 `/v1/artifacts` (with `/preview` and `/pdf`), `/v1/projects`, `/v1/code`,
@@ -369,7 +369,7 @@ phases, realigns the results into the model's own call order, and loops.
 | 7 | Model stream | `_stream_model` → `_consume` | One call, one stream, the whole consumption inside `asyncio.timeout(deadline)`. The only `async for` over a model stream in the repository |
 | 8 | Meter the turn | `ledger.usage.merged(...)` | `last_input_tokens` is carried **beside** the cumulative usage, because step 3 asks about the former |
 | 9 | Terminal mapping | `_terminal_for_turn` (8 branches) | No tool calls → completed; some → on to a batch |
-| 10 | Admission | `gateway.propose` + two circuit breakers | Every proposed call leaves a trail first, **including the ones about to be refused**. Then the tool allowance cuts once; a third identical call is refused |
+| 10 | Admission | `gateway.propose` + two circuit breakers | Every proposed call leaves a trail first, **including the ones about to be refused**. Then the tool allowance cuts once; the **fourth** identical call is refused — the counter holds how many times this call was seen *before* this one, so the first three go through |
 | 11 | Gateway | `prepare` → `authorize` | [§4](#4-the-tool-gateway-what-one-tool-call-passes-through) |
 | 12 | Scheduling | `runtime/tool_scheduler.py` (pure, 70 lines) | Consecutive read calls group, up to 4; write / external / destructive calls are **exclusive groups of one** |
 | 13 | Execution | `ToolExecutor` | The timeout is the minimum of the tool's declaration, the run's remaining time and the deployment ceiling; a heartbeat every 5 seconds |
@@ -390,7 +390,7 @@ third try.
 | **Deadline** | The inner of "the run deadline" and "the runtime envelope" wins, and the result **remembers which one won**: the former is `budget_exceeded`, the latter a retryable `provider_error`. The model profile's own timeout is deliberately elsewhere — in the adapter, nested inside this bound | `runtime/budgets.py` |
 | **Context** | Compaction triggers past window × 0.75. Compaction is itself an ordinary model call (profile `compact`); its tokens and cost are merged **even when it fails** — the provider charged for it — but `steps` does not increase, because the loop did not advance | `runtime/compaction.py` |
 | **Cancellation** | Polled six times per turn. On cancellation, prepared calls each become a `cancelled` `ToolResult` — they still owe the model an answer and cannot simply vanish | `agent_runtime.py::_refuse_cancelled` |
-| **Duplicate calls** | **Two mechanisms.** A `tool_call_id` repeated within one turn fails the whole run (that is the provider's error, not the model's choice); the same name and arguments a third time across turns is refused, and more than two consecutive refusals ends the run | `agent_runtime.py` |
+| **Duplicate calls** | **Two mechanisms.** A `tool_call_id` repeated within one turn fails the whole run (that is the provider's error, not the model's choice); the same name and arguments a **fourth** time across turns is refused (`MAX_IDENTICAL_CALLS = 3` is compared against how many were seen *before* this one), and more than two consecutive refusals ends the run | `agent_runtime.py` |
 
 ### 3.3 The state machine and the terminal states
 
@@ -552,7 +552,7 @@ A tool carrying an `operation_key` takes a longer path:
 | **ports**<br/>`ports/` (38 modules, 48 Protocols) | Uses `typing.Protocol` to separate "what capability is needed" from "who provides it" | domain, stdlib, Pydantic only | Any implementation (no SQL, no HTTP, no vector-store calls here); importing `ports/model.py` is gated by the `MODEL_STREAM_OWNERS` allowlist |
 | **runtime**<br/>`runtime/` (11 modules) | The one tool loop: drives a run to a **terminal** outcome with budget, deadline, context, cancellation and repeat-call gates on it | domain + ports only | Importing any framework; **no module — adapters included — may write a second loop consuming a model stream**; treating "allow, pending approval" as allow |
 | **workflows**<br/>`workflows/` (10 modules) | Control flow written as a **declaration** that can be read and tested on its own: edges are data, routing is pure functions, and what each agent may see and reach is a fixed table | domain, ports, application | Importing langgraph (compilation lives in `adapters/langgraph/`); widening a profile (`permitted_tools` only intersects, and no argument reverses that); asking the registry for the current epoch mid-run |
-| **application**<br/>`application/` (34 modules) | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
+| **application**<br/>`application/` (36 modules) | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
 | **adapters**<br/>`adapters/` (22 directories plus two loose modules) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
 | **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | Turns one TOML file into several processes, each handed only its own slice and each able to be falsified at startup | all four core layers + adapters + frameworks | `os.environ` **only inside the bootstrap package**; the `Settings` type may not travel past `projections.py`; connection strings are forbidden in TOML; invariants written as single-valued `Literal`s cannot be changed — that takes an ADR first |
 | **web**<br/>`web/src/` | Translates the backend's facts into something a person can check, rather than inventing a second execution model | `web/src/api/` (the only place that goes out), backend HTTP + SSE | Talking to the database or vector store directly (`fetch` appears in exactly two files); dropping events while folding them — the raw payload must stay reachable |
@@ -804,10 +804,10 @@ package.
 | `src/agent_workbench/ports/` | 38 modules, 48 Protocols. The only cross-layer seam |
 | `src/agent_workbench/runtime/` | 11 modules. **The only tool loop**, and the Tool Gateway |
 | `src/agent_workbench/workflows/` | 10 modules. Both graphs, agent profiles, the approval interrupt, the execution-lease scope |
-| `src/agent_workbench/application/` | 34 modules. Chat turns, Task lifecycle, coding sessions, crash recovery, the run tree |
+| `src/agent_workbench/application/` | 36 modules. Chat turns, Task lifecycle, coding sessions, crash recovery, the run tree |
 | `src/agent_workbench/adapters/` | 22 directories plus two loose modules. One directory per outside concern |
 | `src/agent_workbench/apps/` | `agent-api`, three worker/CLI entry points, and four project-owned MCP servers |
-| `src/agent_workbench/bootstrap/` | 16 modules. Settings, projections, the factories, startup validation |
+| `src/agent_workbench/bootstrap/` | 18 modules. Settings, projections, the factories, startup validation |
 | `tests/` | 20 directories. `architecture/` is the one that turns a boundary breach red, `contracts/` is "one contract, every implementation", `e2e/` is the one that kills a Worker and watches it recover |
 | `web/src/` | Eight features, eight pages; network egress only in two files under `api/` |
 | `config/` | Ten profiles |
@@ -856,10 +856,44 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 `.env` is not optional: without it the first command above stops at `3 validation
 errors for LoadedSettings`, which reads like a broken checkout and is not one.
 
-**The full local topology** (PostgreSQL, Qdrant, API, workers, console) is in
-[Running locally](docs/running-locally.md) (Chinese); the containerized demo is in
-[Compose deployment](docs/deployment.md) — the API is mapped only to
-`127.0.0.1:8000`.
+**The whole stack** (PostgreSQL, Qdrant, API, two Workers, console). On Windows
+this asks the machine for Docker Desktop and nothing else — no uv, no Python, no
+Node:
+
+```bat
+scripts\stack.cmd            :: build, start, wait for healthy, open the console
+```
+
+macOS and Linux take the same two steps — and **two steps is not fussiness**:
+`compose up --build` goes through buildx bake, which dies on a build context whose
+directory name is non-ASCII:
+
+```bash
+docker build -t agent-workbench:local . && docker compose --profile demo up -d --wait
+```
+
+The console is at `http://127.0.0.1:8000/ui/`.
+
+**A fresh stack has no provider key, so Chat cannot answer yet** — that is not a
+fault, and the System page lists it beside everything else this deployment did not
+assemble. Store one from the avatar at the bottom left, under Settings > Model key,
+then restart **the three processes that read configuration**:
+
+```bat
+scripts\stack.cmd restart    :: Windows; API and both Workers, nothing else
+```
+
+```bash
+docker compose --profile demo restart api task-worker task-worker-b
+```
+
+That same command is what a flipped part-switch on the System page needs: a key and
+a switch both take effect at the **next** start ([ADR-101](docs/adr/0101-the-console-may-hand-over-a-key-it-can-never-read-back.md),
+[ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)).
+
+The native topology is in [Running locally](docs/running-locally.md) (Chinese) and
+the containerized details in [Compose deployment](docs/deployment.md) — the API is
+mapped only to `127.0.0.1:8000`.
 
 ---
 
@@ -1102,13 +1136,13 @@ number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (635 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (641 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 82,718 lines of Python across 326 files, 101,441 lines of tests across 268
-files, 52,296 lines of frontend TypeScript across 142 files; 91 files under
+Scale: 82,718 lines of Python across 326 files, 101,465 lines of tests across 269
+files, 52,314 lines of frontend TypeScript across 143 files; 91 files under
 `docs/adr/`, numbered 0012–0104 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
@@ -1118,6 +1152,16 @@ block reservation of 2026-08-13 and have never been written (the last section of
 by ADR-098, and the one after *that* ("85 files, 0012–0098") by ADR-099 — the
 last two on the same evening. **More test code than source code is deliberate** — the rule is that a test must first be shown red, and **a
 test without a control case does not count**.
+
+The test and frontend figures moved on 2026-09-02 **without the tree moving**: the
+two commands recorded for them, `git ls-files 'tests/**/*.py'` and
+`git ls-files 'web/src/**/*.ts*'`, each missed one file. Without pathspec magic
+git's `*` crosses `/`, so the pattern demands at least one directory below the
+root — and what fell out was `tests/conftest.py` and `web/src/main.tsx`, the
+fixture root of the whole suite and the frontend's entry point. With `:(glob)`
+prefixed, `**` means "zero or more directories" and the counts read 269 / 143
+rather than 268 / 142. A correction, not growth — and it was findable only because
+the previous edition wrote down the command instead of only the result.
 
 **For a figure computed *now* rather than mirrored**, open the
 [architecture panel](#0-see-the-whole-thing-first): it counts modules, lines,

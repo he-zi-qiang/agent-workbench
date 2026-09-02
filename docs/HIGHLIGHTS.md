@@ -225,7 +225,7 @@ Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings
 `0032_events_stream_run_sequence`（32 个迁移）。
 
 **规模**（2026-09-02 第六十九批那棵树）：Python 源码 **82718** 行 / 326 文件、
-测试 **101441** 行 / 268 文件、前端 TypeScript **52296** 行 / 142 文件
+测试 **101465** 行 / 269 文件、前端 TypeScript **52314** 行 / 143 文件
 （只数 git 跟踪的文件）；`docs/adr/` 下 **91** 份，编号 0012–0104——**不连续**：0050 与
 0053 是 2026-08-13 那次号段预留里认领了、至今没有写下来的两个号（`docs/adr/README.md`
 末段记着那次预留）。更早这里写过"0012–0083 连续"，两处都不实；此前的"82 份、
@@ -238,8 +238,23 @@ Pyright strict `0 errors / 0 warnings / 0 informations`、ESLint `--max-warnings
 
 前三个数现在可以不靠手数：`uv run python scripts/architecture_panel.py --json` 的
 `totals.python_loc` / `totals.python_files` / `totals.adrs` 就是其中三个，
-另外两组是 `git ls-files 'tests/**/*.py'` 与 `git ls-files 'web/src/**/*.ts*'` 上的
-`wc -l`。写下命令而不只写结果，是让下一个人能在一分钟内判断这一行有没有过期。
+另外两组是这两条命令上的 `wc -l`：
+
+```bash
+git ls-files ':(glob)tests/**/*.py'
+git ls-files ':(glob)web/src/**/*.ts*'
+```
+
+写下命令而不只写结果，是让下一个人能在一分钟内判断这一行有没有过期。
+
+> **`:(glob)` 是 2026-09-02 补上的，补之前这两条命令各漏一个文件。** 写成
+> `git ls-files 'tests/**/*.py'`（不带 pathspec magic）时，`*` 在 git 默认的匹配里
+> **跨 `/`**，于是整个模式要求 `tests/` 之后至少还有一层目录——**根下的文件被漏掉**。
+> 漏掉的恰好是两个最不该漏的：`tests/conftest.py` 与 `web/src/main.tsx`，一个是全套
+> 测试的夹具根，一个是前端的入口。带上 `:(glob)` 之后 `**` 才是「零层或多层目录」，
+> 数字从 268 / 142 变成 269 / 143（行数 101441 → 101465、52296 → 52314）。
+> **树没有动，是量法在动**——所以这不是一次增长，是一次改正；而它能被发现，正是因为
+> 上一版把命令写了下来而不只写结果。
 
 > **这三个数在同一个晚上过期了两次，两次都记下来。**
 > 更早的一版是 80542 / 97925 / 50613，而与它们同批写下的表格**只刷新了一半**

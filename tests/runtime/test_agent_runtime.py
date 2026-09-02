@@ -2668,7 +2668,9 @@ class TestAConversationThatWasShortenedSaysSo:
                         tool_call_id=f"toolu_{n:020d}",
                         tool_name="read_document",
                         # Distinct arguments per round: identical ones would be
-                        # refused by `MAX_IDENTICAL_CALLS` from the third on,
+                        # refused by `MAX_IDENTICAL_CALLS` from the fourth on
+                        # (the counter holds how many were seen *before* this
+                        # one, so three go through),
                         # and this conversation is meant to grow, not to be
                         # stopped by a different guard.
                         arguments={"document_id": "doc_1", "note": f"pass {n}"},

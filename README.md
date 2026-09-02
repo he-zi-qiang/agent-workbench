@@ -58,8 +58,8 @@ Qdrant、不需要 API key、不联网**——它读的是工作树本身。十�
 | Tool Gateway | 四个阶段、三个答案、每一个拒绝出口 |
 | 两条主链路 | Chat 与 Task 的流转，以及子代理委派 |
 | 工作流图 | 两张图的节点与边，**从 `_STATIC_EDGES` 与编译器的条件边目标表里读出来画的** |
-| 模块浏览器 | 320 个模块，可搜路径 / 摘要 / 符号名；每行的说明是该模块 docstring 的第一行 |
-| HTTP 接口 | 75 个端点，从路由装饰器解析 |
+| 模块浏览器 | 326 个模块，可搜路径 / 摘要 / 符号名；每行的说明是该模块 docstring 的第一行 |
+| HTTP 接口 | 77 个端点，从路由装饰器解析 |
 | 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
 | 配置画像 | 十个 profile，以及 82 条写成单值 `Literal` 的不变量 |
 | 决策记录 | 91 份 ADR，可搜 |
@@ -200,7 +200,7 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 
 ### 1.5 接口与工具
 
-**HTTP API**（FastAPI，**75 个端点**）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`
+**HTTP API**（FastAPI，**77 个端点**）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`
 （提交、查询、时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、
 `/v1/search`、`/v1/approvals`、`/v1/artifacts`（含 `/preview` 与 `/pdf`）、
 `/v1/projects`、`/v1/code`、`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、
@@ -307,7 +307,7 @@ server：`agent-word-mcp`、`agent-web-mcp`、`agent-sandbox-mcp`、`agent-compu
 | 7 | 模型流 | `_stream_model` → `_consume` | 一次调用，一条流，整段套在 `asyncio.timeout(deadline)` 里。全仓唯一一处 `async for` 消费模型流 |
 | 8 | 计量这一轮 | `ledger.usage.merged(...)` | `last_input_tokens` 与累计用量**分开记**，因为第 3 步问的是前者 |
 | 9 | 终态判定 | `_terminal_for_turn`（8 条分支） | 没有工具调用 → 完成；有 → 往下走一批 |
-| 10 | 准入 | `gateway.propose` + 两个断路器 | 每一个被提议的调用都先留痕，**包括下一步就要被拒的**。然后工具额度切一刀；同名同参数第 3 次也拒 |
+| 10 | 准入 | `gateway.propose` + 两个断路器 | 每一个被提议的调用都先留痕，**包括下一步就要被拒的**。然后工具额度切一刀；同名同参数**第 4 次**才拒——计数器记的是「这次之前见过几回」，所以前三次都放行 |
 | 11 | 网关 | `prepare` → `authorize` | [§4](#四tool-gateway一次工具调用要穿过的门) |
 | 12 | 调度 | `runtime/tool_scheduler.py`（纯函数，70 行） | 连续的只读调用凑一组、最多 4 个；写 / 外部 / 破坏性一律**独占成组** |
 | 13 | 执行 | `ToolExecutor` | 时限取「工具声明 / 运行剩余 / 部署上限」三者最小；每 5 秒一次心跳 |
@@ -326,7 +326,7 @@ server：`agent-word-mcp`、`agent-web-mcp`、`agent-sandbox-mcp`、`agent-compu
 | **截止** | 「运行截止」与「运行时信封」取内层的那个，并且**记住是哪一个赢的**：前者是 `budget_exceeded`，后者是可重试的 `provider_error`。模型 profile 自己的超时刻意不在这里，它在 adapter 里，嵌在这道界限之内 | `runtime/budgets.py` |
 | **上下文** | 超过窗口 × 0.75 触发压缩。压缩本身是一次普通的模型调用（profile 为 `compact`），它的 token 与成本**失败时照样计入**——供应商已经收了这笔钱；但 `steps` 不加，因为循环没有前进一步 | `runtime/compaction.py` |
 | **取消** | 一轮里查六次。被取消时，已经准备好的调用逐个变成 `cancelled` 的 `ToolResult`——它们仍然欠模型一个答复，不能凭空消失 | `agent_runtime.py::_refuse_cancelled` |
-| **重复调用** | **两种机制**。同一轮里重复的 `tool_call_id` 直接判整轮失败（那是供应商的错，不是模型的选择）；跨轮的同名同参数第 3 次被拒，连续被拒超过 2 次运行结束 | `agent_runtime.py` |
+| **重复调用** | **两种机制**。同一轮里重复的 `tool_call_id` 直接判整轮失败（那是供应商的错，不是模型的选择）；跨轮的同名同参数**第 4 次**被拒（`MAX_IDENTICAL_CALLS = 3` 比的是「此前见过几回」），连续被拒超过 2 次运行结束 | `agent_runtime.py` |
 
 ### 3.3 状态机与终态
 
@@ -469,7 +469,7 @@ task_runs.submitted_authorization_envelope   permitted_tools(profile, …)      
 | **ports**<br/>`ports/`（38 个模块，48 个 Protocol） | 用 `typing.Protocol` 把"系统需要什么能力"和"谁来提供"分开 | 仅 domain、标准库、Pydantic | 写任何实现（这里没有 SQL、没有 HTTP、没有向量库调用）；`ports/model.py` 的导入受 `MODEL_STREAM_OWNERS` 白名单管制 |
 | **runtime**<br/>`runtime/`（11 个模块） | 全仓唯一一份工具循环：把一次运行跑到**终态**，并在循环上装齐预算、截止、上下文、取消、重复调用五道闸 | 仅 domain + ports | import 任何框架；**任何模块（含 adapters）不得再写第二份消费模型流的循环**；把 "allow, pending approval" 当 allow 直接派发 |
 | **workflows**<br/>`workflows/`（10 个模块） | 控制流写成能单独读、单独测的**声明**：边是数据、路由是纯函数、每个 agent 能看什么够到什么是一张写死的表 | domain、ports、application | import langgraph（图的编译只在 `adapters/langgraph/`）；画像扩权（`permitted_tools` 只做交集，没有能反转方向的参数）；节点回头向注册表要当前 epoch |
-| **application**<br/>`application/`（34 个模块） | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
+| **application**<br/>`application/`（36 个模块） | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
 | **adapters**<br/>`adapters/`（22 个目录 + 两个散装模块） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
 | **apps + bootstrap + workers** | 让"一份 TOML"变成"若干个各自只拿到自己那一份、启动时就能验伪的独立进程" | core 四层 + adapters + 框架 | `os.environ` **只允许出现在 bootstrap 包内**；`Settings` 类型不得越过 `projections.py` 继续传播；TOML 里禁止写库连接串；单值 `Literal` 表达的不变量改不动——要改先写 ADR |
 | **web**<br/>`web/src/` | 把后端那套事实翻译成人能核对的界面，而不是自己再造一份执行模型 | `web/src/api/`（唯一出网处）、后端 HTTP + SSE | 直连数据库或向量库（`fetch` 只出现在两个文件里）；折叠事件时丢弃事件——原始 payload 必须仍可达 |
@@ -682,10 +682,10 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `src/agent_workbench/ports/` | 38 个模块、48 个 Protocol。唯一的跨层接缝 |
 | `src/agent_workbench/runtime/` | 11 个模块。**唯一的工具循环**与 Tool Gateway |
 | `src/agent_workbench/workflows/` | 10 个模块。两张图、agent 画像、审批中断点、执行租约作用域 |
-| `src/agent_workbench/application/` | 34 个模块。Chat 回合、Task 生命周期、编码会话、崩溃恢复、运行树 |
+| `src/agent_workbench/application/` | 36 个模块。Chat 回合、Task 生命周期、编码会话、崩溃恢复、运行树 |
 | `src/agent_workbench/adapters/` | 22 个目录 + 2 个散装模块。一个目录接一个外部世界 |
 | `src/agent_workbench/apps/` | `agent-api`、三个 worker/CLI，以及四个自有 MCP server |
-| `src/agent_workbench/bootstrap/` | 16 个模块。设置、投影、各类工厂、启动期校验 |
+| `src/agent_workbench/bootstrap/` | 18 个模块。设置、投影、各类工厂、启动期校验 |
 | `tests/` | 20 个目录。`architecture/` 是让越界变红的那个，`contracts/` 是"一个契约，每种实现"的那个，`e2e/` 是杀掉 Worker 再看它恢复的那个 |
 | `web/src/` | 八个 feature、八个页面；出网只在 `api/` 的两个文件里 |
 | `config/` | 十个 profile |
@@ -750,6 +750,22 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 控制台在 `http://127.0.0.1:8000/ui/`。原生拓扑见
 [本机运行手册](docs/running-locally.md)，容器化细节见
 [Compose 部署](docs/deployment.md)——API 只映射到 `127.0.0.1:8000`。
+
+**第一次起来时没有 provider key，所以 Chat 还答不了**——这不是坏了，「运行状态」页
+会把它连同其它没装配起来的能力一起列出来。存一把：左下角头像 → 设置 → 模型密钥，
+然后重启**读配置的那三个进程**：
+
+```bat
+scripts\stack.cmd restart    :: Windows；只重启 API 与两个 Worker，数据库不动
+```
+
+```bash
+docker compose --profile demo restart api task-worker task-worker-b
+```
+
+同一条命令也是在「运行状态」页拨完一个零件开关之后要跑的那条——key 和开关都只对
+**下一次启动**生效（[ADR-101](docs/adr/0101-the-console-may-hand-over-a-key-it-can-never-read-back.md)、
+[ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)）。
 
 **门禁与规模的实测数字**在 [HIGHLIGHTS §2](docs/HIGHLIGHTS.md#2-门禁与规模)，
 本 README 不复制它们——一个抄在别处的数字没有任何东西会在它过期时失败。要一份**此刻**
