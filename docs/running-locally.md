@@ -61,6 +61,14 @@ scripts/dev.sh demo-worker   # 两个探针都过了才起 Worker
 完全看不出来：`/ui` 打得开、六个页面都在、Chat 的空状态照常渲染。要一个明确不带 Chat 的
 API，用 `scripts/dev.sh api`。
 
+**联网搜索在这两个 arm 上是决定出来的，不是写死的**（[ADR-104](./adr/0104-the-native-launcher-yields-to-a-stored-switch.md)）。
+`demo-api` 与 `demo-worker` 起进程之前先问 `docker/decide_web_search.py`——和 Compose 的
+容器启动脚本同一个文件：shell 里显式导出了 `AW_RESEARCH__ENABLED` 就原样用；控制台
+「运行状态」页存下的开关（开或关，`~/.config/agent-workbench/switches.json`）交给加载器
+应用或搁置；谁也没决定才探 key，而这两个 arm 走到这里 key 一定在，所以默认是开。探针把
+走了哪条路打在 stderr 上。此前这两行是无条件 `export AW_RESEARCH__ENABLED=true`，页面会把
+原生路径上的每一次启动报成「启动环境里显式给了这个值」——而没有人给过。
+
 key 从哪来：先看环境变量 `AW_SECRETS__DEEPSEEK_API_KEY`，没有就读 `AW_KEY_FILE`
 （默认 `~/.config/agent-workbench/key`）。**这个路径在 checkout 之外是有意的**——`zip -r`
 和访达的"压缩"都不认 `.gitignore`，工作目录里的 key 会被一起打包带走；CI 的密钥扫描只看

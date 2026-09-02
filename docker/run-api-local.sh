@@ -18,8 +18,10 @@ set -eu
 # that refuses to start. The probe asks the package for the same answer the
 # validator will reach a second later.
 #
-# `scripts/dev.sh demo-api` makes the same decision for the same reason, and
-# this is the containerised console rather than a different product. What it
+# `scripts/dev.sh demo-api` makes the same decision for the same reason -- and
+# since ADR-104 by running this same probe, so the two launchers cannot answer
+# differently -- because this is the containerised console rather than a
+# different product. What it
 # costs is stated: searches go to the provider on this key, bounded at
 # `research.max_uses` per turn. To decline it, start the stack with
 # `AW_RESEARCH__ENABLED=false` in the environment -- an explicit value is left

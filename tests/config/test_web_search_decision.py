@@ -4,6 +4,8 @@ ADR-102 made the container launcher decide Chat's web search by probing for a
 key. ADR-103 puts the console's stored switch above that probe. These pin the
 order: a stored value -- either one -- means the launcher exports nothing and
 the loader decides; only when nothing is stored does the key probe stand.
+Since ADR-104 the native ``scripts/dev.sh`` console arms ask the same function
+through the same probe; ``test_dev_script_web_search.py`` holds them to it.
 """
 
 from __future__ import annotations

@@ -17,9 +17,12 @@
 #     console profile, so it lives in config/config.demo-local.toml now. It is
 #     why Chat searched the web when started from here and did not when started
 #     from the documented command;
-#   * it exported AW_RESEARCH__ENABLED=true, which the `demo-api` arm sets for
-#     itself on the one condition that makes it safe -- a provider key being
-#     present, which that arm now requires rather than hopes for.
+#   * it exported AW_RESEARCH__ENABLED=true. The `demo-api` arm decides that
+#     for itself now, and since ADR-104 decides it the way the container
+#     launcher does: an exported value is left alone, a choice stored on the
+#     System page (ADR-103) is left to the settings loader, and only when
+#     nobody decided is the switch turned on -- which that arm can do safely
+#     because it refuses to start without a provider key.
 #
 # `demo-api` rather than `api`: the pane serves the console, and a Task submitted
 # from Work carries the tool names *this* process freezes into its envelope. On

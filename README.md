@@ -62,7 +62,7 @@ Qdrant、不需要 API key、不联网**——它读的是工作树本身。十�
 | HTTP 接口 | 75 个端点，从路由装饰器解析 |
 | 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
 | 配置画像 | 十个 profile，以及 82 条写成单值 `Literal` 的不变量 |
-| 决策记录 | 89 份 ADR，可搜 |
+| 决策记录 | 91 份 ADR，可搜 |
 | 门禁与规模 | 测试目录、控制台 feature、进程入口 |
 
 **面板上每一个数字都是构建那一刻数出来的，没有一个是写在页面里的。** 这不是讲究：
@@ -186,6 +186,9 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 可以在行上拨，拨的是**下一次启动**，「这次启动」和「下次启动」分开写
 （[ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)）；
 **安装型**的（MCP 工具、沙箱、知识库检索）标「需要安装」，因为一个开关兑现不了它们。
+两条启动路径——Compose 的容器启动脚本和 `scripts/dev.sh` 的控制台 arm——用同一个探针为
+存下的开关让路，所以拨下去的东西不取决于你是怎么起的它
+（[ADR-104](docs/adr/0104-the-native-launcher-yields-to-a-stored-switch.md)）。
 
 一次运行做了什么会折叠成阶段，展开能看到原始事件与 payload——**折叠只改称呼，不丢
 事件**。任务发生过委派时，时间线上方多出一个「参与的 Agent」面板：按谁派生谁的树列出
@@ -688,7 +691,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `config/` | 十个 profile |
 | `migrations/` | 32 个 Alembic 版本，单 head |
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
-| `docs/adr/` | 89 份决策记录，编号 0012–0102（0050 与 0053 预留未写） |
+| `docs/adr/` | 91 份决策记录，编号 0012–0104（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
 | `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`panel.cmd`（面板的 Windows 入口，ASCII + CRLF）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
@@ -810,7 +813,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 89 份实施期决策记录（0012–0102，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 91 份实施期决策记录（0012–0104，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

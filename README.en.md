@@ -228,7 +228,7 @@ as two separate facts: the model client is built once at composition, so a key
 stored now takes effect at the next start, and a switch that says "saved" while
 nothing changes reads as broken.
 
-The System pane lists what this deployment can and cannot do ([ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)) and sorts the optional parts into two kinds: **switch-shaped** ones (web search, triage, Code sessions, delegation) can be flipped on their own row, and what they flip is the **next** start, with "this start" and "next start" written as two answers ([ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)); **install-shaped** ones (MCP tools, the sandbox, retrieval) say "needs installing", because no switch could honour them.
+The System pane lists what this deployment can and cannot do ([ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)) and sorts the optional parts into two kinds: **switch-shaped** ones (web search, triage, Code sessions, delegation) can be flipped on their own row, and what they flip is the **next** start, with "this start" and "next start" written as two answers ([ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)); **install-shaped** ones (MCP tools, the sandbox, retrieval) say "needs installing", because no switch could honour them. Both ways of starting the console — Compose's container launcher and the console arms of `scripts/dev.sh` — yield to a stored switch through one shared probe, so what a flipped switch means does not depend on how the console was started ([ADR-104](docs/adr/0104-the-native-launcher-yields-to-a-stored-switch.md)).
 
 What a run did is folded into stages, and expanding one shows the raw events and
 payloads — **folding renames, it never drops an event**. When a Task delegated,
@@ -813,7 +813,7 @@ package.
 | `config/` | Ten profiles |
 | `migrations/` | 32 Alembic revisions, a single head |
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
-| `docs/adr/` | 89 decision records, numbered 0012–0102 (0050 and 0053 reserved but never written) |
+| `docs/adr/` | 91 decision records, numbered 0012–0104 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
 | `scripts/` | `dev.sh` (the one place that knows this machine; bash), `panel.cmd` (the panel's Windows entry point; ASCII + CRLF), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
@@ -906,9 +906,10 @@ evidence are in [the ten-minute version](docs/HIGHLIGHTS.md) (Chinese).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-The last two rows were measured **2026-09-01** on their own batches' trees; the
-rows above them on `main`, **2026-08-31**. Five sets were taken that day and the
-differences mean something:
+The last row was measured **2026-09-02** on batch 69's tree, **re-measuring only
+the offline and frontend columns**; the two above it on **2026-09-01** on their own
+batches' trees; the rows above those on `main`, **2026-08-31**. Five sets were
+taken that day and the differences mean something:
 
 | Point | Real services | Offline | Five dirs | Frontend |
 |---|---|---|---|---|
@@ -921,9 +922,24 @@ differences mean something:
 | Batch 65 (the last dead symbols) | 4020 | 3232 | 1376 | 842 |
 | Batch 66 (the checkpoint migration) | 4032 | 3244 | 1376\* | 842 |
 | Batch 67 (the capability report) | 4088 | 3300 | 1398 | 857 |
-| Batch 68 (the part switches, this table) | **4122**\*\* | **3334** | **1408** | **863** |
+| Batch 68 (the part switches) | **4122**\*\* | 3334 | **1408** | 863 |
+| Batch 69 (the native launcher yields, this table) | 4122\*\*\* | **3349** | 1408\*\*\* | **863** |
 
-**The last row's +34 / +34 / +10 / +6 is entirely its own**, file by file: eight in
+**Batch 69's row re-measures two columns only: offline +15, frontend +0.** The +15
+is all `tests/config/test_dev_script_web_search.py` (four for the probe's two
+answers across both arms, four for an operator's own value across both arms, two
+for the empty string meaning nobody decided, one text rule, one for the two
+launchers sharing a probe, three end to end through the real probe); the frontend
+change is one comment in `SystemPage.tsx`, and 863 is a rerun. **The real-services
+and five-directory columns (\*\*\*) were not re-measured on this tree** and are
+copied from batch 68: that batch did not start the test PostgreSQL and Qdrant. What
+can be said is that `src/` changed by one docstring and that none of the five
+directories holds this batch's tests — which is not the same as "those columns did
+not change"; turning "untouched" into "unchanged" is the sentence this section keeps
+having to correct, so the copied numbers are not bold and their provenance is here
+([status.md batch 69 §5](docs/status.md)).
+
+**Batch 68's +34 / +34 / +10 / +6 is entirely its own**, file by file: eight in
 `tests/config/test_switches_store.py`, six in `test_stored_switches_load.py`, eight
 in `test_web_search_decision.py`, ten more in `tests/api/test_system_capabilities.py`
 and two more in `tests/deployment/test_compose.py` — +34 offline; the five-directory
@@ -992,15 +1008,16 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle rerun) | `4122 passed / 12 skipped` (14m50s)\*\* |
-| Backend, no external services (local) | `3334 passed / 800 skipped` (1m19s) |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1408 passed / 2 skipped` (13m19s)\* |
-| Frontend Vitest (local, 55 files, idle rerun) | `863 passed` |
+| Backend, real PostgreSQL + Qdrant (local, idle rerun) | `4122 passed / 12 skipped` (14m50s)\*\* — **batch 68's tree; not re-measured by batch 69 (\*\*\*)** |
+| Backend, no external services (local) | `3349 passed / 800 skipped` (1m37s) |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1408 passed / 2 skipped` (13m19s)\* — **likewise, not re-measured by batch 69** |
+| Frontend Vitest (local, 55 files) | `863 passed` |
 
-These four were measured on the evening of **2026-09-01** on batch 68's tree,
-machine idle; the first row also has a red run under load on the same tree (\*\*). The previous edition (same day,
-batch 67) was `4088 / 3300 / 1398 / 857`, and the whole difference is this batch's
-own tests — the paragraph under the table above attributes them file by file.
+The second and fourth rows were measured **2026-09-02** on batch 69's tree; the
+first and third are still the evening of **2026-09-01** on batch 68's tree, machine
+idle (the first row also has a red run under load on that tree, \*\*). Batch 68's
+edition was `4122 / 3334 / 1408 / 863`; the offline +15 is entirely batch 69's own
+tests, attributed in the paragraph under the table above.
 
 > \*\* **Batch 68's real-services column is a red run under load, recorded as it
 > happened.** The two reds:
@@ -1090,9 +1107,9 @@ Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 82,002 lines of Python across 324 files, 100,556 lines of tests across 265
-files, 51,976 lines of frontend TypeScript across 142 files; 89 files under
-`docs/adr/`, numbered 0012–0102 — **with gaps**: 0050 and 0053 were claimed by the
+Scale: 82,718 lines of Python across 326 files, 101,441 lines of tests across 268
+files, 52,296 lines of frontend TypeScript across 142 files; 91 files under
+`docs/adr/`, numbered 0012–0104 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -1142,7 +1159,7 @@ the one that cannot go stale.
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics (Chinese) |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it (Chinese) |
 | [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
-| [ADR index](docs/adr/) | 89 implementation-period decision records (0012–0102; 0050 and 0053 reserved but never written) |
+| [ADR index](docs/adr/) | 91 implementation-period decision records (0012–0104; 0050 and 0053 reserved but never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---

@@ -84,6 +84,9 @@ tests/architecture/test_config_ownership.py
 `code.enabled`、`multi_agent.delegation_enabled`），不认识的键在启动时按文件名拒绝。
 其中 `research.enabled=true` 在没有 provider key 时会被**搁置**而不是让启动失败——
 理由与 ADR-102 §3 相同，见 [ADR-103](./adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md) §3.3。
+两个启动器都为它让路：容器的 `docker/run-api-local.sh` 与 `scripts/dev.sh` 的
+`demo-api` / `demo-worker` 调用同一个探针，只在环境未设且文件里没记 `research.enabled`
+时才导出 `AW_RESEARCH__ENABLED=true`（[ADR-104](./adr/0104-the-native-launcher-yields-to-a-stored-switch.md)）。
 
 嵌套环境变量使用双下划线：
 

@@ -63,6 +63,11 @@ allow_local_bootstrap = true
 #
 #   export AW_SECRETS__DEEPSEEK_API_KEY=sk-...
 #   export AW_RESEARCH__ENABLED=true
+#
+# Or flip it on the console's System page (ADR-103): that is stored beside the
+# key file for the *next* start, ranks below an exported value and above this
+# file, and every launcher -- the container's and `dev.sh`'s console arms
+# (ADR-104) -- leaves the decision to it.
 
 # ADR-019. Puts each step's prompt and proposed tool arguments on the run's own
 # event stream, so opening a step in the UI shows what the model was actually

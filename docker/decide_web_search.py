@@ -1,15 +1,19 @@
-"""Exit 0 when the launcher should turn Chat's web search on for this start.
+"""Exit 0 when a launcher should turn Chat's web search on for this start.
 
-Used by ``docker/run-api-local.sh`` and nothing else. The launcher has one
-decision to make before it starts the API, and it has to make it from the
-outside because ``research.enabled`` without a key is a startup error rather
-than a degraded start (ADR-102 §3). Since ADR-103 the console can also record
-that choice itself, and a recorded choice -- either way -- takes the decision
-away from this probe: the settings loader applies it, or holds it when "on"
-meets no key. Only when nobody decided does "is there a usable key" stand.
+Used by ``docker/run-api-local.sh`` and, since ADR-104, by the ``demo-api``
+and ``demo-worker`` arms of ``scripts/dev.sh`` -- one probe rather than one per
+launcher, so that the two ways of starting the console cannot answer the same
+question differently. A launcher has one decision to make before it starts the
+process, and it has to make it from the outside because ``research.enabled``
+without a key is a startup error rather than a degraded start (ADR-102 §3).
+Since ADR-103 the console can also record that choice itself, and a recorded
+choice -- either way -- takes the decision away from this probe: the settings
+loader applies it, or holds it when "on" meets no key. Only when nobody decided
+does "is there a usable key" stand.
 
-Says which way it went on stderr, so ``docker compose logs api`` shows the
-reason rather than only the effect.
+Says which way it went on stderr, so ``docker compose logs api`` -- or the
+terminal ``scripts/dev.sh`` is running in -- shows the reason rather than only
+the effect.
 """
 
 from __future__ import annotations

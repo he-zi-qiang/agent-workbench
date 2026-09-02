@@ -264,11 +264,12 @@ shell_tools_enabled = true
 #
 # **这个文件没有 `[research]` 段**，而投影是一个与（`bootstrap/projections.py`）：
 # `policy.search_tools_enabled and research is not None`。所以只有当进程是被
-# `scripts/dev.sh demo-api` 起来的——那里 `export AW_RESEARCH__ENABLED=true`，理由写在
-# 那个脚本里：`research.enabled` 配在这个被跟踪的文件里会让每一个没有 key 的 checkout
-# 启动失败——这件工具才存在。直接 `AW_CONFIG_FILE=... python -m ...main` 起的进程，
-# 这个与解析为 false，得到的是**没有这件工具的那套安排**，而不是一个起得来却兑现不了
-# 自己 offer 的进程。这句话写在这里，而不是留给下一个人去发现。
+# `scripts/dev.sh demo-api` 起来的——那里在没人决定时导出 `AW_RESEARCH__ENABLED=true`
+# （ADR-104：shell 里显式给的值不碰，控制台存下的开关交给加载器；谁也没决定才探 key），
+# 理由写在那个脚本里：`research.enabled` 配在这个被跟踪的文件里会让每一个没有 key 的
+# checkout 启动失败——这件工具才存在。直接 `AW_CONFIG_FILE=... python -m ...main` 起的
+# 进程，这个与解析为 false（除非控制台存过这个开关，ADR-103），得到的是**没有这件工具
+# 的那套安排**，而不是一个起得来却兑现不了自己 offer 的进程。这句话写在这里，而不是留给下一个人去发现。
 #
 # 净变化不是天花板也不是审批门，是**有没有人在场**——ADR-085 §1 有实测表：这个
 # profile 走 `CODE_PROJECT_TOOLS_WITH_RUN`，天花板本来就是 `destructive`，加 search
