@@ -4,10 +4,13 @@
   使用者看着一排灰色的「缺失」问了一个合理的问题：附加项既然像零件，为什么看得见却
   选不了——要不要让控制台能拨动它们，以及拨动意味着什么
 - 状态：**接受**。四个**开关型**零件可以拨，拨的是**下一次启动**；安装型零件只标
-  「需要安装」，没有开关。**部分推翻 ADR-102 §4.4**，推翻的边界写在 §4
+  「需要安装」，没有开关。**部分推翻 ADR-102 §4.4**，推翻的边界写在 §4。
+  **§5.5「不改 `scripts/dev.sh`」已被
+  [ADR-104](./0104-the-native-launcher-yields-to-a-stored-switch.md) 推翻**（2026-09-02）：
+  原生脚本改用容器那一个探针让路，其余各节不受影响
 - 日期：2026-09-01
 - 影响：新增 `application/switches.py`（开关表、`switches.json` 的解析与原子写）与
-  `bootstrap/switches.py`（文件在哪、容器启动脚本的判定）；`load_settings` 新增第五个
+  `bootstrap/switches.py`（文件在哪、启动脚本的判定——当时只有容器那一个，ADR-104 起两个）；`load_settings` 新增第五个
   显式入参 `switches_file`，以及一条「搁置」规则；`Settings` 新增三个类属性
   （`stored_switches` / `applied_switches` / `held_switches`）；`ApiRuntimeConfig`
   新增 `switches` 与 `switches_file`；`GET /v1/system/capabilities` 每行多出
@@ -76,7 +79,9 @@ ADR-102 让一台部署说得出自己没装配起什么。Windows 上双击 `sc
 
 `null` 是第三个位置，页面上叫「不指定」，而且它是**真实的状态**：下次启动照环境变量和
 配置文件走。在 Docker 栈上，那意味着 ADR-102 §3 那个「探到 key 就打开联网搜索」的启动
-脚本继续决定。把它画成「关」，是让页面替启动脚本作它没作的决定。
+脚本继续决定（[ADR-104](./0104-the-native-launcher-yields-to-a-stored-switch.md) 之后
+`scripts/dev.sh demo-api` / `demo-worker` 也是同一个探针在决定）。把它画成「关」，是让页面
+替启动脚本作它没作的决定。
 
 ### 3.2 存下的开关排在哪
 
@@ -95,6 +100,9 @@ ADR-102 让一台部署说得出自己没装配起什么。Windows 上双击 `sc
 「文件说开、进程却关着、而且不是被搁置」这种情况报成 `overridden`，写明「启动环境里
 显式给了这个值，压过了这里的选择」，而不是装作能改。`scripts/dev.sh demo-api` 无条件
 导出 `AW_RESEARCH__ENABLED=true`，就会落进这一格；那个脚本不改，页面说实话就够了。
+> **2026-09-02**：这一段的后半句被 [ADR-104](./0104-the-native-launcher-yields-to-a-stored-switch.md)
+> 推翻——压过开关的是脚本自己，不是任何人的决定。原生脚本现在只在没人决定时才导出，
+> 这一格只在真有人导出时出现。优先级本身一字不变。
 
 ### 3.3 搁置，而不是拒绝启动
 
@@ -119,6 +127,9 @@ key 拒绝它，就搁置它**——不应用、照旧存着、记下原因、�
 搁置和阻塞都是「愿望还没被兑现」的两种说法。
 
 ### 3.4 启动脚本让路
+
+> **2026-09-02**：本节写的是容器启动脚本；[ADR-104](./0104-the-native-launcher-yields-to-a-stored-switch.md)
+> 起 `scripts/dev.sh` 的 `demo-api` / `demo-worker` 调用同一个探针，规则逐字相同。
 
 `docker/run-api-local.sh` 那个探测保留，但**只在没人决定的时候**开口：环境变量未设或
 为空，**且** `switches.json` 里没有 `research.enabled`。文件里记了值——开或关——探测
@@ -171,6 +182,10 @@ ADR-102 §4.4 说：「一个能从浏览器改能力的控制台，会让『这
 5. **不改 `scripts/dev.sh`。** 它导出的 `AW_RESEARCH__ENABLED=true` 会压过存下的开关，
    页面会把这一格报成 `overridden` 并说出原因。让脚本读文件是可以做的，但那会让原生
    路径和容器路径各有一套「谁让路给谁」，而今天两条路径靠同一条规则就说得清。
+   > **2026-09-02 推翻**：[ADR-104](./0104-the-native-launcher-yields-to-a-stored-switch.md)。
+   > 页面报 `overridden` 是诚实的，但压过开关的是脚本自己而不是任何人的决定，而原生
+   > 路径上没有一条起控制台的命令不经过这两个 arm——那是一个谁也拨不动的开关。答案
+   > 不是第二套规则，是让原生脚本调用容器那**同一个**探针；这一条担心的事因此不成立。
 
 ## 6. 证据
 

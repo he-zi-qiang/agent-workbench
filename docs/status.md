@@ -27,6 +27,109 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-02（第六十九批）：原生启动脚本对存下的开关让路，用的是容器那一个探针
+
+第六十八批把「不改 `scripts/dev.sh`」写进了「明确没做」：它无条件导出的
+`AW_RESEARCH__ENABLED=true` 会压过存下的开关，页面把那一格报成 `overridden` 并说出原因，
+「那个脚本不改，页面说实话就够了」。
+
+在原生栈上把这条路走一遍，它不够：[ADR-104](./adr/0104-the-native-launcher-yields-to-a-stored-switch.md)。
+它**部分推翻 ADR-103 §5.5**，推翻的边界写在那份 ADR 的 §3。
+
+### 1. 压过开关的是脚本自己，不是任何人的决定
+
+原生路径上没有一条起控制台的命令不经过那两个 arm：`.claude/launch.json` →
+`.claude/run-api.sh` → `scripts/dev.sh demo-api`，[本机运行手册](./running-locally.md)教的
+也是 `demo-api` / `demo-worker`。一个人在「运行状态」页把联网搜索拨到「关」，按页面说的
+重启，回来看到的是「这次启动：开 · 下次启动：关 · 启动环境里显式给了这个值，压过了这里的
+选择」。他没有给过任何值。页面说的每个字都对，整句话是错的——它把脚本的一个 `export`
+报成了操作者的决定，并暗示改环境就能生效，而改环境的办法就是去改那个脚本。ADR-103 §3.2
+为出厂 TOML 说过的话在这里逐字成立：一个输给启动脚本的开关，是谁也拨不动的开关。
+
+同一行里还藏着一个和开关无关的老 bug：`export AW_RESEARCH__ENABLED=true` 跑在操作者自己的
+`export` **之后**。在 shell 里导出了 `false` 再起 `demo-api`，得到的是 `true`，而且从命令行上
+看不出进程用的是哪个值。容器启动脚本从第六十七批起就「显式值不碰」；原生脚本从来没有。
+
+### 2. 同一个探针，不是第二套规则
+
+两个 arm 里那一行换成容器启动脚本已经在跑的那三行：环境变量未设或为空才问
+`docker/decide_web_search.py`，探针说行才导出。四种情形在两个启动器上从此是同一张表：
+显式值原样用；文件里存了「开」或「关」，探针退出，加载器应用或搁置；谁也没决定才探 key
+——而这两个 arm 没有 key 会在更早一行拒绝启动，所以这一格总是开。探针把走了哪条路打在
+stderr 上，两个启动器里是同一句话。`demo-api` 的横幅从「Word + web + sandbox + chat search」
+改成如实写出 `research.enabled=` 是什么决定的：一个存了「关」的启动打出「chat search」，
+就是「运行状态」页被造出来要制止的那种话。
+
+§5.5 担心的是**两套规则**——原生脚本自己解析 `switches.json`、自己定优先级，和容器那一套
+慢慢错开。答案不是不改，是**不写第二套**：原生脚本调用的就是容器那个文件，它背后是
+`bootstrap/switches.py` 的 `launcher_decides_web_search()`，读文件用的是存储和加载器共用的
+那个解析器。一条测试钉住两个启动器名字里写的是同一个文件。
+
+明确没做：不把探针搬出 `docker/`（Dockerfile 是 `COPY docker ./docker` 整个目录，搬走就要
+留副本，副本正是第二套）；不在 shell 里解析 JSON（哪怕只是 `grep`，也是第二个不认识
+「不认识的键」的解析器）；不改 `api` / `worker` 两个 arm（它们从来不导出这个变量，存下的
+开关在它们身上本来就由加载器应用或搁置）；不改 `.claude/launch.json`。
+
+### 3. 一个自己写出来的坑
+
+文本规则那条测试起初对**整个文件**数 `export AW_RESEARCH__ENABLED=true`，期望两处，数到
+三处：新写的注释里引用了被换掉的那一行。`tests/deployment/test_compose.py` 早就为 Windows
+启动器写下过同一条规则——注释会引用它们要防止的失败，整文件搜索找到的是解释，报出的是
+相反的结论。改成只数可执行行，并把这条理由写进测试的 docstring。
+
+### 4. 证据：真探针 + 真加载器，七个场景，含对照组
+
+用一个替身 `$PYTHON` 跑 `scripts/dev.sh demo-api`：探针那一步交给真的 `.venv` 解释器，
+`exec` 那一步换成按 `apps/api/main.py` 的写法调一次 `load_settings()` 并打印结果；只有沙箱
+的 MCP 探针被替身吞掉（没有起 MCP 服务器）。key 目录是临时目录，`~/.config` 一个字没碰。
+对照组是 `main` 上的旧脚本，替身只打印它导出了什么。
+
+| 场景 | 新脚本 | `main` 上的旧脚本 |
+|---|---|---|
+| 什么也没存，环境未设 | 探针：`provider key present and nothing stored … chat web_search is on`；导出 `true`；加载器 `research.enabled=true` | 导出 `true` |
+| 存了 `research.enabled=false` | 探针：`stored as false … the settings loader decides`；**不导出**；加载器 `applied={research.enabled: false}`，`research.enabled=false` | 导出 `true`——页面报 `overridden`，指着一个没人设的环境 |
+| 存了 `true`（key 在） | 不导出；加载器 `applied={research.enabled: true}`，`held=[]`，`research.enabled=true` | 导出 `true`（碰巧一致） |
+| 操作者导出 `false`，文件说 `true` | 探针**不问**；`research.enabled=false`；页面报 `overridden`——这次是真的 | 导出 `true`：操作者的 `false` 被翻掉 |
+| 只存了 `multi_agent.delegation_enabled` | 探针：`nothing stored for research.enabled`；导出 `true` | 导出 `true` |
+
+横幅在这五种情形下分别打出 `research.enabled=true`、`=<the stored switch decides>`
+（两次）、`=false`、`=true`。
+
+### 5. 门禁
+
+| 环境 | 结果 |
+|---|---|
+| 后端，不起任何外部服务（本机） | `3349 passed / 800 skipped`（1 分 37 秒） |
+| 前端 Vitest（55 个文件） | `863 passed`（18.8 秒） |
+| 后端，真实 PostgreSQL + Qdrant；CI 那组五个目录 | **本批没有重测**，见下 |
+
+离线 **+15**，全在 `tests/config/test_dev_script_web_search.py`：探针两种答案 × 两个 arm
+4 条、操作者显式 `false` / `true` × 两个 arm 4 条、空串算没人决定 2 条、文本规则 1 条、
+两个启动器共用一个探针 1 条、真探针端到端（没存 / 存关 / 存开）3 条。
+`tests/config/test_local_console_profile.py` 与 `test_web_search_decision.py` 原有的条目
+全过——前者那几条用 `PYTHON=/bin/echo` 驱动 `demo-api` / `demo-worker`，探针那一行在替身下
+退出 0，它们的 stdout 断言之所以不受影响，是因为脚本把探针的输出送到了 stderr。
+
+**真实服务与五目录两列没有在这棵树上重测。** 这一批没有起测试用的 PostgreSQL 与 Qdrant
+容器。能说的是：`src/` 只改了 `bootstrap/switches.py` 的一段 docstring
+（`git diff main -- src` 可查），五个目录里没有本批的测试文件，pyright 在改后的 `src` 上
+仍是 0 错误。这两句合起来不等于「那两列的数不变」——[HIGHLIGHTS §2](./HIGHLIGHTS.md#2-门禁与规模)
+反复处理的就是这种把「没碰」写成「没变」的句子——所以那张表里这两列照旧记第六十八批的
+数，并标明没有重测。静态门禁：`ruff format --check .`、`ruff check .`、pyright strict 0 错误、
+ESLint `--max-warnings 0`、`tsc -b`；`agent-config-check` 的 `development` 与 `test` 两个
+档在导出三个 DSN 后通过。
+
+### 6. 文档
+
+一轮扫描把所有写着旧行为的句子找出来（四个查找 agent 分区域找，每一条再由一个便宜模型
+的 agent 单独核对是否真的会过期），改了的有：ADR-103 的状态行、§3.1、§3.2、§3.4 与 §5.5
+各加一条指向 ADR-104 的推翻注记；第六十八批 §6 那一条加指针；`config.demo-local.toml`
+里「那里 `export AW_RESEARCH__ENABLED=true`」那句；`config.local.toml` 的逃生口注释；
+`.claude/run-api.sh` 的历史注记；`docker/run-api-local.sh` 与 `decide_web_search.py` 的
+「只给容器用」；`SystemPage.tsx` 里「在 Docker 栈上」那句注释；`deployment.md`、
+`running-locally.md`、`configuration.md` 各加一段；README 两版、`CLAUDE.md` 与本文档
+里的 ADR 计数（91 份，0012–0104）。
+
 ## 2026-09-01（第六十八批）：附加的零件可以从控制台上拨动，拨的是下一次启动
 
 第六十七批让「运行状态」页列出十二行能力，每一处缺失带原因、带补法。使用者看着一排
@@ -101,7 +204,8 @@ pyright 同时抓到 `_secret_is_configured` 是受保护方法：搁置规则�
 - **不给安装型零件开关**，也不给核心行开关：核心缺失是半个产品不在，不是一个选择。
 - **不改 `scripts/dev.sh`**：它导出的 `AW_RESEARCH__ENABLED=true` 会压过存下的开关，
   页面把那一格报成 `overridden` 并说出原因。让脚本读文件是可以做的，但那会让原生路径和
-  容器路径各有一套「谁让路给谁」。
+  容器路径各有一套「谁让路给谁」。**→ 次日被第六十九批 / ADR-104 推翻**：原生脚本调用
+  容器那同一个探针，所以是一条规则、一个探针，不是两套。
 
 ### 7. 证据：在真的 Compose 栈上拨、重启、看行变化
 

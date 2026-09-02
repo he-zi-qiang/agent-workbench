@@ -163,6 +163,13 @@ key is held rather than turned into a startup error, and the row says so.
 Parts that need a server or another image (MCP tools, the sandbox, retrieval)
 say "needs installing" instead of offering a switch nothing here could honour.
 
+The native path makes the same decision with the same probe: since ADR-104
+`scripts/dev.sh demo-api` and `demo-worker` run `docker/decide_web_search.py`
+too, instead of exporting `AW_RESEARCH__ENABLED=true` unconditionally. So a
+switch flipped on the System page means one thing whichever way the console was
+started, and the page reports `overridden` only when somebody really did export
+a value.
+
 Searches spend that key at the provider, bounded by `research.max_uses` per
 turn. To decline them, pass an explicit value — it is left alone, and only an
 unset or empty one is decided:

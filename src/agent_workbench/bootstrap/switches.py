@@ -31,7 +31,7 @@ def switches_file() -> Path | None:
 
 
 def launcher_decides_web_search() -> bool:
-    """Whether ``docker/run-api-local.sh`` should turn research on for this start.
+    """Whether a launcher should turn research on for this start.
 
     ADR-102 §3 made the container launcher decide Chat's web search by probing
     for a key, because the switch cannot be written statically. ADR-103 puts a
@@ -39,6 +39,13 @@ def launcher_decides_web_search() -> bool:
     ``research.enabled`` -- either one -- the launcher exports nothing, and the
     settings loader applies the stored value (or holds it, when "on" meets no
     key). Only when nobody decided does the probe's answer stand.
+
+    Two launchers ask, through ``docker/decide_web_search.py``:
+    ``docker/run-api-local.sh`` since ADR-102, and the ``demo-api`` /
+    ``demo-worker`` arms of ``scripts/dev.sh`` since ADR-104. The native arms
+    used to export ``true`` unconditionally, which ranked above the stored
+    switch and made the System page report every native start as
+    ``overridden``.
 
     A switches file this process cannot parse is answered ``False`` rather
     than by a second opinion: the loader is about to refuse it out loud, with

@@ -538,7 +538,26 @@ demo-api)
   # documents this exact escape hatch; this is the console profile applying it
   # for itself, on the one condition that makes it safe -- and the refusal above
   # is now what guarantees that condition holds.
-  export AW_RESEARCH__ENABLED=true
+  #
+  # Decided, not exported unconditionally (ADR-104). This used to be a bare
+  # `export AW_RESEARCH__ENABLED=true`, and that overrode two people: an
+  # operator who had exported `false` in this very shell, and anyone who had
+  # switched web search off on the System page -- a stored switch ranks below
+  # the environment (ADR-103 §3.2), so the page reported this start as
+  # `overridden` and blamed an environment nobody had set. The container
+  # launcher had already been taught to step aside; this is the same probe
+  # answering the same question, so the two launchers cannot drift apart: an
+  # explicit value is left alone, a stored choice -- either way -- takes the
+  # decision away and the settings loader applies or holds it, and only when
+  # nobody decided does "is there a key" stand, which the refusal above has
+  # already answered. The probe explains which case it found, on stderr; its
+  # stdout is sent there too because this arm's stdout belongs to the process
+  # it is about to exec.
+  if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then
+    if "$PYTHON" docker/decide_web_search.py >&2; then
+      export AW_RESEARCH__ENABLED=true
+    fi
+  fi
   # Probed here, before the process replaces this shell, for the reason
   # `demo-worker` probes its two servers: an MCP tool catalogue is frozen once
   # at startup. The API's own refusal (ADR-057) would arrive too -- it raises
@@ -551,7 +570,11 @@ demo-api)
     --endpoint "http://127.0.0.1:8766/mcp" \
     --health-url "http://127.0.0.1:8766/health" \
     --expect-tool run_python >&2
-  echo "console profile (Word + web + sandbox + chat search); key available" >&2
+  # Says what was decided rather than promising "chat search": with a stored
+  # "off" this start has none, and a banner claiming otherwise is the same
+  # lie the System page was built to stop telling.
+  echo "console profile (Word + web + sandbox); key available;" \
+    "research.enabled=${AW_RESEARCH__ENABLED:-<the stored switch decides>}" >&2
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
   ;;
@@ -567,7 +590,17 @@ demo-worker)
   # at submission, so the graph's research node proposes a tool its own
   # envelope denies -- one wasted model turn per Task, ending in
   # `outside_submitted_envelope`.
-  export AW_RESEARCH__ENABLED=true
+  #
+  # Decided the way `demo-api` decides it, by the same probe (ADR-104). The
+  # API and the Worker read one switches file, and "web search is on" has to
+  # be one sentence across the two processes: an API that froze
+  # `external_search` into an envelope for a Worker that never registered it
+  # is the failure above, reached from the other side.
+  if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then
+    if "$PYTHON" docker/decide_web_search.py >&2; then
+      export AW_RESEARCH__ENABLED=true
+    fi
+  fi
   # Both servers, before the Worker rather than after: MCP discovery happens
   # once at startup and never hot-reloads, so a server started late leaves a
   # Worker that is up, healthy, and missing the tool the whole profile is for.
