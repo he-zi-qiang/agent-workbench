@@ -1096,6 +1096,45 @@ pre {
   font-weight: 400;
 }
 
+/* 「需要安装」「需要模型密钥」：零件的来路，用警告色而不是危险色——它说的是
+   「这边补不上」，不是「坏了」。 */
+.aw-capability-state.is-install {
+  color: var(--aw-warning);
+}
+
+/* 一行上的开关（ADR-103）。三个位置沿用设置面板里主题选择那一组的样子，只是
+   缩了一号：这是一行里的控件，不是一整节。下面几行 small 是「这次启动 / 下次
+   启动」和它们何时会一样，用 `.aw-capability-list span` 同一套灰与字号。 */
+.aw-capability-switch {
+  display: grid;
+  margin-top: 8px;
+  gap: 5px;
+}
+
+.aw-capability-switch .aw-settings-choices {
+  gap: 6px;
+}
+
+.aw-capability-switch .aw-settings-choice {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.aw-capability-switch .aw-settings-choice:disabled {
+  opacity: 0.6;
+}
+
+.aw-capability-switch small {
+  display: block;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aw-capability-switch small.is-warning {
+  color: var(--aw-warning);
+}
+
 .aw-metric small {
   display: block;
   margin-top: 7px;

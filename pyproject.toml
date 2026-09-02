@@ -210,6 +210,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # is here to catch a Cyrillic lookalike in an identifier, not a full-width comma
 # in deliberate Chinese.
 "src/agent_workbench/apps/api/routes/projects.py" = ["RUF001"]
+# The switch store's refusals are sentences a person reads on the System page
+# ("没有叫 X 的开关"), and the parser's are what a startup error shows for a
+# hand-edited switches.json. Same reason as every entry above.
+"src/agent_workbench/application/switches.py" = ["RUF001"]
 # 这一页的全部内容就是给人读的句子：每一行「缺什么、为什么缺、怎么补」。这些理由
 # 与产生它们的那个判断写在同一处，是这条路由存在的理由——把它们搬去浏览器端的
 # 映射表，就又多了一份会和代码走散的说法。RUF001 在这里要抓的仍是标识符里混进来

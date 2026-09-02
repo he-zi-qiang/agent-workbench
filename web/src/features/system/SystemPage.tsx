@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   CheckCircle2,
@@ -13,8 +13,13 @@ import {
   ApiError,
   checkHealth,
   getDeploymentCapabilities,
+  setDeploymentSwitch,
 } from "../../api/client";
-import type { DeploymentCapability } from "../../api/types";
+import type {
+  DeploymentCapabilitiesResponse,
+  DeploymentCapability,
+  DeploymentSwitch,
+} from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
   ErrorNotice,
@@ -30,6 +35,7 @@ import {
  * 现两次、而其中一次还是只读的。
  */
 export function HealthReport({ heading }: { heading?: ReactNode }) {
+  const queryClient = useQueryClient();
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: async () => {
@@ -52,7 +58,14 @@ export function HealthReport({ heading }: { heading?: ReactNode }) {
         <button
           className="aw-button is-ghost"
           disabled={health.isFetching}
-          onClick={() => void health.refetch()}
+          onClick={() => {
+            void health.refetch();
+            // 能力清单也重读：一个刚重启过 API 的人按的就是这个按钮，而那份清单
+            // 除此之外只在回到标签页时才刷新（见 CapabilityReport）。
+            void queryClient.invalidateQueries({
+              queryKey: ["deployment-capabilities"],
+            });
+          }}
           type="button"
         >
           <RefreshCw aria-hidden="true" size={15} />
@@ -193,8 +206,13 @@ export function SystemPage() {
  * 启动时就没装配它们。从界面上看不出来任何一处，于是人会去查 key、查网络、查
  * 模型，唯独查不到「这个进程从一开始就没有这件工具」。
  *
- * **不轮询。** 上面那几格问的是「此刻还在不在」，会变，所以 15 秒一次；这一份
- * 问的是「启动那一刻装配成了什么」，只有重启才会变，轮询它只是在重复同一个答案。
+ * **不轮询，但回到这个标签页时重读一次。** 上面那几格问的是「此刻还在不在」，会变，
+ * 所以 15 秒一次；这一份问的是「启动那一刻装配成了什么」，只有重启才会变，轮询它只是
+ * 在重复同一个答案。而重启恰恰是这一页现在会让人去做的事（ADR-103）：拨了开关、去
+ * 终端里 `stack.cmd restart`、回到这个标签页——回来时看到的必须是新进程的答案，不是
+ * 走之前那份。`staleTime: Infinity` 曾经把 `refetchOnWindowFocus` 一起挡掉了，实测
+ * 就是这样发现的：同一个标签页里 API 已经带着联网搜索起来了，页面还写着「这次启动：关」。
+ * 「重新检查」那个按钮同理，也重读这一份。
  */
 export function CapabilityReport() {
   const { identity } = useIdentity();
@@ -202,6 +220,7 @@ export function CapabilityReport() {
     queryKey: ["deployment-capabilities", identity.tenantId, identity.principalId],
     queryFn: () => getDeploymentCapabilities(identity),
     staleTime: Infinity,
+    refetchOnWindowFocus: "always",
   });
 
   const rows = report.data?.capabilities ?? [];
@@ -255,12 +274,116 @@ function CapabilityRow({ row }: { row: DeploymentCapability }) {
         <strong>
           {row.title}
           <em className="aw-capability-state">{stateLabel(row.state)}</em>
+          {/* 「需要安装」和「需要模型密钥」是零件的来路，不是状态：一个可用的零件
+              也仍然是装出来的。只在缺失时标，可用时这行字只会让人去找不存在的活。 */}
+          {row.state === "absent" && row.provision === "install" && (
+            <em className="aw-capability-state is-install">需要安装</em>
+          )}
+          {row.state === "absent" && row.provision === "key" && (
+            <em className="aw-capability-state is-install">需要模型密钥</em>
+          )}
         </strong>
         {row.reason !== "" && <span>{row.reason}</span>}
         {row.remedy !== "" && <span>要补上它：{row.remedy}</span>}
         {row.detail.length > 0 && <span>{row.detail.join(" · ")}</span>}
+        {row.switch !== null && <SwitchControl row={row} control={row.switch} />}
       </div>
     </li>
+  );
+}
+
+/**
+ * 一个零件的开关（ADR-103）。
+ *
+ * **拨的是下次启动，不是这个进程。** 这个进程在组装时读了一次配置，之后什么也不会
+ * 变，所以这里没有「已开启」这种词——有的是「这次启动」和「下次启动」两个答案，以及
+ * 一条说明它们何时会一样的话。把两者并成一个绿点，正是一个设置页会声称刚拨的开关
+ * 已经生效、而用户回头发现什么也没变的那条路。
+ *
+ * **三个位置，不是两个。** 「不指定」是一个真实的状态：下次启动照环境变量和配置文件
+ * 走——在 Docker 栈上那意味着「有 key 就开」的启动脚本继续决定联网搜索。把它画成
+ * 「关」，等于让页面替启动脚本作了它没作的决定。
+ *
+ * **服务端回的是整份清单，这里就整份替换。** 一个开关可能管两行（联网搜索管对话和
+ * 任务两行），自己只改一行的 cache 会让另一行说谎。
+ */
+function SwitchControl({
+  row,
+  control,
+}: {
+  row: DeploymentCapability;
+  control: DeploymentSwitch;
+}) {
+  const { identity } = useIdentity();
+  const queryClient = useQueryClient();
+  const flip = useMutation({
+    mutationFn: (enabled: boolean | null) =>
+      setDeploymentSwitch(identity, control.id, enabled),
+    onSuccess: (report: DeploymentCapabilitiesResponse) => {
+      queryClient.setQueryData(
+        ["deployment-capabilities", identity.tenantId, identity.principalId],
+        report,
+      );
+    },
+  });
+  const nextStart =
+    control.stored === null ? "按启动环境与配置" : control.stored ? "开" : "关";
+
+  return (
+    <div className="aw-capability-switch">
+      <div
+        className="aw-settings-choices"
+        role="radiogroup"
+        aria-label={`${row.title}：下次启动`}
+      >
+        <button
+          aria-checked={control.stored === true}
+          className={`aw-settings-choice${control.stored === true ? " is-on" : ""}`}
+          disabled={flip.isPending}
+          onClick={() => flip.mutate(true)}
+          role="radio"
+          type="button"
+        >
+          打开
+        </button>
+        <button
+          aria-checked={control.stored === false}
+          className={`aw-settings-choice${control.stored === false ? " is-on" : ""}`}
+          disabled={flip.isPending}
+          onClick={() => flip.mutate(false)}
+          role="radio"
+          type="button"
+        >
+          关闭
+        </button>
+        <button
+          aria-checked={control.stored === null}
+          className={`aw-settings-choice${control.stored === null ? " is-on" : ""}`}
+          disabled={flip.isPending}
+          onClick={() => flip.mutate(null)}
+          role="radio"
+          type="button"
+        >
+          不指定
+        </button>
+      </div>
+      <small>
+        这次启动：{control.active ? "开" : "关"} · 下次启动：{nextStart}
+      </small>
+      {control.restart_required && (
+        <small className="is-warning">{control.restart_hint}</small>
+      )}
+      {control.held !== "" && <small className="is-warning">{control.held}</small>}
+      {control.overridden && (
+        <small className="is-warning">启动环境里显式给了这个值，压过了这里的选择；改这里不会生效，先去掉那个环境变量。</small>
+      )}
+      {control.blocked !== "" && !control.overridden && (
+        <small>{control.blocked}</small>
+      )}
+      {flip.isError && (
+        <ErrorNotice message={errorMessage(flip.error)} />
+      )}
+    </div>
   );
 }
 

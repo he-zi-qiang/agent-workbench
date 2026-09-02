@@ -29,13 +29,15 @@ set -eu
 # here as the empty string. Empty means "nobody decided", and it is safe either
 # way: measured 2026-09-01, pydantic-settings loads `AW_RESEARCH__ENABLED=""`
 # as False, which is exactly what a start that found no key wants.
+#
+# Since ADR-103 "nobody decided" also means nothing is stored for
+# `research.enabled` on the console's System page: a stored choice, either
+# way, is applied (or held, when "on" meets no key) by the settings loader,
+# and this probe stays out of it. The probe prints which case it found.
 if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then
-    if python /app/docker/provider_key_present.py; then
+    if python /app/docker/decide_web_search.py; then
         AW_RESEARCH__ENABLED=true
         export AW_RESEARCH__ENABLED
-        echo "provider key present: chat web_search is on for this start" >&2
-    else
-        echo "no provider key yet: chat web_search stays off (save one in 系统 > 模型密钥, then restart)" >&2
     fi
 fi
 

@@ -22,6 +22,7 @@ import os
 import re
 import tomllib
 import warnings
+from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from pathlib import Path
@@ -47,6 +48,12 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from agent_workbench.application.switches import (
+    SWITCHES,
+    SwitchRefused,
+    parse_switches,
+    switch_paths_as_nested,
+)
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.paths import DEFAULT_CONFIG_FILE
 from agent_workbench.evaluation.metrics import RETRIEVAL_METRICS
@@ -171,6 +178,36 @@ class StoredProviderKeySource(PydanticBaseSettingsSource):
         if self._key is None:
             return {}
         return {"secrets": {"deepseek_api_key": self._key}}
+
+
+class StoredSwitchesSource(PydanticBaseSettingsSource):
+    """The console's switches file, ranked above the TOML files (ADR-103).
+
+    Above TOML because a switch that lost to ``config.default.toml`` would be a
+    switch nothing could ever flip: the shipped file says ``false`` for all
+    four. Below every environment source because an operator's exported value
+    is the deployment's own decision -- the capability report calls a stored
+    value the environment beat "overridden" rather than pretending it applied.
+
+    Handed the *applied* map, not the stored one. ``load_settings`` may hold a
+    stored "on" back (``research.enabled`` with no key is a startup error the
+    console must not be able to cause), and what it held is recorded beside
+    what it read so the report can say both.
+    """
+
+    def __init__(
+        self, settings_cls: type[BaseSettings], applied: Mapping[str, bool]
+    ) -> None:
+        super().__init__(settings_cls)
+        self._applied = dict(applied)
+
+    def get_field_value(
+        self, field: FieldInfo, field_name: str
+    ) -> tuple[Any, str, bool]:  # pragma: no cover - the whole dict is supplied
+        raise NotImplementedError
+
+    def __call__(self) -> dict[str, Any]:
+        return switch_paths_as_nested(self._applied)
 
 
 class StrictModel(BaseModel):
@@ -1562,6 +1599,14 @@ class Settings(BaseSettings):
     #: source below would then hand that object to the validator instead of a
     #: string -- which is exactly what it did on the first attempt.
     stored_provider_key: ClassVar[str | None] = None
+    #: The console's switches file as it read at load, what this load actually
+    #: applied of it, and what it held back with the reason (ADR-103). Class
+    #: attributes for the reason `stored_provider_key` is one. The API's
+    #: projection reads them so the capability report can say "stored for the
+    #: next start" and "running now" as two facts rather than one.
+    stored_switches: ClassVar[dict[str, bool]] = {}
+    applied_switches: ClassVar[dict[str, bool]] = {}
+    held_switches: ClassVar[dict[str, str]] = {}
 
     @classmethod
     def settings_customise_sources(
@@ -1586,6 +1631,10 @@ class Settings(BaseSettings):
             # last place a provider key can come from.
             StoredProviderKeySource(
                 settings_cls, getattr(settings_cls, "stored_provider_key", None)
+            ),
+            # Above TOML, below everything else: see the class.
+            StoredSwitchesSource(
+                settings_cls, getattr(settings_cls, "applied_switches", {})
             ),
             TomlConfigSettingsSource(settings_cls, deep_merge=True),
         )
@@ -1786,6 +1835,16 @@ class Settings(BaseSettings):
         if value is None:
             return False
         return not cls._looks_like_placeholder(value.get_secret_value())
+
+    def provider_key_is_configured(self) -> bool:
+        """Whether this object holds a real provider key, by the validator's rule.
+
+        Public because `load_settings` asks it of a probe build before deciding
+        whether a stored `research.enabled` may be applied (ADR-103 §3): the
+        question is the validator's own, so the answer has to be too.
+        """
+
+        return self._secret_is_configured(self.secrets.deepseek_api_key)
 
     def public_config(self) -> dict[str, Any]:
         """Return a logging-safe configuration snapshot.
@@ -2215,6 +2274,27 @@ def _assert_safe_pydantic_settings_version() -> None:
         )
 
 
+def _read_stored_switches(path: Path) -> dict[str, bool]:
+    """The console's switches, or nothing when the file does not exist.
+
+    Missing is the ordinary state of a fresh deployment. Anything else the
+    parser dislikes -- not JSON, an unknown switch, a non-boolean -- is a
+    startup error that names the file, because the only writer of this file
+    is atomic and strict, so a file it cannot read was edited by hand.
+    """
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ValueError(f"switches file {path} is unreadable: {exc}") from exc
+    try:
+        return parse_switches(raw, source=str(path))
+    except SwitchRefused as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def _read_stored_provider_key(path: Path) -> str | None:
     """The stored key, with the shell's own whitespace handling."""
     try:
@@ -2233,6 +2313,7 @@ def load_settings(
     env_file: str | Path | None = None,
     secrets_dir: str | Path | None = None,
     provider_key_file: Path | None = None,
+    switches_file: Path | None = None,
 ) -> Settings:
     """Load and validate settings once during process bootstrap.
 
@@ -2275,20 +2356,59 @@ def load_settings(
         else None
     )
 
+    # The fifth input, defaulting to "do not look" for the same reason as the
+    # fourth: a test or `agent-config-check` must not pick up choices somebody
+    # made on the console of whichever machine it happens to run on.
+    switches_from_file = (
+        _read_stored_switches(switches_file) if switches_file is not None else {}
+    )
+
     runtime_model_config = dict(Settings.model_config)
     runtime_model_config["toml_file"] = [str(path) for path in config_files]
 
-    class LoadedSettings(Settings):
-        model_config = runtime_model_config
-        # Read by `settings_customise_sources` off `settings_cls`. Per-call
-        # rather than a module global, which two loads in one process would
-        # share.
-        stored_provider_key: ClassVar[str | None] = stored_key
+    def _build(applied: dict[str, bool], held: dict[str, str]) -> Settings:
+        class LoadedSettings(Settings):
+            model_config = runtime_model_config
+            # Read by `settings_customise_sources` off `settings_cls`. Per-call
+            # rather than a module global, which two loads in one process would
+            # share.
+            stored_provider_key: ClassVar[str | None] = stored_key
+            # Three names that must differ from the function-level ones: a
+            # class body cannot see an enclosing function's variable of the
+            # same name it is assigning, so `x = dict(x)` here is a NameError.
+            stored_switches: ClassVar[dict[str, bool]] = dict(switches_from_file)
+            applied_switches: ClassVar[dict[str, bool]] = dict(applied)
+            held_switches: ClassVar[dict[str, str]] = dict(held)
 
-    loaded = LoadedSettings(
-        _env_file=selected_env_file,  # pyright: ignore[reportCallIssue]
-        _secrets_dir=selected_secrets_dir,  # pyright: ignore[reportCallIssue]
-    )
+        return LoadedSettings(
+            _env_file=selected_env_file,  # pyright: ignore[reportCallIssue]
+            _secrets_dir=selected_secrets_dir,  # pyright: ignore[reportCallIssue]
+        )
+
+    # ADR-103 §3. A stored "on" for a switch the validator refuses without a
+    # provider key is *held* rather than applied: the page that stores the
+    # switch lives inside this process, so a switch that could make the next
+    # start refuse would lock its own author out (the trap ADR-102 §3 kept the
+    # container launcher out of). Decided by building the settings once
+    # without the switch and asking that object whether it holds a real key --
+    # the real precedence, dotenv and mounted secrets included, rather than a
+    # restatement of it. A held switch stays stored, and the capability report
+    # says on the row why this start did not honour it.
+    applied = dict(switches_from_file)
+    held: dict[str, str] = {}
+    for spec in SWITCHES:
+        if not (spec.held_without_key and applied.get(spec.path) is True):
+            continue
+        probe = _build({k: v for k, v in applied.items() if k != spec.path}, held)
+        if not probe.provider_key_is_configured():
+            del applied[spec.path]
+            # A sentence the System page shows on the row, hence the Chinese
+            # punctuation RUF001 would otherwise flag in an identifier hunt.
+            held[spec.path] = (
+                "这次启动没有可用的 Provider Key，所以这个开关被搁置：它仍然存着，"  # noqa: RUF001
+                "存了 key 再重启就会生效。"
+            )
+    loaded = _build(applied, held)
     if (
         loaded.app.environment == "production"
         and selected_env_file is not None

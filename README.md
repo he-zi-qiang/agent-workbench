@@ -181,6 +181,12 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 和「这个进程正在用」分成两格说：模型客户端在组装期构造一次，所以刚存的 key 要等下次
 启动才生效，而一个说了「已保存」却什么也没变的开关，读起来就是坏了。
 
+运行状态那一格列出这台部署能做什么、缺什么（[ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)），
+并且把附加的零件分成两种：**开关型**的（联网搜索、任务分流、Code 会话、子代理委派）
+可以在行上拨，拨的是**下一次启动**，「这次启动」和「下次启动」分开写
+（[ADR-103](docs/adr/0103-an-optional-part-can-be-switched-from-the-console-for-the-next-start.md)）；
+**安装型**的（MCP 工具、沙箱、知识库检索）标「需要安装」，因为一个开关兑现不了它们。
+
 一次运行做了什么会折叠成阶段，展开能看到原始事件与 payload——**折叠只改称呼，不丢
 事件**。任务发生过委派时，时间线上方多出一个「参与的 Agent」面板：按谁派生谁的树列出
 每个运行、各自的状态与花费，选中一行就把下面的执行过程收窄到那一个运行。
@@ -196,7 +202,7 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 `/v1/search`、`/v1/approvals`、`/v1/artifacts`（含 `/preview` 与 `/pdf`）、
 `/v1/projects`、`/v1/code`、`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、
 `/v1/evaluation`、`/v1/settings`（模型密钥，ADR-101）、
-`/v1/system`（这台部署没装配起什么，ADR-102）、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
+`/v1/system`（这台部署没装配起什么，ADR-102；拨一个零件的开关，ADR-103）、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
 「HTTP 接口」页，它是从路由装饰器解析出来的，不是抄的。
 
 **命令行**：`agent-cli`（演示与提交）、`agent-api`、`agent-task-worker`、

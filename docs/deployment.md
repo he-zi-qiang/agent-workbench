@@ -148,10 +148,20 @@ keeps removing. That makes it the one switch Compose must not set: `true` in
 `compose.yaml` would leave a fresh stack unable to start, and the page that
 stores the key lives inside the process that refuses to start.
 
-So `docker/run-api-local.sh` decides it per start, by asking the package whether
-a usable key is present (`docker/provider_key_present.py`). Save a key on the
-settings page, restart the API, and both Chat's `web_search` and the Task
-envelope's `external_search` are there. The container prints which way it went.
+So `docker/run-api-local.sh` decides it per start, by asking the package
+(`docker/decide_web_search.py`) whether a usable key is present **and nobody
+has decided already**. Save a key on the settings page, restart the API, and
+both Chat's `web_search` and the Task envelope's `external_search` are there.
+The container prints which way it went.
+
+Since ADR-103 the System page can decide it too: every switch-shaped optional
+part (web search, triage, Code sessions, delegation) has a three-position
+switch there — on, off, or unspecified — and a choice is written to
+`switches.json` beside the key, for the *next* start. A stored choice takes the
+decision away from the launcher's probe either way; a stored "on" that meets no
+key is held rather than turned into a startup error, and the row says so.
+Parts that need a server or another image (MCP tools, the sandbox, retrieval)
+say "needs installing" instead of offering a switch nothing here could honour.
 
 Searches spend that key at the provider, bounded by `research.max_uses` per
 turn. To decline them, pass an explicit value — it is left alone, and only an
@@ -195,6 +205,7 @@ scripts\stack.cmd            :: build, start, wait for healthy, open the console
 scripts\stack.cmd down       :: stop and remove
 scripts\stack.cmd logs       :: follow
 scripts\stack.cmd status     :: what is running
+scripts\stack.cmd restart    :: restart the API and both Workers, nothing else
 ```
 
 Double-clicking it in Explorer works. It asks the machine for Docker Desktop
@@ -214,12 +225,15 @@ On the first run Chat has no provider yet. Open the identity button at the
 bottom of the navigation rail, choose **Model key**, save the key, then run:
 
 ```bat
-docker compose restart api
+scripts\stack.cmd restart
 ```
 
+That restarts the API and both Workers — the three processes that read
+configuration once — and leaves PostgreSQL, Qdrant and the collector running.
+The same command is what a flipped switch on the System page needs (ADR-103).
 Reload the console after the API is healthy. `scripts\stack.cmd down` leaves
-the named key volume intact; removing volumes explicitly removes the stored
-key as well.
+the named key volume intact, and with it `switches.json`; removing volumes
+explicitly removes both.
 
 `tests/deployment/test_compose.py` holds the launcher to all of that. As with
 the panel's Windows tests, those are **rule assertions checked on POSIX**, not
