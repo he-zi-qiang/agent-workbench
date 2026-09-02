@@ -27,6 +27,129 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-01（第六十七批）：一台部署要说得出自己没装配起什么
+
+Windows 上双击 `scripts\stack.cmd`，Docker 栈起来，控制台六页都在，Chat 能答，任务
+能提交能跑完。而这台部署里**没有联网搜索、没有 Word/web MCP、没有沙箱、没有知识库
+检索**，两个 Worker 是 `--demo` 合成 Worker。
+
+这些不是坏了，是启动那一刻就没装配。问题也不在于少了它们——问题在于**界面上没有
+任何一处说得出来**，于是一个人拿着一台工作正常的控制台去查 key、查网络、查模型。
+
+这一批把「说不出来」补上：[ADR-102](./adr/0102-a-deployment-says-what-it-could-not-assemble.md)。
+
+### 1. 事实早就在进程里了，缺的是读者
+
+`chat_unavailable`、`rag_unavailable`、`config.research`、
+`config.task.default_authorization_envelope`——每一条都是装配时就决定、并且已经记在
+`ApiDependencies` 上的字段。没有一个新的事实被造出来，新增的只有一条把它们答出去的
+路由。
+
+**那个「可用工具」也不是从来没被画过。** `components/stepDetail.ts` 早就把
+`RunStarted.tool_names` 画成一行「可用工具：无」。但它是**一次回合的事实**，藏在一步
+的详情里要展开才看得见，而且它只说「这次没有」，不说「这台部署从来没有」，更不说为
+什么、怎么才能有。这一批补的是那三样：部署级、带原因、带补法。
+
+### 2. `GET /v1/system/capabilities`：12 行，三个状态，两个层级
+
+- **三个状态，`unknown` 不是前两个的四舍五入。** `task.worker` 这一行答 `unknown`：
+  这个进程没有任何 Worker 上报通道，它分不出「没有 Worker」「`--demo` Worker」
+  「真实 Worker」。答成 `absent` 是替另一个进程作证，答成 `available`（因为 API 收得
+  下提交）更糟。新登记 **D-08** 记的就是这条缺口。
+- **两个层级。** `core` 是这个产品自称是什么，`optional` 是它还能被要求做什么。看见
+  「缺了七样」不能行动，看见「缺的里有两样是核心」才能。页面上只有核心缺失是红的。
+- **只说名字和状态，不说地址。** MCP 服务器只以工具名出现，永不带 endpoint。这条规则
+  写在模块 docstring 里，因为下一个往这里加行的人正是它会被破坏的地方。
+- **任务那几行读的是信封本身。** 直接取
+  `default_authorization_envelope.allowed_tools`——就是下一个任务提交时会被冻结进去的
+  那个元组，所以这一页不可能和任务真正拿到的授权走散。MCP 那一行是「信封减去内建
+  工具名」，钉住它的测试对着一个真实构造的信封写，而不是对着那张内建名单。
+
+`task.submit` 与 `task.worker` 分成两行，是同一个决定的两半：**能提交和有人跑是两个
+问题**，而这台 Docker 栈恰好只成立前一个。
+
+### 3. 有一个开关不能写进 compose
+
+`research.enabled` 没有 key 时是**启动错误**而不是降级启动。于是：
+
+> 把 `AW_RESEARCH__ENABLED=true` 写进 `compose.yaml`，一台全新的栈就起不来——它还没有
+> key，而**存 key 的那个页面就在这个拒绝启动的进程里**。
+
+所以改由 `docker/run-api-local.sh` 在进程启动前探一次
+（`bootstrap/provider_key.usable_key_present()`，占位串规则从 settings 导入而不是在
+shell 里重写一遍那张前缀表），探到才打开，探不到就明说「暂时关着，存了 key 再重启」。
+操作者的显式值原样保留，只有未设或空串才由脚本决定。
+
+`scripts/dev.sh demo-api` 对同一件事早就是同一个判断；这只是那个判断第一次进到容器里。
+
+### 4. 一个被证伪的注释
+
+第一版的注释写着「pydantic-settings 拒绝 `""` 作为 bool，所以必须先 unset」。
+**实测不是**：`AW_RESEARCH__ENABLED="" load_settings()` 正常加载，`research.enabled`
+读作 `False`。于是 `unset` 那行删掉了（它本来就不影响行为——探到 key 时 `export` 会
+覆盖它，探不到时 `False` 正是想要的），注释改成量出来的那句。
+
+### 5. 明确没做
+
+- **没加 Worker 上报通道。** 这一批只让「看不见」变成一句写出来的话。真做要一张
+  Worker 注册表，带自己的心跳、过期与能力快照，那是新的事实源，要它自己的 ADR。D-08。
+- **没把 Word/web MCP 装进 Compose 拓扑。** 三条硬理由写进了 `docs/deployment.md`：
+  两个 MCP 服务器的 `--host` 只接受 loopback 三个值（别的容器够不到）；真实 Worker
+  在没有 embedding extra 时只注册 `v2_general`，而 `workflow.graph_version` 出厂是
+  `v1`，只去掉 `--demo` 会让每个任务停在 `waiting_migration`；沙箱要能建容器，也就是
+  Docker socket，而这套拓扑的服务是 `read_only` + `cap_drop: ALL`。
+- **没给这份报告加写口。** 页面上没有任何开关能改它的任何一行。能力由配置和启动决定；
+  一个能从浏览器改能力的控制台，会让「这台部署是什么」不再有单一答案。
+- **没动 `/health/ready`。** 它仍然不返回原因——那是给编排器的探针。这条路由返回原因，
+  靠的是 ADR-101 已经写下的前提，不是推翻那一条。
+
+### 6. 证据：在真的 Compose 栈上跑，而不是只跑测试
+
+这一批的每条断言都在一套**隔离的** Compose 栈上验过：另一个 project 名（`aw-verify`）、
+另一个发布端口（8010）、自己的镜像标签，因此这台机器上原本跑着的那套栈一根手指没碰。
+
+**第一轮，全新的栈、没有 key**（12 行：1 可用、1 未知、10 缺失）：
+
+```
+available core     task.submit              提交任务
+unknown   core     task.worker              任务 Worker
+absent    core     chat.direct / chat.knowledge_base / knowledge.search
+absent    optional chat.web_search / code.sessions / task.external_search /
+                   task.mcp_tools / task.sandbox / task.delegation / task.triage
+```
+
+容器日志：`no provider key yet: chat web_search stays off (save one in 系统 > 模型密钥,
+then restart)`。
+
+**第二轮，存一把 key（验证用的假串）再重启 api**：日志变成
+`provider key present: chat web_search is on for this start`，三行同时翻成可用——
+`chat.direct`、`chat.web_search`、`task.external_search`。
+**`chat.knowledge_base` 与 `knowledge.search` 仍然缺失**，这正是想要的：那半边不是 key
+买得到的。
+
+**第三轮，负向对照**：key 在，`AW_RESEARCH__ENABLED=false` 显式给出。`chat.direct` 可用，
+另外两行回到缺失，且日志里**没有**那句 "provider key present"——脚本没有替操作者决定。
+
+**控制台是从这个镜像里出来的那份**：`/ui/#/system` 渲染出两组 12 行，核心缺失是红的
+（知识库问答那两行），附加缺失是灰的，`任务 Worker` 是问号。
+
+### 7. 真机跑出来的那个 bug
+
+第一轮就抓到一条：`chat.knowledge_base` 的原因写着
+`secrets.deepseek_api_key is not configured`。
+
+因为没有 key 时整个 Chat 装配失败，而装配把**模型**的错误也记进了 `rag_unavailable`。
+于是这一行对着一台**根本没有 embedding 运行时**的部署说「你缺的是 key」——
+而真相是「这个镜像没有检索运行时，有 key 也不会有 RAG」。
+
+**一个指错原因的诊断比没有诊断更糟**：它会把人送去给一个镜像跑不了的功能充值。
+改成先问检索、再问 Chat、最后才转发那句记录（`_rag_reason`），两条测试钉住，
+其中一条的名字就是 `test_a_keyless_stack_is_not_told_its_index_is_missing_because_of_the_key`。
+
+这条也是这批改动自己的论据：**装配时记下的句子不等于这一行该说的话**，而只有把它
+放到人眼前才会发现这件事。
+
+---
 ## 2026-08-31（第六十六批）：检查点终于有了迁移路径，第一条升级步就是它的第一个真实用户
 
 上一批查出 B-12——改 `TaskState` 里任何字段都会让在飞的 Task 无法恢复，而这条路

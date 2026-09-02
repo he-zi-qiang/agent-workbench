@@ -1073,6 +1073,29 @@ pre {
   font-size: 12px;
 }
 
+/* 状态三色，而且只有「核心且缺失」是红的。附加项缺失是一个选择，不是一处故障——
+   把两者画成同一种红，这一页就又变回了一份让人挨个去查的清单。 */
+.aw-capability-list li.is-available svg {
+  color: var(--aw-success);
+}
+
+.aw-capability-list li.is-absent.is-core svg {
+  color: var(--aw-danger);
+}
+
+.aw-capability-list li.is-absent.is-optional svg,
+.aw-capability-list li.is-unknown svg {
+  color: var(--aw-text-muted);
+}
+
+.aw-capability-state {
+  margin-left: 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+
 .aw-metric small {
   display: block;
   margin-top: 7px;

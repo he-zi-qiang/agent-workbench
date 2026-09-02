@@ -103,6 +103,87 @@ The API serves the browser console from the image at
 routes it calls. `agent-api` refuses to start when the directory is missing, so
 a broken image fails at startup rather than in somebody's browser.
 
+## What this stack can and cannot do, and where it says so
+
+**The stack says it itself now** (ADR-102). The console's 系统 → 运行状态 page —
+and the settings dialog's 运行状态 section — list every capability this API
+process assembled, every one it did not, why, and what would change it:
+
+```bash
+curl -s -H 'x-tenant-id: t' -H 'x-principal-id: p' \
+  http://127.0.0.1:8000/v1/system/capabilities
+```
+
+The rows are split into `core` — what this product claims to be — and `optional`,
+what it can also be asked to do. That split is the first thing to read: a
+missing optional row is a choice, a missing core row is a console with a piece
+of its front half removed. What a fresh Compose stack answers today:
+
+| Row | Tier | On this stack | Why |
+|---|---|---|---|
+| `chat.direct` | core | after a key is saved | the image ships no credential; the settings page writes one to a volume |
+| `chat.knowledge_base` | core | **absent** | the image deliberately omits the multi-gigabyte `embedding` extra, so no embedder loads |
+| `knowledge.search` | core | **absent** | same reason: retrieval needs the same runtime |
+| `task.submit` | core | yes | the Task service is not optional in any process that serves routes |
+| `task.worker` | core | **unknown** | no Worker reports itself to the control plane ([D-08](./known-gaps.md)); both containers here run `--demo` |
+| `chat.web_search` | optional | after a key is saved | see below — it follows the key rather than a static switch |
+| `task.external_search` | optional | follows the same switch | the envelope is frozen at submission from the API's own configuration |
+| `task.mcp_tools` | optional | **absent** | no `[[mcp.servers]]` is configured and no MCP server runs in this topology |
+| `task.sandbox` | optional | **absent** | `sandbox_run` needs a server that can create containers |
+| `code.sessions` | optional | **absent** | `code.enabled` is false in the shipped configuration |
+| `task.delegation` | optional | **absent** | `multi_agent.delegation_enabled` is false in the shipped configuration |
+| `task.triage` | optional | **absent** | `triage.enabled` is false until this deployment's model has been measured against `evals/triage` |
+
+**A `--demo` Worker and a real one look identical from the console**, which is
+the sharpest of these: a Task submitted here reaches `succeeded` without a
+single model call or MCP tool ever having existed. The capability page says so
+in words rather than leaving it to be discovered from a `RunStarted` event's
+empty `tool_names`.
+
+### Chat's web search follows the key, and is not set in this file
+
+`research.enabled` without a provider key is a *startup error* by design — it is
+the "configuration describes a system that does not exist" defect this project
+keeps removing. That makes it the one switch Compose must not set: `true` in
+`compose.yaml` would leave a fresh stack unable to start, and the page that
+stores the key lives inside the process that refuses to start.
+
+So `docker/run-api-local.sh` decides it per start, by asking the package whether
+a usable key is present (`docker/provider_key_present.py`). Save a key on the
+settings page, restart the API, and both Chat's `web_search` and the Task
+envelope's `external_search` are there. The container prints which way it went.
+
+Searches spend that key at the provider, bounded by `research.max_uses` per
+turn. To decline them, pass an explicit value — it is left alone, and only an
+unset or empty one is decided:
+
+```bash
+AW_RESEARCH__ENABLED=false docker compose --profile demo up -d --wait
+```
+
+### What it would take to get Word/web MCP and real Workers here
+
+Not shipped, and the reasons are worth having before anybody tries:
+
+* **The MCP servers bind loopback only.** `agent-word-mcp` and `agent-web-mcp`
+  take `--host` from a three-value choice list — `127.0.0.1`, `localhost`, `::1`
+  — so a server in its own container cannot be reached from the Worker's. The
+  two shapes that work are a sidecar process inside the Worker container (the
+  pattern `docker/run-api-local.sh` already uses for the proxy) or a proxy in
+  front of each server (the pattern that same file uses for the API). Neither is
+  a config change; both are a new launcher and a new profile.
+* **A real Worker needs the graph the image can register.** Without the
+  embedding extra a Worker registers `v2_general` only, and `workflow.graph_version`
+  ships as `v1` — so dropping `--demo` without also setting `v2_general` on
+  *both* processes parks every Task at `waiting_migration`, as the section above
+  describes. `v2_general`'s `work` node does declare the `research` and
+  `synthesis` dynamic tool sources, so MCP tools do reach it once they exist.
+* **The sandbox cannot join this topology as it stands.** `sandbox_run` runs each
+  call in a fresh `--network=none` container, so its server needs to create
+  containers — which means the Docker socket, inside a topology whose services
+  are deliberately `read_only` with `cap_drop: ALL`. That trade needs its own
+  decision, not a mount.
+
 ## Windows
 
 `scripts/dev.sh` is bash, and the native path it drives wants `uv`, a Python

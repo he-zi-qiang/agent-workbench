@@ -59,10 +59,10 @@ Qdrant、不需要 API key、不联网**——它读的是工作树本身。十�
 | 两条主链路 | Chat 与 Task 的流转，以及子代理委派 |
 | 工作流图 | 两张图的节点与边，**从 `_STATIC_EDGES` 与编译器的条件边目标表里读出来画的** |
 | 模块浏览器 | 320 个模块，可搜路径 / 摘要 / 符号名；每行的说明是该模块 docstring 的第一行 |
-| HTTP 接口 | 71 个端点，从路由装饰器解析 |
+| HTTP 接口 | 75 个端点，从路由装饰器解析 |
 | 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
 | 配置画像 | 十个 profile，以及 82 条写成单值 `Literal` 的不变量 |
-| 决策记录 | 87 份 ADR，可搜 |
+| 决策记录 | 89 份 ADR，可搜 |
 | 门禁与规模 | 测试目录、控制台 feature、进程入口 |
 
 **面板上每一个数字都是构建那一刻数出来的，没有一个是写在页面里的。** 这不是讲究：
@@ -191,11 +191,12 @@ React + TypeScript + Vite。`HashRouter`，八个页面组件全部 `lazy()` 加
 
 ### 1.5 接口与工具
 
-**HTTP API**（FastAPI，**71 个端点**）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`
+**HTTP API**（FastAPI，**75 个端点**）：`/v1/chat`（会话、消息、SSE）、`/v1/tasks`
 （提交、查询、时间线、运行树、取消、triage）、`/v1/knowledge-bases`、`/v1/uploads`、
 `/v1/search`、`/v1/approvals`、`/v1/artifacts`（含 `/preview` 与 `/pdf`）、
 `/v1/projects`、`/v1/code`、`/v1/usage`、`/v1/computer`（只读反代，ADR-095）、
-`/v1/evaluation`、`/v1/settings`（模型密钥，ADR-101）、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
+`/v1/evaluation`、`/v1/settings`（模型密钥，ADR-101）、
+`/v1/system`（这台部署没装配起什么，ADR-102）、`/health/live|ready`。逐条清单在[面板](#零先把整个项目看一遍)的
 「HTTP 接口」页，它是从路由装饰器解析出来的，不是抄的。
 
 **命令行**：`agent-cli`（演示与提交）、`agent-api`、`agent-task-worker`、
@@ -681,7 +682,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `config/` | 十个 profile |
 | `migrations/` | 32 个 Alembic 版本，单 head |
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
-| `docs/adr/` | 87 份决策记录，编号 0012–0100（0050 与 0053 预留未写） |
+| `docs/adr/` | 89 份决策记录，编号 0012–0102（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
 | `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`panel.cmd`（面板的 Windows 入口，ASCII + CRLF）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
@@ -803,7 +804,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 87 份实施期决策记录（0012–0100，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 89 份实施期决策记录（0012–0102，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

@@ -16,6 +16,7 @@ import type {
   CreateChatSessionResponse,
   CreateSessionResponse,
   CreateUploadResponse,
+  DeploymentCapabilitiesResponse,
   DirectoryListingResponse,
   DocumentPreview,
   DocumentVersion,
@@ -749,6 +750,12 @@ export async function getTaskCapabilities(
   identity: PrincipalIdentity,
 ): Promise<TaskCapabilitiesResponse> {
   return apiRequest(identity, "/v1/tasks/capabilities");
+}
+
+export async function getDeploymentCapabilities(
+  identity: PrincipalIdentity,
+): Promise<DeploymentCapabilitiesResponse> {
+  return apiRequest(identity, "/v1/system/capabilities");
 }
 
 export async function getTask(

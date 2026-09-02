@@ -59,6 +59,7 @@ from agent_workbench.apps.api.routes import (
     projects,
     search,
     settings,
+    system,
     tasks,
     uploads,
     usage,
@@ -271,6 +272,12 @@ def create_app(
     # settings page that vanished when no key was configured would be a page
     # nobody could reach in order to configure one.
     app.include_router(settings.router)
+    # Unconditional for the third time in three routes, and here the reason is
+    # the whole point of the route: the deployments least able to describe
+    # themselves are exactly the ones that failed to assemble something. A
+    # capability report mounted only where capabilities exist would go missing
+    # in the one process anybody needed it from (ADR-102).
+    app.include_router(system.router)
     if dependencies.serves_search:
         # Mounted without a model. Retrieval is the half of chat that needs
         # no provider, and a deployment that has indexed documents should be

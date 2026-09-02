@@ -496,6 +496,30 @@ export interface TaskCapabilitiesResponse {
   delegation: DelegationCapabilities;
 }
 
+/** 一条「这套部署能不能做这件事」的答案（ADR-102）。
+ *
+ * 三个状态，`unknown` 不是前两个的四舍五入：API 进程看不见另一个进程里的东西，
+ * 而「看不见」和「没有」在这一页上必须长得不一样。
+ */
+export interface DeploymentCapability {
+  /** 稳定的机器名，页面只按它分支，从不按 title。 */
+  id: string;
+  title: string;
+  /** `core` 是这个产品自称是什么，`optional` 是它还能被要求做什么。 */
+  tier: "core" | "optional";
+  state: "available" | "absent" | "unknown";
+  /** 可用时为空。缺失时是部署自己记下的那句话。 */
+  reason: string;
+  /** 该做什么才能补上；这一侧做不了什么时为空。 */
+  remedy: string;
+  /** 值得点名的名字（任务能调用的 MCP 工具），从不是地址。 */
+  detail: string[];
+}
+
+export interface DeploymentCapabilitiesResponse {
+  capabilities: DeploymentCapability[];
+}
+
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface ApprovalView {

@@ -67,7 +67,7 @@ Twelve sections:
 | The two request paths | Chat and Task, plus sub-agent delegation |
 | Workflow graphs | Both graphs' nodes and edges, **drawn from `_STATIC_EDGES` and the compiler's conditional-edge target lists** |
 | Module browser | 320 modules, searchable by path, summary or symbol name; each line's summary is the first line of that module's own docstring |
-| HTTP surface | 71 endpoints, parsed from the route decorators |
+| HTTP surface | 75 endpoints, parsed from the route decorators |
 | Tool catalogue | In-process and MCP tools, read from the constant that declares each name |
 | Config profiles | Ten profiles, and the 82 invariants written as single-valued `Literal`s |
 | Decision records | 87 ADRs, searchable |
@@ -241,12 +241,13 @@ consumed with `fetch` + `response.body.getReader()`; there is not one
 
 ### 1.5 Interfaces and tools
 
-**HTTP API** (FastAPI, **71 endpoints**): `/v1/chat` (sessions, messages, SSE),
+**HTTP API** (FastAPI, **75 endpoints**): `/v1/chat` (sessions, messages, SSE),
 `/v1/tasks` (submit, query, timeline, run tree, cancel, triage),
 `/v1/knowledge-bases`, `/v1/uploads`, `/v1/search`, `/v1/approvals`,
 `/v1/artifacts` (with `/preview` and `/pdf`), `/v1/projects`, `/v1/code`,
 `/v1/usage`, `/v1/computer` (a read-only reverse proxy, ADR-095),
-`/v1/evaluation`, `/v1/settings` (the model key, ADR-101), `/health/live|ready`. The itemized list is on the
+`/v1/evaluation`, `/v1/settings` (the model key, ADR-101),
+`/v1/system` (what this deployment did not assemble, ADR-102), `/health/live|ready`. The itemized list is on the
 [panel](#0-see-the-whole-thing-first)'s HTTP page, parsed from the route
 decorators rather than transcribed.
 
@@ -810,7 +811,7 @@ package.
 | `config/` | Ten profiles |
 | `migrations/` | 32 Alembic revisions, a single head |
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
-| `docs/adr/` | 87 decision records, numbered 0012–0100 (0050 and 0053 reserved but never written) |
+| `docs/adr/` | 89 decision records, numbered 0012–0102 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
 | `scripts/` | `dev.sh` (the one place that knows this machine; bash), `panel.cmd` (the panel's Windows entry point; ASCII + CRLF), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
@@ -903,8 +904,9 @@ evidence are in [the ten-minute version](docs/HIGHLIGHTS.md) (Chinese).
 These mirror [the ten-minute version, §2](docs/HIGHLIGHTS.md), which is the
 source of record. Four environments; they may be cited separately and **must not
 be added together** — the two backend environments have overlapping skip sets.
-The four rows were measured on `main`, **2026-08-31**, after batch 63. Five sets were
-taken that day and the differences mean something:
+The last row was measured **2026-09-01** on batch 67's tree; the rows above it on
+`main`, **2026-08-31**. Five sets were taken that day and the differences mean
+something:
 
 | Point | Real services | Offline | Five dirs | Frontend |
 |---|---|---|---|---|
@@ -915,9 +917,28 @@ taken that day and the differences mean something:
 | Batches 58–63 (the closing pass) | 4013 | 3225 | 1376 | 842 |
 | Batch 64 (the boundary guard) | 4017 | 3229 | 1376 | 842 |
 | Batch 65 (the last dead symbols) | 4020 | 3232 | 1376 | 842 |
-| Batch 66 (the checkpoint migration, this table) | **4032** | **3244** | **1376**\* | **842** |
+| Batch 66 (the checkpoint migration) | 4032 | 3244 | 1376\* | 842 |
+| Batch 67 (the capability report, this table) | **4088** | **3300** | **1398** | **857** |
 
-The last row's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
+**Half of the last row's +56 / +56 / +22 / +15 is not its own.** Twelve changes
+landed on `main` after this table was last refreshed (ADR-101's stored key, the
+Windows launcher, the architecture panel, four batches of frontend styling) without
+recording numbers, so that difference is theirs plus this batch's. **This batch's own
+share is +21 / +21 / +10 / +4**: ten in `tests/api/test_system_capabilities.py` (two
+of them pinning "a keyless stack is not told its index is missing because of the
+key"), eight in `tests/config/test_provider_key_probe.py` (four parameterized over
+the settings module's own placeholder-prefix table), three more in
+`tests/deployment/test_compose.py`, and `SystemPage.test.tsx` going from one test to
+five. The five-directory column gains only ten, because just the first of those files
+is in those directories.
+
+**The sentences below name batches rather than rows.** They used to say "the last
+row" and "the row before it", and both had drifted: when "the +3 after it" was
+written, the last row was batch 65, and two rows were added after it without that
+sentence moving. A record that refers to itself by ordinal turns one of its own
+sentences false every time a row is added.
+
+Batches 58–63's +20 / +18 / 0 / +14 account for themselves: six API-ceiling guards
 (`test_api_runtime_ceilings.py`), four config-leaf reader guards
 (`test_config_leaves_have_readers.py`), one asserting every ownership owner is an
 importable module, seven for the corpus and its digest
@@ -928,8 +949,9 @@ had **zero** coverage of `QUICK_DESTINATIONS` before it) and six for the evaluat
 page. **The five-directory row did not move**, because none of these batches added
 tests there — whether they pass is covered by the full-suite row above.
 
-The +4 is ADR-099's four allowlist guards; the +3 after it is the identifier
-vocabulary's three. The five-directory row was **re-measured both times**,
+Batch 64's +4 is ADR-099's four allowlist guards; batch 65's +3 is the identifier
+vocabulary's three; batch 66's +12 / +12 / 0 / 0 is carried by that batch's own
+record in `docs/status.md`. The five-directory row was **re-measured both times**,
 even though the new tests are not in it: those batches changed
 `src/` (two tool specs now import `WORKSPACE_WRITE_SCOPE`, and a duplicate terminal
 -state set was removed), and "no new tests there" is a different claim from "nothing
@@ -955,9 +977,18 @@ go stale together, and a stale provenance is the harder one to notice.
 
 | Environment | Result |
 |---|---|
-| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4032 passed / 12 skipped` |
-| Backend, no external services (local) | `3244 passed / 800 skipped` |
-| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1376 passed / 2 skipped`\* |
+| Backend, real PostgreSQL + Qdrant (local, idle machine) | `4088 passed / 12 skipped` (21m29s) |
+| Backend, no external services (local) | `3300 passed / 800 skipped` (1m37s) |
+| Backend, the CI service-backed directories (`contracts`/`persistence`/`api`/`vector`/`e2e`) | `1398 passed / 2 skipped` (20m34s)\* |
+| Frontend Vitest (local, 55 files) | `857 passed` |
+
+These four were measured **2026-09-01** on batch 67's tree, machine idle. The
+previous edition (2026-08-31, batch 66) was `4032 / 3244 / 1376 / 842`, and twelve
+changes that recorded no numbers sit between the two — the paragraph under the
+table above accounts for the difference.
+
+> The frontend row spent an edition outside this table, below the B-13 footnote,
+> where it rendered as a stray line rather than a row. It is back in the table.
 
 > \* That row went red twice on the night of 2026-08-31 and the cause is **not
 > established** — tracked as B-13. Both times it was the same five tests in
@@ -967,7 +998,10 @@ go stale together, and a stale provenance is the harder one to notice.
 > passing run; the asterisk is there because writing `1376 passed` unqualified
 > for a suite that flakes is exactly the kind of sentence this section exists
 > to stop.
-| Frontend Vitest (local, 53 files) | `842 passed` |
+>
+> **2026-09-01: two more runs on batch 67's tree, both green** (`1396`, `1398`,
+> about 20 minutes each). Still no reproduction and still no error text, so B-13
+> stays open — two passes are not a fix, they only rule out "red every time".
 
 **The first row used to carry 3 failures; it no longer does, and why they went
 is worth writing down.** All three were in
@@ -1003,7 +1037,7 @@ the class of error this document keeps having to correct.
 
 **The fourth row is a local number, not a CI one.** An older table
 cited a CI number there, because the node `24.14.0` pinned in `engines` cannot be
-installed on this machine. The 842 above is also a **local** run, but **a different node ran it**: the
+installed on this machine. The 857 above is also a **local** run, on the same node as the previous edition: the
 v24.8.0 kept in the repository's own `var/toolchain`, not the system `26.7.0`. The
 previous edition's note about `NODE_OPTIONS=--no-experimental-webstorage` therefore
 **does not describe this measurement** — it records the workaround needed when the
@@ -1014,14 +1048,14 @@ number and must not be cited as a CI one; Playwright was not run this
 time, and the old `4 passed` has been dropped rather than left in to pad the
 table.
 
-Static gates all pass: `ruff format --check .` (622 files), `ruff check .`,
+Static gates all pass: `ruff format --check .` (635 files), `ruff check .`,
 Pyright strict `0 errors / 0 warnings / 0 informations`, ESLint
 `--max-warnings 0`, `tsc -b`, production build. Config schema `1.19`; single
 Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
-Scale: 81,020 lines of Python across 321 files, 99,094 lines of tests across 259
-files, 51,166 lines of frontend TypeScript across 139 files; 87 files under
-`docs/adr/`, numbered 0012–0100 — **with gaps**: 0050 and 0053 were claimed by the
+Scale: 82,002 lines of Python across 324 files, 100,556 lines of tests across 265
+files, 51,976 lines of frontend TypeScript across 142 files; 89 files under
+`docs/adr/`, numbered 0012–0102 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -1071,7 +1105,7 @@ the one that cannot go stale.
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics (Chinese) |
 | [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it (Chinese) |
 | [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
-| [ADR index](docs/adr/) | 87 implementation-period decision records (0012–0100; 0050 and 0053 reserved but never written) |
+| [ADR index](docs/adr/) | 89 implementation-period decision records (0012–0102; 0050 and 0053 reserved but never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---
