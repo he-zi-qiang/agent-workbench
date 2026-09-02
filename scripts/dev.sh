@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # Run the workbench on this machine, against services on localhost.
 #
+#   scripts/dev.sh up               # THE ONE COMMAND: everything, in order
+#   scripts/dev.sh down             # stop what `up` started (containers stay)
+#   scripts/dev.sh status           # what is running, and where its log is
+#   scripts/dev.sh logs <name>      # follow one of those logs
+#
+# Everything below is a piece of `up`. Run them by hand to watch one part, or
+# when you want a shape `up` does not offer.
+#
 #   scripts/dev.sh services         # start PostgreSQL and Qdrant
 #   scripts/dev.sh migrate          # bring the schema to head
 #   scripts/dev.sh api              # HTTP control plane (add --without-chat to skip
@@ -149,7 +157,196 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# ---------------------------------------------------------------------------
+# `up`, and why one command exists on top of the twenty below it.
+#
+# The console needs six processes started in an order that is not guessable and
+# not forgiving: three MCP servers, then the API, then the ingestion worker,
+# then the Task worker. Two of those orderings are load-bearing rather than
+# tidy -- `demo-api` probes the sandbox server before it will start, and an MCP
+# catalogue is frozen once at Worker startup, so a server that comes up late
+# leaves a Worker that is healthy and missing the tool the profile exists for.
+#
+# Written down, that was six terminals and a paragraph of prose, and
+# `docs/running-locally.md` got it wrong: its console list named `word-server`
+# and `web-server` and never `sandbox-server`, so following it exactly made
+# `demo-api` fail on a probe the doc did not mention. Windows has had one
+# command since `scripts\stack.cmd`; this is the same idea for the native path,
+# and the ordering now lives in code that runs rather than in a list a reader
+# has to keep.
+#
+# It is a launcher, not a supervisor: nothing restarts a process that dies, and
+# `var/run/*.pid` is a best-effort record (a PID can be recycled). `status`
+# says what it sees, `logs` hands you the file, and both are honest about only
+# knowing what `up` itself started.
+RUN_DIR="${AW_RUN_DIR:-var/run}"
+LOG_DIR="${AW_LOG_DIR:-var/log}"
+# Mirrors `[api] port` in config.default.toml. It is not a flag on the process
+# -- the port comes from settings -- so this is only used to tell "already
+# serving" apart from "about to fail to bind", which is the difference between
+# a sentence and a stack trace.
+API_PORT="${AW_API_PORT:-8000}"
+
+_pidfile() { printf '%s/%s.pid' "$RUN_DIR" "$1"; }
+_logfile() { printf '%s/%s.log' "$LOG_DIR" "$1"; }
+
+# Alive means: we wrote a pid, something answers to it, **and what answers
+# looks like one of ours**. The last clause is not caution for its own sake.
+# A pid file outlives the process it names -- a machine that was rebooted, or a
+# `kill -9` that skipped the cleanup -- and pids get recycled, so without it
+# `down` would send TERM to whatever unrelated program inherited the number.
+# The first version of this function omitted the check and the comment beside
+# it claimed the protection anyway; the comment was wrong, which is worse than
+# the omission.
+#
+# Ownership is read off the command line, and it accepts two shapes because a
+# start passes through both: `bash …/dev.sh <arm>` for the moment before the
+# arm `exec`s, and `…/python -m agent_workbench.…` for every moment after.
+# A process of this project started by hand also matches, and that is the
+# honest limit of what a pid file plus `ps` can tell apart.
+_is_ours() {
+  local command
+  command=$(ps -p "$1" -o command= 2>/dev/null) || return 1
+  case "$command" in
+    *agent_workbench*|*dev.sh*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_running() {
+  local file pid
+  file=$(_pidfile "$1")
+  [ -f "$file" ] || return 1
+  pid=$(cat "$file" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  _is_ours "$pid"
+}
+
+_port_busy() {
+  # bash's own /dev/tcp rather than lsof or nc: both are optional on a stock
+  # macOS or a slim Linux, and this check must never be the thing that fails.
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || return 1
+  exec 3<&- 3>&-
+  return 0
+}
+
+_start() {
+  # _start <name> <dev.sh arm> [args...]
+  local name=$1
+  shift
+  if _running "$name"; then
+    echo "  $name already running (pid $(cat "$(_pidfile "$name")"))" >&2
+    return 0
+  fi
+  mkdir -p "$RUN_DIR" "$LOG_DIR"
+  # nohup, so closing the terminal that ran `up` does not take the stack with
+  # it. Appending rather than truncating: the previous run's failure is the
+  # thing you want when this one starts and dies.
+  nohup "$0" "$@" >>"$(_logfile "$name")" 2>&1 &
+  echo $! >"$(_pidfile "$name")"
+  echo "  $name started (pid $!, log $(_logfile "$name"))" >&2
+}
+
+_wait_http() {
+  # _wait_http <url> <deadline seconds> <label>
+  local url=$1 deadline=$2 label=$3 waited=0
+  while [ "$waited" -lt "$deadline" ]; do
+    if curl -sf -o /dev/null --max-time 2 "$url" 2>/dev/null; then
+      echo "  $label ready after ${waited}s" >&2
+      return 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  echo "  $label did not answer $url within ${deadline}s" >&2
+  return 1
+}
+
+_alive_after() {
+  # A process with no endpoint to poll: give it a moment and see if it is still
+  # there. Weaker than a readiness check and labelled as such -- what it
+  # actually catches is the common case, a process that exits on its first line
+  # because a dependency is missing.
+  local name=$1 seconds=$2
+  sleep "$seconds"
+  if _running "$name"; then
+    echo "  $name still up after ${seconds}s (no readiness endpoint; see its log)" >&2
+    return 0
+  fi
+  echo "  $name exited within ${seconds}s -- read $(_logfile "$name")" >&2
+  return 1
+}
+
+# The plan is computed in one place and printed by `--plan`, so "what will this
+# start" is answerable without starting it -- and so a test can assert the
+# ordering without a database, a key or a single real process.
+# Progress that reads like a modern installer rather than a wall of output.
+# Each step prints its name, then its result and how long it took, so a start
+# that takes four minutes -- most of it one model download -- shows which
+# minute belongs to what instead of appearing hung.
+STEP_INDEX=0
+STEP_TOTAL=0
+_step_begin() {
+  STEP_INDEX=$((STEP_INDEX + 1))
+  STEP_STARTED=$SECONDS
+  printf '  [%d/%d] %-16s %s\n' "$STEP_INDEX" "$STEP_TOTAL" "$1" "${2:-}" >&2
+}
+_step_end() {
+  printf '        %-16s %s (%ss)\n' "" "${1:-ok}" "$((SECONDS - STEP_STARTED))" >&2
+}
+
+# What `uv` does for a Python project, done once for this checkout: if the
+# environment a command needs is not there, build it rather than printing an
+# instruction. `up` calls this itself, so a fresh clone is one command.
+#
+# `.env` is created too, and it is not decoration: three DSNs are in
+# FORBIDDEN_TOML_PATHS and can only come from the environment, so a checkout
+# without `.env` fails the *first* line of the gate with three validation
+# errors that read like a broken clone. dev.sh exports its own DSNs and does
+# not need the file; `pytest` and `agent-config-check` do.
+_setup() {
+  local did=0
+  if [ ! -x "$PYTHON" ]; then
+    if ! command -v uv >/dev/null 2>&1; then
+      echo "setup: no uv on PATH and no $PYTHON." >&2
+      echo "       Install it: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+      return 1
+    fi
+    echo "        creating .venv with uv (first run downloads the dependency tree)" >&2
+    uv sync --frozen --group dev >&2 || return 1
+    did=1
+  fi
+  if [ ! -f .env ] && [ -f .env.example ]; then
+    cp .env.example .env
+    echo "        wrote .env from .env.example (the three DSNs in it are correct;" >&2
+    echo "        the provider key line is a placeholder and stays one)" >&2
+    did=1
+  fi
+  [ "$did" = 0 ] && echo "        already present" >&2
+  return 0
+}
+
+_plan() {
+  if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
+    PLAN_PROFILE="console"
+    PLAN_WHY="provider key present: the console profile (Word + web + sandbox + Chat)"
+    PLAN_STEPS=(word-server web-server sandbox-server demo-api ingest demo-worker)
+    # Not len(PLAN_STEPS): the three servers render as one step plus one probe
+    # step, and waiting for the API is a step of its own. Kept here beside the
+    # steps it counts, and asserted against the `_step_begin` calls the arm
+    # actually reaches -- the first version hand-counted it and said 6 for a
+    # path that runs 7, so the last line read `[7/6]`.
+    PLAN_STEP_TOTAL=9
+  else
+    PLAN_PROFILE="keyless"
+    PLAN_WHY="no provider key: search and Tasks without Chat, Worker on the demo graph"
+    PLAN_STEPS=(api ingest worker)
+    PLAN_STEP_TOTAL=7
+  fi
+}
 
 # Whether every host port a container publishes is bound to loopback.
 #
@@ -188,6 +385,197 @@ EOF
 }
 
 case "${1:-}" in
+up)
+  shift
+  plan_only=0
+  for argument in "$@"; do
+    case "$argument" in
+      --plan|--dry-run) plan_only=1 ;;
+      *) echo "up: unknown option $argument (only --plan)" >&2; exit 2 ;;
+    esac
+  done
+  _plan
+  if [ "$plan_only" = 1 ]; then
+    echo "profile: $PLAN_PROFILE"
+    echo "reason:  $PLAN_WHY"
+    echo "steps:   services migrate ${PLAN_STEPS[*]}"
+    echo "shown as: $PLAN_STEP_TOTAL steps"
+    exit 0
+  fi
+
+  # Refused rather than left to fail at bind time. The realistic collision is
+  # this project's own Compose stack, which publishes the same port on
+  # loopback -- and its failure, an API that exits on "address already in use"
+  # a minute into loading the embedding runtime, is read as a broken checkout
+  # far more often than as two stacks wanting one port.
+  if _port_busy "$API_PORT" && ! _running api && ! _running demo-api; then
+    echo "up: something is already serving 127.0.0.1:$API_PORT." >&2
+    echo "    The usual cause is this project's Compose stack. Check with:" >&2
+    echo "      docker compose --profile demo ps" >&2
+    echo "    Stop it (docker compose --profile demo down) or use that one." >&2
+    exit 2
+  fi
+
+  # One step per thing that can take time or fail, counted up front so the
+  # display can say 3/9 rather than leaving a reader to guess how much is left.
+  STEP_TOTAL=$PLAN_STEP_TOTAL
+  echo "" >&2
+  echo "  $PLAN_WHY" >&2
+  echo "" >&2
+
+  _step_begin setup "python env and .env, if this checkout has none"
+  _setup || exit 1
+  _step_end
+
+  # Containers and schema in the foreground: everything below is meaningless
+  # without them, and both are fast and idempotent.
+  _step_begin services "PostgreSQL 5433 · Qdrant 6333"
+  "$0" services >&2
+  _step_end
+
+  _step_begin migrate "schema to head"
+  "$0" migrate >/dev/null 2>&1 || { _step_end "failed"; echo "  migrate failed; rerun it alone to see why: scripts/dev.sh migrate" >&2; exit 1; }
+  _step_end
+
+  if [ "$PLAN_PROFILE" = "console" ]; then
+    # All three MCP servers before anything that reads a tool catalogue.
+    # `sandbox-server` is in this list because `demo-api` probes it and will
+    # not start without it -- the omission that made the written instructions
+    # unfollowable.
+    _step_begin mcp-servers "word 8765 · web 8767 · sandbox 8766"
+    _start word-server word-server
+    _start web-server web-server
+    _start sandbox-server sandbox-server
+    _step_end "started"
+
+    _step_begin mcp-probe "all three answer before anything freezes a catalogue"
+    for pair in "word-check:word-server" "web-check:web-server" "sandbox-check:sandbox-server"; do
+      if ! "$0" "${pair%%:*}" >/dev/null 2>&1; then
+        _step_end "failed"
+        echo "  ${pair%%:*} never passed -- read $(_logfile "${pair##*:}")" >&2
+        exit 1
+      fi
+    done
+    _step_end "all three healthy"
+
+    _step_begin api "demo-api: Word + web + sandbox + Chat"
+    _start demo-api demo-api
+    _step_end "started"
+  else
+    _step_begin api "api: search and Tasks, no Chat"
+    _start api api
+    _step_end "started"
+  fi
+
+  # The API loads the embedding runtime before it serves, which is where the
+  # minutes go. 300s rather than 60: measured cold on this machine at well
+  # over a minute, and a deadline shorter than the thing it waits for turns a
+  # slow start into a reported failure.
+  _step_begin api-ready "loading BGE-M3; a cold start is minutes, not seconds"
+  if ! _wait_http "http://127.0.0.1:$API_PORT/health/ready" 300 "API"; then
+    _step_end "failed"
+    echo "  the API never became ready -- read $(_logfile "$([ "$PLAN_PROFILE" = console ] && echo demo-api || echo api)")" >&2
+    exit 1
+  fi
+  _step_end
+
+  # Ingestion after the API, though nothing forces that order: it is the one
+  # process whose absence is invisible in the browser -- uploads sit in
+  # `processing` and the page cannot tell that apart from vectorizing -- so it
+  # is started here rather than left to be remembered.
+  _step_begin ingest "the one absence a browser cannot see"
+  _start ingest ingest
+  _alive_after ingest 5 || true
+  _step_end
+
+  _step_begin worker "Task worker"
+  if [ "$PLAN_PROFILE" = "console" ]; then
+    _start demo-worker demo-worker
+  else
+    _start worker worker
+  fi
+  _step_end "started"
+  echo "" >&2
+
+  echo "console  http://127.0.0.1:$API_PORT/ui/"
+  echo "status   scripts/dev.sh status"
+  echo "logs     scripts/dev.sh logs <name>"
+  echo "stop     scripts/dev.sh down"
+  if [ "$PLAN_PROFILE" = "keyless" ]; then
+    echo ""
+    echo "No provider key, so this deployment has no Chat: the route is not"
+    echo "registered rather than registered and failing. The System page lists"
+    echo "that alongside everything else it could not assemble. To add one,"
+    echo "put it in \$AW_KEY_FILE (default ~/.config/agent-workbench/key),"
+    echo "then: scripts/dev.sh down && scripts/dev.sh up"
+  fi
+  ;;
+
+down)
+  # Reverse start order, so a Worker is gone before the servers whose tools it
+  # holds. TERM and then wait: these processes have shutdown grace periods
+  # (the API drains, the Worker finishes or releases its lease), and KILL
+  # skips exactly the part that keeps a Task from being stranded.
+  #
+  # `_running` is what decides whether to signal at all, and it checks the pid
+  # still belongs to something of ours -- a stale file naming a recycled pid
+  # gets deleted here rather than turned into a TERM for a stranger.
+  stopped=0
+  for name in demo-worker worker ingest demo-api api sandbox-server web-server word-server; do
+    _running "$name" || { rm -f "$(_pidfile "$name")"; continue; }
+    pid=$(cat "$(_pidfile "$name")")
+    kill -TERM "$pid" 2>/dev/null || true
+    waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 30 ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "  $name ignored TERM for 30s; sending KILL" >&2
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -f "$(_pidfile "$name")"
+    echo "  $name stopped" >&2
+    stopped=$((stopped + 1))
+  done
+  [ "$stopped" = 0 ] && echo "  nothing that \`up\` started is running" >&2
+  # PostgreSQL and Qdrant keep running on purpose: they hold the local
+  # database, they cost nothing idle, and `docker rm` on them would take a
+  # developer's data with it. Stop them with `docker stop aw-postgres
+  # aw-qdrant` when you actually mean to.
+  echo "  containers left running (docker stop aw-postgres aw-qdrant to stop them)" >&2
+  ;;
+
+status)
+  printf '%-16s %-8s %-10s %s\n' NAME PID STATE LOG
+  for name in word-server web-server sandbox-server api demo-api ingest worker demo-worker; do
+    file=$(_pidfile "$name")
+    [ -f "$file" ] || continue
+    pid=$(cat "$file" 2>/dev/null || echo "-")
+    if _running "$name"; then state=running; else state=gone; fi
+    printf '%-16s %-8s %-10s %s\n' "$name" "$pid" "$state" "$(_logfile "$name")"
+  done
+  if _port_busy "$API_PORT"; then
+    echo ""
+    echo "127.0.0.1:$API_PORT is serving. If nothing above says running, that is"
+    echo "somebody else's stack -- most likely Compose."
+  fi
+  ;;
+
+logs)
+  if [ -z "${2:-}" ]; then
+    echo "usage: scripts/dev.sh logs <name>" >&2
+    # Only the names `up` manages. `var/log/` also collects whatever anybody
+    # ever redirected into it by hand, and offering those as choices makes
+    # this list a worse answer than no list.
+    for name in word-server web-server sandbox-server api demo-api ingest worker demo-worker; do
+      [ -f "$(_logfile "$name")" ] && printf '  %s\n' "$name" >&2
+    done
+    exit 2
+  fi
+  exec tail -f "$(_logfile "$2")"
+  ;;
+
 services)
   # 5433, not 5432: this machine runs its own PostgreSQL on the default port,
   # and a container published there is shadowed by it -- the symptom is a
