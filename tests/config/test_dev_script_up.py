@@ -308,3 +308,113 @@ def test_status_does_not_call_a_recycled_pid_running(tmp_path: Path) -> None:
     assert result.returncode == 0
     row = next(line for line in result.stdout.splitlines() if line.startswith("ingest"))
     assert "gone" in row, row
+
+
+def _plan_text(*flags: str, with_key: bool) -> str:
+    result = _run(
+        "up",
+        "--plan",
+        *flags,
+        environment={ENV_VAR: "contract-only-not-a-real-key"} if with_key else {},
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_the_plan_says_whether_this_start_will_have_retrieval() -> None:
+    """The absence this stack cannot show you afterwards.
+
+    A process with no `embedding` extra serves every route, answers
+    `/health/ready` 200, and comes up in five seconds instead of two minutes --
+    measured 2026-08-30. From a browser it is a fast, healthy console that
+    happens to retrieve nothing: an upload never becomes searchable, and the
+    only complaint is in the ingestion worker's log, which exits on its first
+    line.
+
+    `up` cannot fix that for you -- the extra is gigabytes -- but it must not
+    stay quiet about it, which is ADR-102's rule applied to a launcher.
+    """
+
+    line = next(
+        line
+        for line in _plan_text(with_key=True).splitlines()
+        if line.startswith("retrieval:")
+    )
+
+    assert "real BGE-M3" in line or "ABSENT" in line, line
+    if "ABSENT" in line:
+        assert "--with-retrieval" in line, "it must name the way out"
+
+
+def test_with_retrieval_is_an_accepted_flag_and_an_unknown_one_is_not() -> None:
+    """`--plan` with the flag must still start nothing, so this is safe to run.
+
+    The negative half matters as much: a typo that is silently ignored would
+    leave somebody believing they asked for the extra when they did not, and
+    they would find out four minutes later from an empty search.
+    """
+
+    assert _plan_text("--with-retrieval", with_key=True).startswith("profile:")
+
+    bad = _run("up", "--plan", "--with-retreival")
+    assert bad.returncode == 2
+    assert "unknown option" in bad.stderr
+    assert "--with-retrieval" in bad.stderr, "the refusal should spell it right"
+
+
+def test_the_readiness_wait_needs_no_curl() -> None:
+    """`curl` is not guaranteed on a minimal WSL or container image.
+
+    While the wait used it, its absence was indistinguishable from a broken
+    API: the loop never succeeded, spun for the full 300-second deadline, and
+    then reported that the API had not answered -- naming the wrong thing for
+    five minutes. It now goes through `docker/wait_for_http.py`, which is both
+    the helper the container topology already uses for Qdrant and a file that
+    imports nothing outside the standard library.
+    """
+
+    executable = [
+        line
+        for line in DEV_SCRIPT.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    calls_curl = [line for line in executable if "curl" in line]
+
+    # The one that may remain is the sentence telling somebody how to install
+    # uv, which is advice rather than something this script runs.
+    assert all("astral.sh/uv/install.sh" in line for line in calls_curl), calls_curl
+    assert any("docker/wait_for_http.py" in line for line in executable)
+
+    waiter = ROOT / "docker" / "wait_for_http.py"
+    source = waiter.read_text(encoding="utf-8")
+    for third_party in ("import httpx", "import requests", "import aiohttp"):
+        assert third_party not in source, third_party
+
+
+def test_up_separates_docker_absent_from_docker_not_running() -> None:
+    """Two failures that look alike and need different answers.
+
+    `scripts\\stack.cmd` has separated them since it was written, because only
+    the first is obvious from what Docker prints. Measured 2026-09-02 with the
+    engine stopped, before this: `up` reached the services step and emitted
+    Docker's own "Cannot connect to the Docker daemon" with nothing about which
+    step that was or what to do about it.
+
+    The WSL sentence is load-bearing on its own. There, `docker` can be absent
+    from the shell while Docker Desktop runs perfectly well on the Windows side,
+    and no amount of restarting it helps -- the fix is a checkbox in Settings >
+    Resources > WSL Integration, which nothing in Docker's own error mentions.
+    """
+
+    script = DEV_SCRIPT.read_text(encoding="utf-8")
+    body = script[script.index("_require_docker()") : script.index("_plan()")]
+
+    assert "command -v docker" in body, "the absent case must be probed by running it"
+    assert "docker info" in body, "a shim on PATH resolves and then fails"
+    assert "WSL Integration" in body
+    assert "not running" in body
+
+    # And it must be reached before anything is started, or the answer arrives
+    # after a container was already created.
+    arm = _up_arm()
+    assert arm.index("_require_docker") < arm.index('"$0" services')

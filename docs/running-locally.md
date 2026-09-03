@@ -14,15 +14,16 @@ scripts/dev.sh up
 ```text
   provider key present: the console profile (Word + web + sandbox + Chat)
 
-  [1/9] setup            python env and .env, if this checkout has none
-  [2/9] services         PostgreSQL 5433 · Qdrant 6333
-  [3/9] migrate          schema to head
-  [4/9] mcp-servers      word 8765 · web 8767 · sandbox 8766
-  [5/9] mcp-probe        all three answer before anything freezes a catalogue
-  [6/9] api              demo-api: Word + web + sandbox + Chat
-  [7/9] api-ready        loading BGE-M3; a cold start is minutes, not seconds
-  [8/9] ingest           the one absence a browser cannot see
-  [9/9] worker           Task worker
+  [1/10] setup           python env and .env, if this checkout has none
+  [2/10] retrieval       can this start build the real embedder?
+  [3/10] services        PostgreSQL 5433 · Qdrant 6333
+  [4/10] migrate         schema to head
+  [5/10] mcp-servers     word 8765 · web 8767 · sandbox 8766
+  [6/10] mcp-probe       all three answer before anything freezes a catalogue
+  [7/10] api             demo-api: Word + web + sandbox + Chat
+  [8/10] api-ready       loading BGE-M3; a cold start is minutes, not seconds
+  [9/10] ingest          the one absence a browser cannot see
+  [10/10] worker         Task worker
 
 console  http://127.0.0.1:8000/ui/
 status   scripts/dev.sh status
@@ -30,8 +31,19 @@ logs     scripts/dev.sh logs <name>
 stop     scripts/dev.sh down
 ```
 
-第 7 步是那几分钟的去处：API 要先把 BGE-M3 读进来才开始服务。把用时逐步打出来，就是
-为了让「它是不是卡住了」有一个不用猜的答案。
+第 8 步是那几分钟的去处：API 要先把 BGE-M3 读进来才开始服务。把用时逐步打出来，就是
+为了让「它是不是卡住了」有一个不用猜的答案。（没有 key 时少掉 MCP 那两步，是 8 步。）
+
+**要知识库检索得多一个字。** `up` 不会替你下载几个 GB：
+
+```bash
+scripts/dev.sh up --with-retrieval
+```
+
+不加这个字也能起，但那台部署**没有检索**——而这正是从浏览器里看不出来的那种缺失：
+路由全在、`/health/ready` 回 200、起动还更快（5 秒对两分钟，2026-08-30 实测），只是
+上传永远变不成可检索，而摄取 worker 在第一行就退出。所以 `up` 在开始之前先探一次并
+把结论说出来（第 2 步），`--plan` 也会说。
 
 配套的三条：
 
@@ -46,6 +58,13 @@ stop     scripts/dev.sh down
 ```bash
 scripts/dev.sh up --plan
 ```
+
+**Docker 没起来时它说人话。** `up` 起任何东西之前先分开问两件事：`docker` 在不在
+PATH 上、引擎在不在跑——这两种失败长得像，答案却完全不同，而只有前一种能从 Docker
+自己的报错里看出来。WSL 上还有第三种：Docker Desktop 在 Windows 那边跑得好好的，
+而这个发行版没在 Settings > Resources > WSL Integration 里打开，于是 `docker` 根本
+不在这个 shell 的 PATH 上——重启 Docker Desktop 一百次也没用。这三句话各自指向不同的
+动作，所以分开说。
 
 ## 顺序不是整齐，是必须
 
@@ -82,7 +101,7 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 | | Compose（`scripts\stack.cmd` / `docker compose`） | 原生（`scripts/dev.sh up`） |
 |---|---|---|
 | 机器要装什么 | 只要 Docker Desktop | Python 3.12 + `uv`（`up` 自己调 uv 装） |
-| 知识库检索 | **没有**——镜像 `uv sync` 不带 `embedding` extra | 有，真实 BGE-M3 + 重排 |
+| 知识库检索 | **没有**——镜像 `uv sync` 不带 `embedding` extra | 有，真实 BGE-M3 + 重排，但要 `up --with-retrieval` |
 | MCP 工具（Word / web / 沙箱） | **没有**——拓扑里没有这三台 server | 三台都起，且在 Worker 之前 |
 | Task Worker | 两个都是 `--demo` 合成 Worker | 真实图 |
 | 改一行代码要多久 | 重新 `docker build`，分钟级 | 重启一个进程，秒级 |

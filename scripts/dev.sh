@@ -2,6 +2,7 @@
 # Run the workbench on this machine, against services on localhost.
 #
 #   scripts/dev.sh up               # THE ONE COMMAND: everything, in order
+#   scripts/dev.sh up --with-retrieval   # ...including the real embedder (GBs)
 #   scripts/dev.sh down             # stop what `up` started (containers stay)
 #   scripts/dev.sh status           # what is running, and where its log is
 #   scripts/dev.sh logs <name>      # follow one of those logs
@@ -157,7 +158,7 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---------------------------------------------------------------------------
 # `up`, and why one command exists on top of the twenty below it.
@@ -252,15 +253,26 @@ _start() {
 
 _wait_http() {
   # _wait_http <url> <deadline seconds> <label>
-  local url=$1 deadline=$2 label=$3 waited=0
-  while [ "$waited" -lt "$deadline" ]; do
-    if curl -sf -o /dev/null --max-time 2 "$url" 2>/dev/null; then
-      echo "  $label ready after ${waited}s" >&2
-      return 0
-    fi
-    sleep 2
-    waited=$((waited + 2))
-  done
+  #
+  # Through `docker/wait_for_http.py` rather than `curl`, for two reasons. The
+  # first is reuse: that file is how the container topology waits for Qdrant,
+  # and a second implementation of "poll until 2xx or give up" would be a
+  # second set of semantics to keep in step -- the argument ADR-104 made about
+  # the web-search probe, applied again.
+  #
+  # The second is that `curl` is not guaranteed. A minimal WSL or container
+  # image may not have it, and the failure was indistinguishable from a broken
+  # API: with `curl` absent the loop simply never succeeded, spun for the full
+  # deadline, and then reported that the API had not answered -- naming the
+  # wrong thing for five minutes. The interpreter this needs is the one
+  # `_setup` has already guaranteed, and it imports nothing outside the
+  # standard library.
+  local url=$1 deadline=$2 label=$3
+  if WAIT_FOR_HTTP_URL="$url" WAIT_FOR_HTTP_DEADLINE_SECONDS="$deadline" \
+    "$PYTHON" docker/wait_for_http.py >/dev/null 2>&1; then
+    echo "  $label answered $url" >&2
+    return 0
+  fi
   echo "  $label did not answer $url within ${deadline}s" >&2
   return 1
 }
@@ -278,6 +290,38 @@ _alive_after() {
   fi
   echo "  $name exited within ${seconds}s -- read $(_logfile "$name")" >&2
   return 1
+}
+
+# Docker absent and Docker installed-but-not-running are two failures that look
+# alike from the outside and need different answers, and only the first is
+# obvious from what Docker prints. `scripts\stack.cmd` has separated them since
+# it was written; this is the same separation for the path that runs here.
+#
+# Measured 2026-09-02 with the engine stopped: `up` reached the services step
+# and printed Docker's own line -- "Cannot connect to the Docker daemon ... Is
+# the docker daemon running?" -- and nothing about which step that was or what
+# to do. It exited 1 and left no pid files, so the state was clean; the message
+# was the whole problem.
+#
+# The WSL case gets its own sentence because it is the one where `docker` is
+# genuinely absent from *this* shell while Docker Desktop is running perfectly
+# well on the Windows side, and no amount of restarting it helps.
+_require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "        no docker on PATH." >&2
+    echo "        Everything below needs it: PostgreSQL and Qdrant are containers," >&2
+    echo "        and the sandbox server creates one per call." >&2
+    echo "        On WSL this usually means Docker Desktop is running on Windows" >&2
+    echo "        while this distro is switched off under Settings > Resources >" >&2
+    echo "        WSL Integration. Turn it on there, then reopen this shell." >&2
+    return 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "        docker is on PATH but the engine is not running." >&2
+    echo "        Start Docker Desktop, wait until its whale stops animating," >&2
+    echo "        then run this again." >&2
+    return 1
+  fi
 }
 
 # The plan is computed in one place and printed by `--plan`, so "what will this
@@ -307,6 +351,15 @@ _step_end() {
 # without `.env` fails the *first* line of the gate with three validation
 # errors that read like a broken clone. dev.sh exports its own DSNs and does
 # not need the file; `pytest` and `agent-config-check` do.
+# Whether this interpreter can build the real embedder, asked the way the
+# application asks it: `adapters/embedding/bge.py` imports `sentence_transformers`
+# and turns the ImportError into `EmbeddingBackendUnavailableError`. Importing
+# the same name is the only probe that cannot disagree with it.
+_has_embedding_extra() {
+  [ -x "$PYTHON" ] || return 1
+  "$PYTHON" -c "import sentence_transformers" >/dev/null 2>&1
+}
+
 _setup() {
   local did=0
   if [ ! -x "$PYTHON" ]; then
@@ -316,7 +369,21 @@ _setup() {
       return 1
     fi
     echo "        creating .venv with uv (first run downloads the dependency tree)" >&2
-    uv sync --frozen --group dev >&2 || return 1
+    if [ "${WITH_RETRIEVAL:-0}" = 1 ]; then
+      echo "        including the embedding extra: several GB of torch and weights" >&2
+      uv sync --frozen --group dev --extra embedding >&2 || return 1
+    else
+      uv sync --frozen --group dev >&2 || return 1
+    fi
+    did=1
+  fi
+  # Asked for retrieval on a venv that already exists and does not have it.
+  # Adding to an existing environment rather than rebuilding: the weights live
+  # in ~/.cache/huggingface and torch in uv's cache, so this is usually a
+  # minute rather than a download.
+  if [ "${WITH_RETRIEVAL:-0}" = 1 ] && ! _has_embedding_extra; then
+    echo "        adding the embedding extra to the existing .venv" >&2
+    uv sync --frozen --group dev --extra embedding >&2 || return 1
     did=1
   fi
   if [ ! -f .env ] && [ -f .env.example ]; then
@@ -339,12 +406,12 @@ _plan() {
     # steps it counts, and asserted against the `_step_begin` calls the arm
     # actually reaches -- the first version hand-counted it and said 6 for a
     # path that runs 7, so the last line read `[7/6]`.
-    PLAN_STEP_TOTAL=9
+    PLAN_STEP_TOTAL=10
   else
     PLAN_PROFILE="keyless"
     PLAN_WHY="no provider key: search and Tasks without Chat, Worker on the demo graph"
     PLAN_STEPS=(api ingest worker)
-    PLAN_STEP_TOTAL=7
+    PLAN_STEP_TOTAL=8
   fi
 }
 
@@ -388,10 +455,12 @@ case "${1:-}" in
 up)
   shift
   plan_only=0
+  WITH_RETRIEVAL=0
   for argument in "$@"; do
     case "$argument" in
       --plan|--dry-run) plan_only=1 ;;
-      *) echo "up: unknown option $argument (only --plan)" >&2; exit 2 ;;
+      --with-retrieval) WITH_RETRIEVAL=1 ;;
+      *) echo "up: unknown option $argument (--plan, --with-retrieval)" >&2; exit 2 ;;
     esac
   done
   _plan
@@ -400,6 +469,11 @@ up)
     echo "reason:  $PLAN_WHY"
     echo "steps:   services migrate ${PLAN_STEPS[*]}"
     echo "shown as: $PLAN_STEP_TOTAL steps"
+    if _has_embedding_extra; then
+      echo "retrieval: real BGE-M3 (the embedding extra is installed)"
+    else
+      echo "retrieval: ABSENT -- no embedding extra; add --with-retrieval to install it"
+    fi
     exit 0
   fi
 
@@ -427,9 +501,35 @@ up)
   _setup || exit 1
   _step_end
 
+  # Said here, before four minutes of startup, because the absence it reports
+  # is the one this stack cannot show you afterwards. A process with no real
+  # embedder serves every route, answers /health/ready 200, and comes up in
+  # five seconds instead of two minutes -- measured 2026-08-30. From outside it
+  # is a fast, healthy console that happens to retrieve nothing.
+  #
+  # It is a report, not a repair: the extra is gigabytes, and installing it
+  # because somebody typed `up` would be deciding for them. `--with-retrieval`
+  # is how they decide.
+  _step_begin retrieval "can this start build the real embedder?"
+  if _has_embedding_extra; then
+    _step_end "yes: BGE-M3 dense + sparse and the reranker"
+  else
+    _step_end "NO -- knowledge-base retrieval will be absent"
+    echo "        The 'embedding' extra is not in $PYTHON. This start will serve" >&2
+    echo "        Chat and Tasks, and /health/ready will say 200, but an upload" >&2
+    echo "        will never become searchable and the ingestion worker exits on" >&2
+    echo "        its first line. Nothing in the browser says so." >&2
+    echo "        To get it:  scripts/dev.sh down && scripts/dev.sh up --with-retrieval" >&2
+    echo "        Cost: several GB, and one retrieval process wants ~12 GB of RAM." >&2
+  fi
+
   # Containers and schema in the foreground: everything below is meaningless
   # without them, and both are fast and idempotent.
   _step_begin services "PostgreSQL 5433 · Qdrant 6333"
+  if ! _require_docker; then
+    _step_end "no container runtime"
+    exit 1
+  fi
   "$0" services >&2
   _step_end
 
