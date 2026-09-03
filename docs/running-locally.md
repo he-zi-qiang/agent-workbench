@@ -14,15 +14,16 @@ scripts/dev.sh up
 ```text
   provider key present: the console profile (Word + web + sandbox + Chat)
 
-  [1/9] setup            python env and .env, if this checkout has none
-  [2/9] services         PostgreSQL 5433 · Qdrant 6333
-  [3/9] migrate          schema to head
-  [4/9] mcp-servers      word 8765 · web 8767 · sandbox 8766
-  [5/9] mcp-probe        all three answer before anything freezes a catalogue
-  [6/9] api              demo-api: Word + web + sandbox + Chat
-  [7/9] api-ready        loading BGE-M3; a cold start is minutes, not seconds
-  [8/9] ingest           the one absence a browser cannot see
-  [9/9] worker           Task worker
+  [1/10] setup           python env and .env, if this checkout has none
+  [2/10] retrieval       can this start build the real embedder?
+  [3/10] services        PostgreSQL 5433 · Qdrant 6333
+  [4/10] migrate         schema to head
+  [5/10] mcp-servers     word 8765 · web 8767 · sandbox 8766
+  [6/10] mcp-probe       all three answer before anything freezes a catalogue
+  [7/10] api             demo-api: Word + web + sandbox + Chat
+  [8/10] api-ready       loading BGE-M3; a cold start is minutes, not seconds
+  [9/10] ingest          the one absence a browser cannot see
+  [10/10] worker         Task worker
 
 console  http://127.0.0.1:8000/ui/
 status   scripts/dev.sh status
@@ -30,8 +31,8 @@ logs     scripts/dev.sh logs <name>
 stop     scripts/dev.sh down
 ```
 
-第 7 步是那几分钟的去处：API 要先把 BGE-M3 读进来才开始服务。把用时逐步打出来，就是
-为了让「它是不是卡住了」有一个不用猜的答案。
+第 8 步是那几分钟的去处：API 要先把 BGE-M3 读进来才开始服务。把用时逐步打出来，就是
+为了让「它是不是卡住了」有一个不用猜的答案。（没有 key 时少掉 MCP 那两步，是 8 步。）
 
 **要知识库检索得多一个字。** `up` 不会替你下载几个 GB：
 
