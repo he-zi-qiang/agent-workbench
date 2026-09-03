@@ -66,6 +66,67 @@ if /i "%~1"=="logs"   goto :logs
 if /i "%~1"=="status" goto :status
 if /i "%~1"=="restart" goto :restart
 
+rem  Memory, asked before the build rather than discovered during it, and
+rem  only on the path that builds. `down`, `logs`, `status` and `restart` have
+rem  already branched away above.
+rem
+rem  This stack runs four processes that each load the full retrieval model
+rem  set: the API, both Task Workers and the ingestion worker. One measured
+rem  number exists for that, and it is for ONE process on the native path --
+rem  about 12 GB of available memory, of which about 6.7 GB is the three model
+rem  files themselves (2026-07-31, docs/running-locally.md). The floors below
+rem  are arithmetic on that number rather than a second measurement:
+rem
+rem      4 x 6.7 GB = about 29 GB   just to hold the weights. Under this the
+rem                                 stack cannot work, it can only page.
+rem      4 x 12  GB = about 51 GB   the per-process figure, four times.
+rem
+rem  Under the hard floor this stops, and stopping is the kinder answer: the
+rem  alternative is tens of minutes of build followed by `up --wait` timing
+rem  out in swap, which reads as "this project does not run" rather than as
+rem  "this machine was not given enough memory". Docker Desktop hands the WSL 2
+rem  VM about half of physical RAM by default, so this is usually a setting
+rem  rather than a hardware limit.
+rem
+rem  Compared by slicing digits off the byte count, not by `set /a`: MemTotal
+rem  is bytes, and cmd's arithmetic is 32-bit signed, so anything above about
+rem  2.1 GB overflows. Dropping the last nine digits is an integer divide by
+rem  1e9 that cannot overflow -- so the numbers here and below are decimal GB,
+rem  which is why they read 29 and 51 rather than 27 and 48.
+set "MEMGB="
+for /f "tokens=*" %%m in ('docker info --format "{{.MemTotal}}" 2^>nul') do set "MEMBYTES=%%m"
+if defined MEMBYTES set "MEMGB=%MEMBYTES:~0,-9%"
+if not defined MEMGB set "MEMGB=0"
+if "%MEMGB%"=="" set "MEMGB=0"
+
+if %MEMGB% GEQ 51 goto :memory_ok
+if %MEMGB% GEQ 29 goto :memory_tight
+
+echo stack: Docker has about %MEMGB% GB of memory. This stack needs about 29 GB 1>&2
+echo        just to hold the retrieval weights of its four model-loading 1>&2
+echo        processes, so it would come up and then page instead of working. 1>&2
+echo        Stopping here rather than after the build. 1>&2
+echo. 1>&2
+echo        Docker Desktop, Settings, Resources, Memory. On Windows that 1>&2
+echo        slider is bounded by what WSL 2 may take, set in .wslconfig in 1>&2
+echo        your user folder. See docs/windows-quickstart.md. 1>&2
+echo. 1>&2
+echo        To build and start it anyway: scripts\stack.cmd anyway 1>&2
+if /i not "%~1"=="anyway" (
+    set "RC=1"
+    goto :popped
+)
+echo        Proceeding because you asked. 1>&2
+goto :memory_ok
+
+:memory_tight
+echo Docker has about %MEMGB% GB of memory. Four processes here each load the
+echo retrieval models, and the one measured figure is about 12 GB per process,
+echo so expect this to be slow. Ingestion is usually what suffers first.
+echo.
+
+:memory_ok
+
 rem  Build with `docker build`, then `compose up` WITHOUT --build. That split
 rem  looks redundant and is not.
 rem
@@ -91,7 +152,9 @@ rem  against the same directory. A Windows checkout under a path like
 rem  D:\projects\... is fine either way, and one under D:\Chinese-name\... is
 rem  the common case here, so the two-step is unconditional rather than
 rem  conditional on a check that would have to guess at the same rule.
-echo Building the image. First run pulls Node 24 and Python 3.12, so expect minutes.
+echo Building the image. First run pulls Node 24, Python 3.12 and the
+echo retrieval runtime, then downloads about 6.7 GB of model weights into a
+echo named volume. Expect tens of minutes, once.
 docker build -t agent-workbench:local .
 if errorlevel 1 (
     echo stack: image build failed -- see the output above. 1>&2
@@ -124,16 +187,25 @@ echo.
 echo   Console  http://127.0.0.1:8000/ui/
 echo   Stop     scripts\stack.cmd down
 echo.
-rem  Said at the one moment somebody is looking at this window. This stack
-rem  assembles Direct Chat and Tasks and *not* knowledge-base retrieval, web
-rem  search, MCP tools or the sandbox -- and until ADR-102 nothing on screen
-rem  said so, which is how a console that was working as configured came to be
-rem  read as a broken provider key. The page names every absence and what it
-rem  would take to fix it; this line is only the pointer to it.
-echo   Not everything is on: this image has no embedding runtime and no MCP
-echo   servers. The console's System page lists what this stack did or did not
-echo   assemble, why, and what to change. Optional parts that are only a
-echo   switch can be flipped there; then: scripts\stack.cmd restart
+rem  Said at the one moment somebody is looking at this window.
+rem
+rem  This list used to be longer: before the image carried the embedding extra
+rem  and the Workers started their own MCP servers, the honest sentence here
+rem  was "no embedding runtime and no MCP servers". What is left is what a
+rem  Linux container topology genuinely cannot assemble, plus the one thing
+rem  nobody has typed yet -- and the second is the one that looks like neither
+rem  a bug nor an absence, because a synthetic Worker takes a Task all the way
+rem  to succeeded without ever calling a model or a tool.
+rem
+rem  Kept as a pointer rather than a full account. The System page names every
+rem  absence and its remedy (ADR-102); this window only has to stop somebody
+rem  from reading silence as completeness.
+echo   Not everything is on. Without a provider key the Task Workers run
+echo   SYNTHETIC handlers: tasks reach succeeded with no model call and no tool
+echo   call. Sandbox execution and computer use are absent from any container
+echo   topology. The console's System page lists what this stack did and did
+echo   not assemble, why, and what to change. Save a key there, flip what you
+echo   want, then: scripts\stack.cmd restart
 echo.
 rem  /ui/ rather than the bare root. The root answers 307 to the same place, so
 rem  either works today. Naming the real path means this line does not depend

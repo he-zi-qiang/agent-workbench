@@ -5,6 +5,15 @@ x-app-environment: &app-environment
   AW_DATABASE__GUARD_DSN: postgresql+asyncpg://agent@postgres:5432/agent_workbench
   AW_DATABASE__LISTEN_DSN: postgresql+asyncpg://agent@postgres:5432/agent_workbench
   AW_ARTIFACT_STORE__LOCAL_ROOT: /var/lib/agent-workbench/artifacts
+  # Until this line existed, no service here named a profile, so the whole
+  # stack ran `config.default.toml` -- and the shipped defaults have no MCP
+  # servers, no triage, no Code and no delegation. Nothing had chosen that;
+  # it was what happens when nobody chooses. The profile is what chose.
+  AW_CONFIG_FILE: /app/config/config.compose-local.toml
+  # Every process that retrieves loads BGE-M3 dense, BGE-M3 sparse and the
+  # reranker from this directory. It is a named volume rather than a layer in
+  # the image (see `weights-init`) and it must be outside the read-only root.
+  HF_HOME: /var/lib/agent-workbench/hf-cache
 
 x-app-hardening: &app-hardening
   read_only: true
@@ -99,6 +108,37 @@ services:
     restart: "no"
     <<: *app-hardening
 
+  # The weights, fetched once, before anything that would need them.
+  #
+  # Not an optimisation. The sparse arm checks the cache for BGE-M3's trained
+  # lexical head *before* it builds the model and raises when it is missing,
+  # because FlagEmbedding's own behaviour is to substitute a random projection
+  # and carry on -- vectors of the right width that mean nothing. So a cold
+  # cache does not make the first start slow, it makes four processes exit at
+  # once. `docker/fetch_weights.py` carries the rest of the reasoning.
+  #
+  # Also not baked into the image: several gigabytes of weights in a layer make
+  # every rebuild pull them again, and the build machine would have to reach
+  # Hugging Face even when a warm volume is sitting right there.
+  #
+  # `HF_ENDPOINT` is huggingface_hub's own variable and is passed through
+  # unset. Pointing every deployment's weights at a third-party mirror is a
+  # supply-chain decision that belongs to whoever runs the stack, not to this
+  # file; `docs/windows-quickstart.md` names the one that makes this finish on
+  # a mainland-China connection, as a line somebody types on purpose.
+  weights-init:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["python", "/app/docker/fetch_weights.py"]
+    environment:
+      <<: *app-environment
+      HF_ENDPOINT: "${HF_ENDPOINT-}"
+    volumes:
+      - hf_cache:/var/lib/agent-workbench/hf-cache
+    restart: "no"
+    <<: *app-hardening
+
   migrate:
     image: agent-workbench:local
     build:
@@ -170,6 +210,8 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
+      weights-init:
+        condition: service_completed_successfully
     ports:
       # The only host-published port is loopback. The app itself remains
       # container-loopback-only; the local proxy exists solely for Docker NAT.
@@ -177,6 +219,7 @@ services:
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
+      - hf_cache:/var/lib/agent-workbench/hf-cache
     healthcheck:
       test:
         [
@@ -194,7 +237,11 @@ services:
   task-worker:
     image: agent-workbench:local
     profiles: ["demo"]
-    command: ["agent-task-worker", "--demo"]
+    # Not `agent-task-worker` directly: this Worker's MCP tools live in two
+    # loopback servers that have to be up and answering *before* it freezes its
+    # tool catalogue, and whether it may run real handlers depends on a key
+    # that may not exist yet. Both decisions are in the script.
+    command: ["sh", "/app/docker/run-task-worker-local.sh"]
     environment:
       <<: *app-environment
       # The same key file and, beside it, the same switches file the API reads
@@ -211,9 +258,12 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
+      weights-init:
+        condition: service_completed_successfully
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
+      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
   # A second Worker, and the only reason it exists is to be a second one.
@@ -230,7 +280,11 @@ services:
   task-worker-b:
     image: agent-workbench:local
     profiles: ["demo"]
-    command: ["agent-task-worker", "--demo"]
+    # Not `agent-task-worker` directly: this Worker's MCP tools live in two
+    # loopback servers that have to be up and answering *before* it freezes its
+    # tool catalogue, and whether it may run real handlers depends on a key
+    # that may not exist yet. Both decisions are in the script.
+    command: ["sh", "/app/docker/run-task-worker-local.sh"]
     environment:
       <<: *app-environment
       # Same as task-worker, and for the same reason.
@@ -242,15 +296,23 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
+      weights-init:
+        condition: service_completed_successfully
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
+      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
   ingestion-worker:
     image: agent-workbench:local
     profiles: ["demo"]
-    command: ["agent-ingestion-worker", "--demo"]
+    # `--demo` swapped the embedder for a hash of the chunk text: vectors of the
+    # right width where similar sentences are not near each other. Nothing said
+    # so -- the upload finished, the document rendered as searchable, and every
+    # query came back empty-handed or wrong. With the embedding extra in the
+    # image there is a real embedder to build, so it builds one.
+    command: ["agent-ingestion-worker"]
     environment:
       <<: *app-environment
       # This is an explicitly profiled disposable demo: it may create the
@@ -261,12 +323,16 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
+      weights-init:
+        condition: service_completed_successfully
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
+      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
 volumes:
   artifact_data:
+  hf_cache:
   otel_data:
   postgres_data:
   provider_key_data:

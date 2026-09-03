@@ -398,8 +398,17 @@ def test_the_windows_launcher_says_the_stack_is_not_everything() -> None:
 
     This launcher's summary is the one moment somebody is looking at a window
     that could tell them. What it may not do is claim the stack is complete by
-    saying nothing: this image has no embedding runtime and this topology has no
-    MCP server, and a console read as broken was the cost of that silence.
+    saying nothing; a console read as broken was the cost of that silence.
+
+    **The list this guards got shorter, and the assertion had to move with it.**
+    It used to require the words "no embedding runtime", which was true while
+    the image was built without the extra -- and became a lie the moment
+    `Dockerfile` gained `--extra embedding`, with this test holding the lie in
+    place. So it now names what is still absent rather than what was absent
+    once: a topology of Linux containers cannot assemble the sandbox or
+    computer use at all, and until somebody saves a provider key the Workers
+    run synthetic handlers, which is the absence that looks least like one --
+    a Task reaches `succeeded` having called no model and no tool.
 
     Asserted on the executable lines, because the paragraph of `rem` above them
     explains the same thing and would satisfy a whole-file search while the
@@ -410,7 +419,43 @@ def test_the_windows_launcher_says_the_stack_is_not_everything() -> None:
         line for line in _launcher_commands() if line.lower().startswith("echo")
     )
     assert "System page" in printed
-    assert "no embedding runtime" in printed
+    assert "SYNTHETIC" in printed, "a synthetic Worker must not look like a real one"
+    assert "Sandbox" in printed and "computer use" in printed
+
+
+def test_the_windows_launcher_measures_the_machine_before_it_spends_its_time() -> None:
+    """Four processes here load the retrieval models, and the machine may not
+    have room for them.
+
+    The cost of not asking is specific: tens of minutes of image build and
+    weight download, and then `up --wait` timing out in swap -- which reads as
+    "this project does not run" rather than as "Docker was given 8 GB". So the
+    question is asked before the build, and after the subcommand dispatch, so
+    that `down` on a small machine still stops the stack.
+
+    The comparison must not go through `set /a`: MemTotal is a byte count and
+    cmd's arithmetic is 32-bit signed, so every machine above ~2.1 GB overflows
+    it -- silently, into a negative number that passes any `LSS` floor.
+    """
+
+    # Executable lines only, for the reason `_launcher_commands` gives: the
+    # `rem` paragraph above this probe names `set /a` in order to explain why
+    # it is not used, and a whole-file search finds that explanation and
+    # reports the opposite of the truth. This test failed exactly that way
+    # when it was written.
+    run = "\n".join(_launcher_commands())
+    assert "MemTotal" in run, "the launcher never asks how much memory Docker has"
+    assert "set /a" not in run, "cmd arithmetic overflows on a byte count"
+
+    dispatch = run.index('if /i "%~1"=="restart" goto :restart')
+    assert run.index("MemTotal") > dispatch, (
+        "the memory gate runs before the subcommand dispatch, so `down` on a "
+        "small machine would refuse to stop the stack"
+    )
+    assert run.index("MemTotal") < run.index("docker build -t"), (
+        "the machine is measured after the build, which is the whole cost the "
+        "measurement exists to avoid"
+    )
 
 
 def _api_launcher() -> str:
@@ -495,3 +540,165 @@ def test_the_windows_launcher_can_restart_just_the_processes_that_read_config() 
     assert 'if /i "%~1"=="restart" goto :restart' in _launcher_commands()
     # Listed where the other subcommands are, so a person finds it.
     assert "scripts\\stack.cmd restart" in _launcher()
+
+
+#: Every service that builds a real embedder, and therefore loads BGE-M3 dense,
+#: BGE-M3 sparse and the reranker into its own address space.
+RETRIEVING_SERVICES = ("api", "task-worker", "task-worker-b", "ingestion-worker")
+
+
+def test_the_stack_names_the_profile_it_runs() -> None:
+    """A deployment that picked no profile is not a deployment that chose.
+
+    No service used to set `AW_CONFIG_FILE`, so the whole topology loaded
+    `config.default.toml` -- which ships no MCP servers, no triage, no Code and
+    no delegation. Those are reasonable defaults and were never a decision
+    about this stack, which is how eleven healthy containers came to present a
+    console with none of that in it.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    named = {
+        name: (service.get("environment") or {}).get("AW_CONFIG_FILE")
+        for name, service in services.items()
+        if name in RETRIEVING_SERVICES
+    }
+    assert set(named) == set(RETRIEVING_SERVICES), named
+    assert set(named.values()) == {"/app/config/config.compose-local.toml"}, named
+
+    # The path is inside the image, so the only way this test can be green
+    # against a file that is not there is if the file is not there.
+    profile = ROOT / "config" / "config.compose-local.toml"
+    assert profile.is_file(), "the profile every container names does not exist"
+    parsed = tomllib.loads(profile.read_text(encoding="utf-8"))
+    assert parsed["optional_labs"]["mcp_adapter"] is True
+    assert [server["alias"] for server in parsed["mcp"]["servers"]] == ["word", "web"]
+    # The one line that would take the API down if it were copied across from
+    # `config.demo-local.toml`: `SandboxSession.open` is fail-fast, and nothing
+    # in this topology can answer a sandbox probe.
+    assert parsed["code"]["sandbox_enabled"] is False
+    assert "sandbox" not in parsed
+    # `config.demo-local.toml` points Qdrant at loopback because its processes
+    # are on the host. The shipped default is already the service name here, so
+    # an override copied over would break retrieval with a timeout.
+    assert "qdrant" not in parsed
+
+
+def test_every_process_that_retrieves_gets_the_weights_it_needs() -> None:
+    """Four processes, one cache, and a one-shot that fills it first.
+
+    The ordering is not an optimisation. The sparse arm checks the cache for
+    BGE-M3's trained lexical head *before* it builds the model and raises when
+    it is absent -- because FlagEmbedding's own behaviour there is to
+    substitute a randomly initialised projection and carry on. So a cold cache
+    does not make the first start slow; it makes all four of these exit.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name in RETRIEVING_SERVICES:
+        service = services[name]
+        environment = service.get("environment") or {}
+        assert environment.get("HF_HOME") == "/var/lib/agent-workbench/hf-cache", name
+        mounts = [
+            mount
+            for mount in service.get("volumes", [])
+            if mount.get("target") == "/var/lib/agent-workbench/hf-cache"
+        ]
+        assert len(mounts) == 1, name
+        assert mounts[0]["source"].endswith("hf_cache"), name
+        assert service["depends_on"]["weights-init"]["condition"] == (
+            "service_completed_successfully"
+        ), name
+
+    # Not baked into the image: gigabytes in a layer are re-pulled on every
+    # rebuild, and the build machine would need to reach Hugging Face even with
+    # a warm volume sitting beside it.
+    assert "fetch_weights.py" in " ".join(services["weights-init"]["command"])
+
+
+def test_the_ingestion_worker_writes_vectors_that_mean_something() -> None:
+    """`--demo` swapped the embedder for a hash of the chunk text.
+
+    Vectors of the right width, in which similar sentences are not near each
+    other -- and nothing said so: the upload completed, the document rendered
+    as searchable, and every query came back wrong. With a real embedder in the
+    image there is no reason left to write those.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    command = services["ingestion-worker"]["command"]
+    assert "--demo" not in command, command
+    # It stays the one service allowed to create the collection and the alias.
+    environment = services["ingestion-worker"].get("environment") or {}
+    assert environment.get("AW_QDRANT__ALLOW_LOCAL_BOOTSTRAP") == "true"
+
+
+def test_the_task_worker_starts_its_tools_before_it_freezes_its_catalogue() -> None:
+    """A Worker reads its MCP catalogue once, at startup, and never again.
+
+    Discovery failure is fail-soft -- one `mcp_connection_failed` line and the
+    process continues -- so a Worker that starts before its servers is not a
+    Worker that retries. It is a healthy Worker permanently missing the tools
+    it exists for.
+
+    Health is not enough to gate on: both servers answer `/health` with `ok`
+    from the moment uvicorn binds, before the MCP application can list a tool.
+    So the gate is the same real-client probe `scripts/dev.sh` uses.
+    """
+
+    # Executable lines only. The header comment explains the ordering this
+    # asserts, naming every command in it, so a whole-file search would be
+    # satisfied by the explanation alone.
+    entrypoint = "\n".join(
+        line
+        for line in (ROOT / "docker" / "run-task-worker-local.sh")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    probe = entrypoint.index("smoke_mcp_server.py")
+    assert "agent-word-mcp" in entrypoint and "agent-web-mcp" in entrypoint
+    assert entrypoint.index("agent-word-mcp") < probe
+    assert probe < entrypoint.index("exec agent-task-worker")
+    assert "--expect-tool render_document" in entrypoint
+    assert "--expect-tool fetch_page" in entrypoint
+
+    # It must fall back rather than exit. `up -d --wait` reads an exiting
+    # container as the stack failing to come up -- and having typed no provider
+    # key yet is the ordinary state of a first run, not a failure.
+    assert "exec agent-task-worker --demo" in entrypoint
+    assert "SYNTHETIC" in entrypoint
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    for name in ("task-worker", "task-worker-b"):
+        assert "run-task-worker-local.sh" in " ".join(services[name]["command"]), name
+
+
+def test_every_application_service_keeps_the_hardening() -> None:
+    """The anchor is easy to leave off a new service, and nothing noticed.
+
+    Read-only root, no new privileges and an empty capability set are what
+    make it defensible to run this on a laptop at all. A service that quietly
+    skips them is not visible in a diff of `compose.yaml`, because what is
+    missing there is a line nobody wrote.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name, service in services.items():
+        if service.get("image") != "agent-workbench:local":
+            continue
+        if name in {"otel-init", "provider-key-init"}:
+            # Both exist to chown a volume for the non-root user, which is the
+            # one job that needs to run as root and write outside a volume.
+            continue
+        assert service.get("read_only") is True, name
+        assert "no-new-privileges:true" in service.get("security_opt", []), name
+        assert service.get("cap_drop") == ["ALL"], name

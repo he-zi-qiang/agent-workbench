@@ -405,8 +405,10 @@ uv run agent-cli demo
 uv run agent-cli demo --deny
 ```
 
-完整本机拓扑（PostgreSQL、Qdrant、API、Worker、控制台）见
+完整本机拓扑（PostgreSQL、Qdrant、API、双 Worker、摄取 worker、两台 MCP server、控制台）见
 [本机运行手册](./running-locally.md)与 [Compose 部署](./deployment.md)。
+**Windows 上只有容器这一条路**，从零开始的中文步骤在
+[Windows 快速开始](./windows-quickstart.md)。
 
 ---
 

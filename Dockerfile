@@ -83,14 +83,46 @@ COPY --chown=app:app config ./config
 COPY --chown=app:app migrations ./migrations
 COPY --chown=app:app src ./src
 COPY --chown=app:app docker ./docker
+# `docker/run-task-worker-local.sh` gates the Worker on this probe, so it has to
+# be in the image. One file rather than `scripts/`: the rest of that directory
+# is the native launcher and the evaluation runners, which have no business in
+# a container.
+COPY --chown=app:app scripts/smoke_mcp_server.py ./scripts/
+# `evaluation.reports_root` is `./evals`, read relative to the working directory
+# at request time. `.dockerignore` excludes `evals/` and re-admits exactly these
+# six reports for the web build; without this line they reach the Node stage and
+# not the runtime, so the console's 评测 page renders an empty list on a stack
+# that has the reports sitting in its own build context.
+COPY --chown=app:app evals/rag/reports/dense-llama_index.json \
+     evals/rag/reports/dense-reference.json \
+     evals/rag/reports/hybrid-llama_index.json \
+     evals/rag/reports/hybrid-reference.json \
+     ./evals/rag/reports/
+COPY --chown=app:app evals/chat/reports/chat-hybrid-180s.json ./evals/chat/reports/
+COPY --chown=app:app evals/triage/reports/report.json ./evals/triage/reports/
 # The browser console is compiled in a disposable Node stage. Only immutable
 # assets enter the Python runtime image; neither source nor node_modules does.
 COPY --from=web-build --chown=app:app /build/web/dist ./web
 
 # ``--frozen`` refuses a lock/source mismatch and ``--no-editable`` ensures
 # the runtime starts from the built package, not a host-mounted checkout.
-RUN uv sync --frozen --no-dev --no-editable \
+#
+# ``--extra embedding`` is what makes this stack the whole product rather than
+# the half of it that needs no models. Without it `build_embedder` returns
+# `EmbeddingUnavailable`, and then: Chat has no knowledge base, `/v1/search` is
+# not registered at all, the ingestion worker writes hash vectors that no query
+# can match, and every Task Worker runs ungrounded. None of that is visible in
+# a browser -- the console is fast and healthy and retrieves nothing -- which is
+# why it was worth the size rather than worth a footnote.
+#
+# The size is real and is stated where somebody meets it: `scripts/stack.cmd`
+# measures the machine before it spends the time, and
+# `docs/windows-quickstart.md` names the floor. The weights are NOT baked in;
+# `docker/fetch_weights.py` puts them in a named volume once, and its docstring
+# says why they cannot simply be downloaded on first use.
+RUN uv sync --frozen --no-dev --no-editable --extra embedding \
     && mkdir -p /var/lib/agent-workbench/artifacts \
+       /var/lib/agent-workbench/hf-cache \
     && chown -R app:app /app /var/lib/agent-workbench
 
 USER app:app

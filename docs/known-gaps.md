@@ -1708,6 +1708,12 @@ Identity Adapter 只信请求头。在那个前提下「谁存的」这个问题
 **做完了算什么样**：能力清单里 `task.worker` 从 `unknown` 变成两行真事实——在跑的
 Worker 数，以及它们各自注册的图与工具目录；`--demo` 与真实 Worker 在页面上分得开。
 
+> **2026-09-03 起这一条更要紧了，而不是更不要紧。** ADR-0105 之前 Compose 栈的两个
+> Worker 恒是 `--demo`，「分不出」至少是恒定的；现在 `docker/run-task-worker-local.sh`
+> 按 key 在不在决定，**同一套拓扑在两次启动之间可以是真的也可以是合成的，而页面两次
+> 长得一样**。在这条缺口补上之前，这件事只能靠三处文字说：容器日志、`stack.cmd` 的
+> 首启摘要、`docs/windows-quickstart.md` §5。
+
 ## E. 测试与发布证据
 
 | 编号 | 缺口 | 分类 |
@@ -1842,7 +1848,8 @@ inspect` 不到就跳过并把 `pull` 命令写在跳过原因里，RAG 那条�
 runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
 
 **仍然不跑**：离线 RAG 评测（需要 embedding extra，按分层约定 CI 不装——`quality` job
-还专门断言它**没有**被装上）、Compose 启动，
+还专门断言它**没有**被装上；**那条断言查的是 runner 自己的 venv，不是镜像**，所以
+ADR-0105 让 `Dockerfile` 装上这个 extra 与它并不冲突，两边不必互相「修」）、Compose 启动，
 以及 **[`adapters/screen/darwin.py`](../src/agent_workbench/adapters/screen/darwin.py)
 整个文件（735 行）**。
 

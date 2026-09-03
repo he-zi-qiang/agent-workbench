@@ -27,6 +27,65 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-03（第七十批）：容器这条路装配起容器装配得出的全部
+
+Windows 上只有一条路——`scripts\stack.cmd` → Compose，因为 `scripts/dev.sh` 是 bash。
+而那条路起来的东西比读者以为的少得多，少在三个看不见的地方。
+
+### 1. 三处「没有人做决定」
+
+- **`compose.yaml` 里没有任何一个服务设 `AW_CONFIG_FILE`**，整栈因此加载
+  `config.default.toml`：`[mcp] servers = []`、`optional_labs.mcp_adapter = false`、
+  triage / Code / 委派全关。这不是关于这台部署的决定，这是没有人做决定。
+- **`Dockerfile` 的 `uv sync` 不带 `--extra embedding`**：`build_embedder` 返回
+  `EmbeddingUnavailable`，`/v1/search` 这条路由根本没被挂载，摄取写的是哈希向量。
+- **两个 Task Worker 都带 `--demo`**：`demo_handlers` 不联系 provider、不执行工具，
+  approval 自己批自己，任务走到 `succeeded` 而一次模型调用都没发生过。
+
+前两条 ADR-102 已经让控制台说得出口。第三条说不出——控制平面没有 Worker 上报通道
+（[D-08](./known-gaps.md)），能力表只能报 `unknown`。
+
+### 2. 做了什么
+
+[ADR-0105](./adr/0105-one-command-may-assemble-everything-a-container-can.md)。
+镜像带 `--extra embedding`；新增第十一个 profile `config/config.compose-local.toml`；
+Word 与 web MCP 作为 loopback sidecar 跑在 Worker 容器里，由
+`docker/run-task-worker-local.sh` 先起、先用 `scripts/smoke_mcp_server.py` 探真工具名、
+再 exec；摄取 worker 去掉 `--demo`；Task Worker 的 `--demo` 改为由 key 在不在决定；
+权重由一次性 `weights-init` 取进具名卷。
+
+**权重那一步不是优化。** `bge_sparse.py` 的 `_require_lexical_projection` 在建模型
+**之前**查缓存里的 `sparse_linear.pt`，查不到就抛——因为 FlagEmbedding 自己的行为是新建
+一个随机 `Linear` 然后继续。所以冷缓存不会让首启变慢，它会让四个进程同时退出。
+
+`scripts\stack.cmd` 在构建之前先量内存：四个进程各加载一整套模型，而唯一的实测数字是
+原生路径上**单个**进程的约 12 GB（2026-07-31）。两条线是在那个数字上做的算术。
+
+### 3. 证据
+
+- `tests/deployment/test_compose.py`：25 通过。新增四条守缺口的（每个应用服务都套硬化、
+  四个检索进程都挂到权重卷并等 `weights-init`、摄取不带 `--demo`、Worker 在 exec 前探过
+  MCP），并**改掉**了一条把假话锁在原地的断言——它此前要求启动器打印
+  `no embedding runtime`，那句话在镜像装上 extra 的那一刻起就是假的。
+- `tests/config/test_compose_profile.py`：4 通过。新增，因为十个 profile 从来没有任何门禁
+  枚举过；它守的是从 `config.demo-local.toml` 抄过来会出事的那两行
+  （`code.sandbox_enabled` 会让 API 起不来，`[qdrant] url` 会把容器指回自己的 loopback）。
+- 后端门禁：`3366 passed, 816 skipped`，2026-09-03 本机。
+
+### 4. 明确没做
+
+- **沙箱**：要容器内的 Docker socket，会把 `no-new-privileges` 与 `cap_drop: ALL` 变成
+  装饰。那笔交易要它自己的 ADR。
+- **Computer use**：依赖是 macOS 专属，这条拓扑里补不上。
+- **Worker 上报**：控制台仍分不出合成 Worker 与真 Worker，靠三处文字说。
+
+### 5. 口径
+
+**Tested，不是 Demonstrated。** 这批的断言全部跑在 POSIX 上，断言的是让 Windows 行为
+成立的那条规则，不是一次 Windows 上的真实运行；容器栈本身也没有在本机端到端起过一次
+（镜像未构建）。`docs/windows-quickstart.md` 把这句话写在了开头。
+
+---
 ## 2026-09-02（第六十九批）：原生启动脚本对存下的开关让路，用的是容器那一个探针
 
 第六十八批把「不改 `scripts/dev.sh`」写进了「明确没做」：它无条件导出的

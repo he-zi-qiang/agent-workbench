@@ -60,6 +60,14 @@ Node **24.x** is what `engines` pins (24.14.0), and CI uses it. A working copy c
 
 The current count lives in [HIGHLIGHTS.md §2](docs/HIGHLIGHTS.md#2-门禁与规模), not here — this line said `458/458` for months after the suite had passed 800, because a number written beside an unrelated fact has nothing that fails when it goes stale.
 
+### The container path, and what it now assembles
+
+`scripts\stack.cmd` (Windows) and `docker build … && docker compose --profile demo up -d --wait` are the same stack. **Since ADR-0105 it is not the deliberately light one**: the image carries `--extra embedding`, `AW_CONFIG_FILE` names `config.compose-local.toml`, each Task Worker starts the Word and web MCP servers as loopback sidecars and probes them with `scripts/smoke_mcp_server.py` before it execs (the catalogue freezes once, and discovery failure is fail-soft), the ingestion worker dropped `--demo`, and a one-shot `weights-init` fills a named HF cache — **the sparse arm refuses to start on a cold cache rather than filling it**, so all four model-loading processes would exit at once without it.
+
+Two things it still cannot assemble, and both are decisions rather than gaps: the sandbox (needs a Docker socket, which would cancel `cap_drop: ALL`) and computer use (macOS-only dependencies). `docs/windows-quickstart.md` is the Chinese route in from a bare machine.
+
+**Four processes each load the full model set** — the API, both Task Workers, the ingestion worker. The one measured number is `~12 GB` for *one* process (2026-07-31, `docs/running-locally.md`); `stack.cmd` compares `docker info`'s `MemTotal` against arithmetic on it (~29 GB / ~51 GB, decimal, because `set /a` is 32-bit signed and overflows on a byte count) and stops below the floor rather than after a thirty-minute build.
+
 ### Running it locally
 
 `scripts/dev.sh` is the single place that knows this machine's environment (the three DSNs, the proxy handling, the provider key). Read its header comment before adding a launch path.
@@ -91,7 +99,7 @@ The provider key is read from `AW_SECRETS__DEEPSEEK_API_KEY`, falling back to `A
 
 ### Config profiles
 
-`config/config.<name>.toml`, selected by `AW_CONFIG_FILE`. **Ten of them**: `local` (no MCP), `word-local`, `web-local`, `code-local`, `computer-local`, `sandbox-local`, `demo-local` (the union, what the console runs), plus `default`/`test`/`production`. The profiles are deliberately separate files: each freezes its own tool names into every Task authorization envelope at submission, so a wider profile widens every Task.
+`config/config.<name>.toml`, selected by `AW_CONFIG_FILE`. **Eleven of them**: `local` (no MCP), `word-local`, `web-local`, `code-local`, `computer-local`, `sandbox-local`, `demo-local` (the union, what the native console runs), `compose-local` (what the Compose stack runs — ADR-0105; `demo-local` minus the sandbox, because `SandboxSession.open` is fail-fast and nothing in a `cap_drop: ALL` topology can answer its probe), plus `default`/`test`/`production`. The profiles are deliberately separate files: each freezes its own tool names into every Task authorization envelope at submission, so a wider profile widens every Task.
 
 `agent-config-check --profile` accepts only three names — `development`, `test`, `production`. The other seven are checked with `--config config/config.<name>.toml`.
 
@@ -143,7 +151,7 @@ Single schema (currently `1.19`), cross-domain validation at startup: a capabili
 
 ## Working conventions
 
-- **One ADR per boundary change.** `docs/adr/` (0012–0104, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
+- **One ADR per boundary change.** `docs/adr/` (0012–0105, with 0050 and 0053 reserved but never written) records implementation-period decisions: anything altering a fact source, the control plane, the runtime owner, the fusion owner, or recovery semantics. New ADRs continue the numbering; superseded ones say what replaced them.
 - **Capability claims only move up the ladder `Planned → Implemented → Tested → Demonstrated`, and never without linkable test or demo evidence.** `docs/status.md` is the per-PR evidence log, `docs/known-gaps.md` the honest list of what is not done. Do not describe a Planned item as working.
 - **Comments explain the decision, not the code.** This codebase's comments are unusually long and carry measured numbers, rejected alternatives, and the incident that motivated a line. Match that register when touching commented code; a bare restatement of the syntax is a regression here.
 - `ruff` per-file-ignores exist for files that deliberately contain Chinese prose (RUF001) and verbatim OOXML fixtures (E501). Prefer adding a scoped ignore with a reason over rewording user-facing Chinese.

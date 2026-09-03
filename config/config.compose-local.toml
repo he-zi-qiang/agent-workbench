@@ -1,0 +1,115 @@
+# The profile the Compose stack runs: everything a container topology can
+# assemble, declared in one place.
+#
+# It exists because `config.default.toml` was doing this job by accident. No
+# service in `compose.yaml` set `AW_CONFIG_FILE`, so the whole stack loaded the
+# shipped defaults -- `[mcp] servers = []`, `optional_labs.mcp_adapter = false`,
+# triage, Code and delegation all off. That is a reasonable *default*; it was
+# never a decision about what this deployment should be, and it is the reason
+# somebody could double-click `scripts\stack.cmd`, watch eleven containers go
+# healthy, and get a console with no MCP tool, no Code session and no triage in
+# it. The defaults were not wrong. Nothing had chosen.
+#
+# This is that choice, written down. Read it beside `config.demo-local.toml`:
+# the two describe the same product on two different machines, and the
+# differences between them are the differences between a process group on
+# somebody's laptop and a container topology. Each difference is commented
+# where it appears, because "why does the container profile differ here" is the
+# question a reader arrives with.
+#
+# Like every other overlay, one file over config.default.toml. The DSNs and the
+# provider key stay environment-only (`FORBIDDEN_TOML_PATHS`), and the key is
+# whatever the console wrote to the shared volume (ADR-101).
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+# `[qdrant]` is deliberately absent. config.demo-local.toml overrides the URL to
+# `localhost:6333` because its processes are on the host; the shipped default is
+# already `http://qdrant:6333`, which is the service name in this topology. An
+# override copied over from that file would point every container at its own
+# loopback and break retrieval in a way whose first symptom is a timeout.
+
+[model.main]
+# The alias, not the pinned `deepseek-v4-flash` that config.demo-local.toml
+# names. That profile pins a concrete id because it declares a thinking stance
+# and a stance should name the model it was probed against (ADR-061). This
+# profile declares no stance, so it takes whatever the console's key is
+# entitled to rather than pinning a target nobody here measured.
+model_id = "deepseek-chat"
+# Same reason as both narrow profiles: a Task whose scope lacks the matching
+# tool must not be forced to open with a tool call.
+tool_calling_required = false
+
+[triage]
+enabled = true
+
+[code]
+enabled = true
+# Off, and this is the one line that would take the API down if it were copied
+# from config.demo-local.toml. `SandboxSession.open` is fail-fast by design
+# (apps/api/dependencies.py:236-245): a session that was told in configuration
+# that it may run code, and then fails per call, is the arrangement ADR-057 §3
+# refused -- so it raises at boot. In this topology nothing can answer that
+# probe: `sandbox_run` starts a `--network=none` container per call, which
+# needs a Docker socket inside services that are `read_only` with
+# `cap_drop: ALL`. Trading that hardening away is its own decision and needs
+# its own ADR, not a mount (see docs/deployment.md).
+sandbox_enabled = false
+
+[multi_agent]
+delegation_enabled = true
+
+[policy]
+# `search_tools_enabled` is the projection's left half; the right half is
+# whether `[research]` exists at all, and that is decided at start by
+# `docker/run-api-local.sh` probing for a key (ADR-104). So this line offers
+# the tool and the launcher decides whether the deployment can honour it --
+# rather than this file promising something a keyless stack cannot deliver.
+search_tools_enabled = true
+
+# `[sandbox]` is deliberately absent, not merely left at its shipped `false`.
+# config.demo-local.toml turns it on, so a reader comparing the two files will
+# look for it here; the answer is the one `code.sandbox_enabled` gives above.
+# An empty `[sandbox]` table would have said the same thing less clearly and
+# would have been an overlay of nothing.
+
+[optional_labs]
+mcp_adapter = true
+
+# The two servers below run as loopback sidecars inside each Task Worker
+# container, started by `docker/run-task-worker-local.sh` before it execs the
+# Worker. Sidecars rather than their own Compose services, and the endpoints
+# below are why it is not a free choice: reaching a server across the container
+# network would have to break three separate guards -- each server's `--host`
+# is an argparse whitelist of loopback addresses, the MCP SDK turns on Host
+# header validation precisely because the host is loopback, and
+# `MCPServerSettings.validate_endpoint` requires HTTPS for any non-loopback
+# endpoint. Three code changes to reach a topology that buys nothing here: both
+# servers are stateless, and the only process that connects to them is the
+# Worker.
+#
+# The API loads this same file and never connects to either. It reads
+# `[[mcp.servers]]` to write tool names into each Task's authorization envelope
+# at submission and to report `task.mcp_tools` on the System page; the one MCP
+# connection the API makes is to the sandbox, which is off above.
+[[mcp.servers]]
+alias = "word"
+transport = "http"
+endpoint = "http://127.0.0.1:8765/mcp"
+tools = ["render_document"]
+retryable_effects = true
+timeout_seconds = 60
+
+[[mcp.servers]]
+alias = "web"
+transport = "http"
+endpoint = "http://127.0.0.1:8767/mcp"
+tools = ["fetch_page", "download_document"]
+retryable_effects = true
+# Reading the outside world is research, so these reach `researcher_external`
+# and not the writer (ADR-027 §3.3).
+audience = "research"
+timeout_seconds = 60
