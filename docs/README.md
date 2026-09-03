@@ -22,7 +22,7 @@
 | **核实某项能力是否真的存在** | [实施状态](./status.md) 找证据 → [已知缺口](./known-gaps.md) 确认它不在"口径不实"里 |
 | **理解为什么这样设计** | [架构基线](./architecture-baseline.md) 第 1–3 节 → 相关 [ADR](./adr/) |
 | **动手改代码** | [架构基线](./architecture-baseline.md) 1–3 节 → [配置契约](./configuration.md) → 仓库根的 `CLAUDE.md`（命令、门禁、目录） |
-| **把它跑起来** | [本机运行手册](./running-locally.md) → [Compose 部署](./deployment.md) |
+| **把它跑起来** | Windows：[Windows 快速开始](./windows-quickstart.md)（唯一的那条路）；macOS / Linux：[本机运行手册](./running-locally.md) → [Compose 部署](./deployment.md) |
 | **改前端** | [前端设计与实现基线](./frontend-design.md) |
 
 合并后只按[实施状态](./status.md)和 evidence 证据更新 README 或简历表述——
@@ -56,6 +56,7 @@
 | 文档 | 覆盖 |
 |---|---|
 | [本机运行手册](./running-locally.md) | 上传 → 真实向量化 → 索引，提交 Task → LangGraph 跑完 → 结算。含"为什么没有 Chat"一节 |
+| [Windows 快速开始](./windows-quickstart.md) | 一台什么都没装的 Windows，到一个装配起全部能力的控制台；含内存下限与两件补不了的能力 |
 | [本机 Compose 部署](./deployment.md) | 可复现容器拓扑、端口边界与 demo worker 限制（英文） |
 | [本地 Word MCP](./word-mcp-local.md) | 从协议探测到真实 Task 的 `.docx` 产出路径 |
 | [本地只读取用 MCP](./web-mcp-local.md) | Agent 自己上网取材的完整链路 |

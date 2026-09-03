@@ -122,21 +122,25 @@ of its front half removed. What a fresh Compose stack answers today:
 | Row | Tier | On this stack | Why |
 |---|---|---|---|
 | `chat.direct` | core | after a key is saved | the image ships no credential; the settings page writes one to a volume |
-| `chat.knowledge_base` | core | **absent** | the image deliberately omits the multi-gigabyte `embedding` extra, so no embedder loads |
-| `knowledge.search` | core | **absent** | same reason: retrieval needs the same runtime |
+| `chat.knowledge_base` | core | after a key is saved | since ADR-0105 the image carries the `embedding` extra and `weights-init` warms the cache before anything serves |
+| `knowledge.search` | core | yes | same runtime; `/v1/search` is registered because `retrieval` is no longer `None` |
 | `task.submit` | core | yes | the Task service is not optional in any process that serves routes |
-| `task.worker` | core | **unknown** | no Worker reports itself to the control plane ([D-08](./known-gaps.md)); both containers here run `--demo` |
+| `task.worker` | core | **unknown** | no Worker reports itself to the control plane ([D-08](./known-gaps.md)); with no key saved both containers still fall back to `--demo` |
 | `chat.web_search` | optional | after a key is saved | see below — it follows the key rather than a static switch |
 | `task.external_search` | optional | follows the same switch | the envelope is frozen at submission from the API's own configuration |
-| `task.mcp_tools` | optional | **absent** | no `[[mcp.servers]]` is configured and no MCP server runs in this topology |
-| `task.sandbox` | optional | **absent** | `sandbox_run` needs a server that can create containers |
-| `code.sessions` | optional | **absent** | `code.enabled` is false in the shipped configuration |
-| `task.delegation` | optional | **absent** | `multi_agent.delegation_enabled` is false in the shipped configuration |
-| `task.triage` | optional | **absent** | `triage.enabled` is false until this deployment's model has been measured against `evals/triage` |
+| `task.mcp_tools` | optional | yes | `config.compose-local.toml` declares `word` and `web`, and each Worker starts both as loopback sidecars before it freezes its catalogue |
+| `task.sandbox` | optional | **absent** | `sandbox_run` needs a server that can create containers; see the bullet above |
+| `code.sessions` | optional | yes, without `sandbox_run` | `code.enabled` is on in this profile; its sandbox arm is not, for the same reason |
+| `task.delegation` | optional | yes | `multi_agent.delegation_enabled` is on in this profile |
+| `task.triage` | optional | yes | `triage.enabled` is on in this profile, as it is in `config.demo-local.toml` |
 
 **A `--demo` Worker and a real one look identical from the console**, which is
-the sharpest of these: a Task submitted here reaches `succeeded` without a
-single model call or MCP tool ever having existed. The capability page says so
+the sharpest of these: a Task submitted there reaches `succeeded` without a
+single model call or MCP tool ever having existed. Since ADR-0105 that is the
+*keyless* case rather than the only case — `docker/run-task-worker-local.sh`
+probes for a key and execs the real Worker when it finds one — but the console
+still cannot tell the two apart, so the fallback says so in the container log
+and the launcher says so on screen. The capability page says so
 in words rather than leaving it to be discovered from a `RunStarted` event's
 empty `tool_names`.
 
@@ -199,9 +203,18 @@ Not shipped, and the reasons are worth having before anybody tries:
   call in a fresh `--network=none` container, so its server needs to create
   containers — which means the Docker socket, inside a topology whose services
   are deliberately `read_only` with `cap_drop: ALL`. That trade needs its own
-  decision, not a mount.
+  decision, not a mount. ADR-0105 assembled everything else this topology can
+  hold and deliberately did not do this one, so `config.compose-local.toml`
+  keeps `code.sandbox_enabled = false` — `SandboxSession.open` is fail-fast, and
+  the API would refuse to start rather than degrade.
 
 ## Windows
+
+> **The step-by-step version of this section, in Chinese, is
+> [Windows 快速开始](./windows-quickstart.md)** — from a machine with nothing
+> installed, including the memory floor, the Hugging Face mirror a
+> mainland-China connection needs, and what to do when a step fails. This
+> section stays here as the topology's own account of the launcher.
 
 `scripts/dev.sh` is bash, and the native path it drives wants `uv`, a Python
 3.12 and a Node 24. Compose needs none of that, so on Windows the whole stack
@@ -227,6 +240,18 @@ here, and that is exactly the shape the bake path refuses.
 It starts `--profile demo`, not the default topology. The default one has no
 Task Worker in it, so the console opens on Chat and an empty task list and
 shows nothing of claim, lease, epoch or fencing.
+
+**It measures the machine before it builds** (ADR-0105). Four services here each
+load the full retrieval model set, and the one measurement this repository has is
+for a single process on the native path: about 12 GB of available memory, of
+which about 6.7 GB is the three model files. The floors the launcher compares
+against — roughly 29 GB and 51 GB — are arithmetic on that number rather than a
+second measurement, and they are decimal GB because the comparison slices digits
+off `MemTotal` instead of going through `set /a`, which is 32-bit signed and
+overflows on any byte count above ~2.1 GB. Under the lower floor it stops: the
+alternative is tens of minutes of build and weight download followed by
+`up --wait` timing out in swap, which reads as "this project does not run".
+`scripts\stack.cmd anyway` overrides it.
 
 On the first run Chat has no provider yet. Open the identity button at the
 bottom of the navigation rail, choose **Model key**, save the key, then run:

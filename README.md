@@ -14,6 +14,7 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 | 想看成色与证据 | [**十分钟版本**](docs/HIGHLIGHTS.md)——真实运行的事件流、门禁数字、四个技术判断 |
 | 想读懂 Agent 本身怎么跑的 | [Agent Harness](#二agent-harness一次运行被谁裹着) → [Agent Runtime](#三agent-runtime唯一的那条工具循环) → [Tool Gateway](#四tool-gateway一次工具调用要穿过的门) |
 | 想立刻跑起来 | [快速开始](#九快速开始)，一条命令，不联网、不连数据库 |
+| **手上是一台 Windows** | [**Windows 快速开始**](docs/windows-quickstart.md)——只要 Docker Desktop，一条命令起全套（这条路不需要 Python / uv / Node） |
 | 想知道**没做什么** | [**已知缺口**](docs/known-gaps.md)——五类分类，每条附位置与"做完"的判据 |
 | 想读设计依据 | [文档地图](docs/README.md)、[架构基线](docs/architecture-baseline.md)、[ADR 索引](docs/adr/) |
 
@@ -61,8 +62,8 @@ Qdrant、不需要 API key、不联网**——它读的是工作树本身。十�
 | 模块浏览器 | 326 个模块，可搜路径 / 摘要 / 符号名；每行的说明是该模块 docstring 的第一行 |
 | HTTP 接口 | 77 个端点，从路由装饰器解析 |
 | 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
-| 配置画像 | 十个 profile，以及 82 条写成单值 `Literal` 的不变量 |
-| 决策记录 | 91 份 ADR，可搜 |
+| 配置画像 | 十一个 profile，以及 82 条写成单值 `Literal` 的不变量 |
+| 决策记录 | 92 份 ADR，可搜 |
 | 门禁与规模 | 测试目录、控制台 feature、进程入口 |
 
 **面板上每一个数字都是构建那一刻数出来的，没有一个是写在页面里的。** 这不是讲究：
@@ -688,18 +689,23 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `src/agent_workbench/bootstrap/` | 18 个模块。设置、投影、各类工厂、启动期校验 |
 | `tests/` | 20 个目录。`architecture/` 是让越界变红的那个，`contracts/` 是"一个契约，每种实现"的那个，`e2e/` 是杀掉 Worker 再看它恢复的那个 |
 | `web/src/` | 八个 feature、八个页面；出网只在 `api/` 的两个文件里 |
-| `config/` | 十个 profile |
+| `config/` | 十一个 profile |
 | `migrations/` | 32 个 Alembic 版本，单 head |
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
-| `docs/adr/` | 91 份决策记录，编号 0012–0104（0050 与 0053 预留未写） |
+| `docs/adr/` | 92 份决策记录，编号 0012–0105（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
-| `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`panel.cmd`（面板的 Windows 入口，ASCII + CRLF）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
+| `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`stack.cmd`（**Windows 上起整栈的唯一入口**，ASCII + CRLF）、`panel.cmd`（面板的 Windows 入口）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
 ---
 
 ## 九、快速开始
 
-前置：Python 3.12 与 `uv`。
+前置：Python 3.12 与 `uv`——**除了容器那条路**，它只要 Docker Desktop。
+
+**Windows 只有容器这一条路**（`dev.sh` 是 bash），从零开始的完整步骤见
+[**Windows 快速开始**](docs/windows-quickstart.md)。这两句要放在本节开头，因为上一版
+把那条前置写成了全节统一的前置，而三十几行之后又说容器路不需要它——于是一个手上只有
+Windows 的读者在第一行就判定自己跑不了，然后不会再读到第三十四行。
 
 **先看一眼整个项目**——不需要数据库、不需要联网、不需要 key，也不需要先把环境装起来：
 
@@ -733,8 +739,8 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 `.env` 不是可选的：上面第一条命令没有它就停在 `3 validation errors for
 LoadedSettings`，读起来像 checkout 坏了，而它不是。
 
-**整套跑起来**（PostgreSQL、Qdrant、API、双 Worker、控制台）。Windows 上只需要
-Docker Desktop，不需要 uv / Python / Node：
+**整套跑起来**（PostgreSQL、Qdrant、API、双 Worker、摄取 worker、两台 MCP server、
+控制台）。Windows 上只需要 Docker Desktop，不需要 uv / Python / Node：
 
 ```bat
 scripts\stack.cmd            :: 构建、启动、等到健康、打开控制台（双击亦可）
@@ -747,12 +753,26 @@ macOS / Linux 是同样的两步——**分两步不是讲究**，`compose up --
 docker build -t agent-workbench:local . && docker compose --profile demo up -d --wait
 ```
 
-控制台在 `http://127.0.0.1:8000/ui/`。原生拓扑见
-[本机运行手册](docs/running-locally.md)，容器化细节见
+控制台在 `http://127.0.0.1:8000/ui/`。**首次运行按几十分钟算**：镜像带真实检索运行时，
+起来之前还要把约 6.7 GB 模型权重取进一个具名卷。这套栈有**四个进程各加载一整套模型**，
+所以它在构建之前先量一次内存——两条线与那一个实测数字见
+[Windows 快速开始 §0](docs/windows-quickstart.md)。
+
+自 [ADR-0105](docs/adr/0105-one-command-may-assemble-everything-a-container-can.md) 起，
+容器这条路装配起一台 Linux 容器拓扑装配得出的**全部**：真实检索、Word 与 web MCP、
+真实图 Worker 与人工审批、Code、分流、子代理委派。**装配不出的是两件，各有其不能的
+理由**：沙箱执行要容器内的 Docker socket，而那会抵消这套拓扑的 `cap_drop: ALL`；
+Computer use 的依赖是 macOS 专属。控制台的「运行状态」页逐行列出实际装配结果
+（[ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)）。
+
+原生拓扑见[本机运行手册](docs/running-locally.md)，容器化细节见
 [Compose 部署](docs/deployment.md)——API 只映射到 `127.0.0.1:8000`。
 
-**第一次起来时没有 provider key，所以 Chat 还答不了**——这不是坏了，「运行状态」页
-会把它连同其它没装配起来的能力一起列出来。存一把：左下角头像 → 设置 → 模型密钥，
+**第一次起来时没有 provider key，所以 Chat 还答不了，而 Task 也还不是真的**——这不是
+坏了，「运行状态」页会把它连同其它没装配起来的能力一起列出来。Chat 那条路由根本没有被
+挂载；两个 Task Worker 跑的是**合成 handler**，它们不联系 provider、不执行工具，
+approval 自己批自己，**任务会走到 `succeeded` 而一次模型调用和一次工具调用都没发生过**，
+并且从控制台上看和真 Worker 一模一样。存一把：左下角头像 → 设置 → 模型密钥，
 然后重启**读配置的那三个进程**：
 
 ```bat
@@ -827,9 +847,10 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [实施状态](docs/status.md) | 逐 PR 的实现与测试证据 |
 | [架构与技术选型基线](docs/architecture-baseline.md) | 产品边界、分层、可靠性协议 |
 | [配置管理契约](docs/configuration.md) | 配置来源、密钥规则、快照语义 |
-| [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来 |
+| [**Windows 快速开始**](docs/windows-quickstart.md) | **Windows 上从零到全套**，中文，唯一的那条路 |
+| [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来（后者为英文） |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 91 份实施期决策记录（0012–0104，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 92 份实施期决策记录（0012–0105，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

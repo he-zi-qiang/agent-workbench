@@ -98,19 +98,31 @@ PATH 上、引擎在不在跑——这两种失败长得像，答案却完全不
 docker build -t agent-workbench:local . && docker compose --profile demo up -d --wait
 ```
 
+> **这一节在 2026-09-03 被 [ADR-0105](adr/0105-one-command-may-assemble-everything-a-container-can.md)
+> 推翻了一半。** 在那之前容器这条路是被刻意做轻的：镜像不带 `embedding` extra、
+> 拓扑里没有 MCP server、两个 Worker 都是 `--demo`，而这张表把那当成一道选择题。
+> 对 macOS / Linux 的读者那是准确的；**对 Windows 的读者它从来不是一道选择题**，
+> 因为那边没有第二条路。下面是改完之后的对照。
+
 | | Compose（`scripts\stack.cmd` / `docker compose`） | 原生（`scripts/dev.sh up`） |
 |---|---|---|
 | 机器要装什么 | 只要 Docker Desktop | Python 3.12 + `uv`（`up` 自己调 uv 装） |
-| 知识库检索 | **没有**——镜像 `uv sync` 不带 `embedding` extra | 有，真实 BGE-M3 + 重排，但要 `up --with-retrieval` |
-| MCP 工具（Word / web / 沙箱） | **没有**——拓扑里没有这三台 server | 三台都起，且在 Worker 之前 |
-| Task Worker | 两个都是 `--demo` 合成 Worker | 真实图 |
+| 知识库检索 | 有，真实 BGE-M3 + 重排，**默认就装** | 有，但要 `up --with-retrieval` |
+| MCP 工具 | Word 与 web 有（Worker 容器内的 loopback sidecar）；**沙箱没有** | 三台都起，且在 Worker 之前 |
+| Task Worker | 有 key 就是真实图；没有 key 退回 `--demo` 合成 Worker | 真实图 |
+| 沙箱执行 | **没有**——要容器内的 Docker socket，会抵消 `cap_drop: ALL` | 有 |
+| Computer use | **没有**，且补不上——依赖是 macOS 专属 | macOS 上有 |
 | 改一行代码要多久 | 重新 `docker build`，分钟级 | 重启一个进程，秒级 |
-| 内存 | 轻，进程里没有模型 | **一个检索进程约 12 GB**，见下 |
+| 内存 | **四个进程各一份模型**，见下的 12 GB 与它的四倍 | **一个检索进程约 12 GB**，见下 |
 | Windows | 唯一的路（`dev.sh` 是 bash） | 走不了 |
 
-所以选哪条不是口味：**要看真实检索、MCP 工具、沙箱或真实图 Worker，只有原生这条路
-有**；要一台干净的、能在别人机器上一条命令起来的演示，用 Compose。控制台的「运行状态」
-页会把当前这一台**实际装配起了什么**逐行列出来（ADR-102），不用靠猜。
+所以选哪条现在是口味加两件事：**要沙箱或 Computer use，只有原生这条路有**；
+**要一台干净的、能在别人机器上一条命令起来的演示，用 Compose**；要改一行代码看一眼，
+用原生。控制台的「运行状态」页会把当前这一台**实际装配起了什么**逐行列出来（ADR-102），
+不用靠猜。
+
+Windows 上的完整步骤（含内存下限、镜像站与排错）在
+[Windows 快速开始](windows-quickstart.md)。
 
 `up` 补的差距不是「原生 vs 容器」，是原生这条路自己的：自 `scripts\stack.cmd` 起
 Compose 那边就是一条命令，而原生这边一直是六个终端。
@@ -356,8 +368,13 @@ bge-reranker-v2-m3，合计约 6.7 GB 权重，加上 torch 运行时与余量�
   加载一份完整的模型集；同时跑三个会让机器一直在换页。要跑评测就先把另外两个停掉，
   或者干脆 `scripts/dev.sh down`。
 
-这不是缺陷，是没有写下来的部署下限——现在写下来了。这也是 Compose 那条路更轻的原因：
-镜像里根本没有这三个模型。
+这不是缺陷，是没有写下来的部署下限——现在写下来了。
+
+**Compose 那条路自 ADR-0105 起不再更轻，而它把这个下限乘了四。** 那套拓扑里 API、
+两个 Task Worker、摄取 worker **各自加载一整套模型**，所以 `scripts\stack.cmd` 在开始
+构建之前先读一次 `docker info` 的 `MemTotal`：低于约 29 GB（4 × 6.7 GB，只够放下权重）
+就停下来，低于约 51 GB（4 × 12 GB）就先说一声。**那两条线是在上面这一个实测数字上做的
+算术，不是第二次实测**，容器里那套没有量过。
 
 ## 不装 embedding extra 时的 Task Worker
 

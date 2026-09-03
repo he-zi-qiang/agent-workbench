@@ -15,6 +15,7 @@ doing its own part, and none of them takes over the core loop.
 | You want evidence | [**The ten-minute version**](docs/HIGHLIGHTS.md) (Chinese) — a real event stream, gate numbers, four technical judgements |
 | You want to understand how the agent actually runs | [Agent Harness](#2-the-agent-harness-what-wraps-one-run) → [Agent Runtime](#3-the-agent-runtime-the-only-tool-loop) → [Tool Gateway](#4-the-tool-gateway-what-one-tool-call-passes-through) |
 | You want to run it now | [Quick start](#9-quick-start) — one command, no network, no database |
+| **You are on Windows** | [**Windows quick start**](docs/windows-quickstart.md) (Chinese) — Docker Desktop and nothing else; one command brings up everything a container topology can assemble |
 | You want to know what is **not** done | [**Known gaps**](docs/known-gaps.md) (Chinese) — five categories, each with a location and a "done" criterion |
 | You want the design reasoning | [Documentation map](docs/README.md), [architecture baseline](docs/architecture-baseline.md), [ADR index](docs/adr/) |
 
@@ -70,7 +71,7 @@ Twelve sections:
 | HTTP surface | 77 endpoints, parsed from the route decorators |
 | Tool catalogue | In-process and MCP tools, read from the constant that declares each name |
 | Config profiles | Ten profiles, and the 82 invariants written as single-valued `Literal`s |
-| Decision records | 91 ADRs, searchable |
+| Decision records | 92 ADRs, searchable |
 | Gates and scale | Test directories, console features, process entry points |
 
 **Every number on that page is counted at build time; not one of them is typed
@@ -813,9 +814,9 @@ package.
 | `config/` | Ten profiles |
 | `migrations/` | 32 Alembic revisions, a single head |
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
-| `docs/adr/` | 91 decision records, numbered 0012–0104 (0050 and 0053 reserved but never written) |
+| `docs/adr/` | 92 decision records, numbered 0012–0105 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
-| `scripts/` | `dev.sh` (the one place that knows this machine; bash), `panel.cmd` (the panel's Windows entry point; ASCII + CRLF), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
+| `scripts/` | `dev.sh` (the one place that knows this machine; bash), `stack.cmd` (**the only way into the whole stack on Windows**; ASCII + CRLF), `panel.cmd` (the panel's Windows entry point), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
 ---
 
@@ -856,9 +857,9 @@ uv run agent-config-check --profile development && uv run ruff format --check . 
 `.env` is not optional: without it the first command above stops at `3 validation
 errors for LoadedSettings`, which reads like a broken checkout and is not one.
 
-**The whole stack** (PostgreSQL, Qdrant, API, two Workers, console). On Windows
-this asks the machine for Docker Desktop and nothing else — no uv, no Python, no
-Node:
+**The whole stack** (PostgreSQL, Qdrant, API, two Task Workers, the ingestion
+worker, two MCP servers, console). On Windows this asks the machine for Docker
+Desktop and nothing else — no uv, no Python, no Node:
 
 ```bat
 scripts\stack.cmd            :: build, start, wait for healthy, open the console
@@ -872,12 +873,32 @@ directory name is non-ASCII:
 docker build -t agent-workbench:local . && docker compose --profile demo up -d --wait
 ```
 
-The console is at `http://127.0.0.1:8000/ui/`.
+The console is at `http://127.0.0.1:8000/ui/`. **Budget tens of minutes for the
+first run**: the image carries the real retrieval runtime, and about 6.7 GB of
+model weights are fetched into a named volume before anything serves. Four
+processes here each load the full model set, which is why the launcher measures
+the machine's memory before it starts building — the two floors, and the one
+measurement they are arithmetic on, are in
+[the Windows quick start](docs/windows-quickstart.md) (Chinese).
 
-**A fresh stack has no provider key, so Chat cannot answer yet** — that is not a
-fault, and the System page lists it beside everything else this deployment did not
-assemble. Store one from the avatar at the bottom left, under Settings > Model key,
-then restart **the three processes that read configuration**:
+Since [ADR-0105](docs/adr/0105-one-command-may-assemble-everything-a-container-can.md)
+this path assembles **everything a Linux container topology can**: real
+retrieval, the Word and web MCP servers, real graph Workers with human approval,
+Code, triage, sub-agent delegation. **Two things it cannot**, each for its own
+reason: sandbox execution needs a Docker socket inside services that run
+`read_only` with `cap_drop: ALL`, and computer use depends on macOS-only
+packages. The System page lists what this deployment actually assembled
+([ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)).
+
+**A fresh stack has no provider key, so Chat cannot answer yet — and its Tasks
+are not real either** — that is not a fault, and the System page lists it beside
+everything else this deployment did not assemble. The Chat route is not
+registered at all, and both Task Workers run **synthetic handlers**: they
+contact no provider, invoke no tool, and approve their own approval node, so a
+Task reaches `succeeded` having made no model call and no tool call — and from
+the console it looks exactly like a real Worker. Store a key from the avatar at
+the bottom left, under Settings > Model key, then restart **the three processes
+that read configuration**:
 
 ```bat
 scripts\stack.cmd restart    :: Windows; API and both Workers, nothing else
@@ -1143,7 +1164,7 @@ Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
 Scale: 82,718 lines of Python across 326 files, 101,465 lines of tests across 269
 files, 52,314 lines of frontend TypeScript across 143 files; 91 files under
-`docs/adr/`, numbered 0012–0104 — **with gaps**: 0050 and 0053 were claimed by the
+`docs/adr/`, numbered 0012–0105 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -1201,9 +1222,10 @@ the one that cannot go stale.
 | [Implementation status](docs/status.md) | Per-PR implementation and test evidence (Chinese) |
 | [Architecture baseline](docs/architecture-baseline.md) | Product boundary, layering, reliability protocols (Chinese) |
 | [Configuration contract](docs/configuration.md) | Config sources, secret rules, snapshot semantics (Chinese) |
-| [Running locally](docs/running-locally.md) / [Compose deployment](docs/deployment.md) | How to run it (Chinese) |
+| [**Windows quick start**](docs/windows-quickstart.md) | **From a bare Windows machine to the whole stack** (Chinese) — the only route there |
+| [Running locally](docs/running-locally.md) (Chinese) / [Compose deployment](docs/deployment.md) | How to run it |
 | [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
-| [ADR index](docs/adr/) | 91 implementation-period decision records (0012–0104; 0050 and 0053 reserved but never written) |
+| [ADR index](docs/adr/) | 92 implementation-period decision records (0012–0105; 0050 and 0053 reserved but never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---
