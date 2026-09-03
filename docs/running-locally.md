@@ -59,6 +59,13 @@ scripts/dev.sh up --with-retrieval
 scripts/dev.sh up --plan
 ```
 
+**Docker 没起来时它说人话。** `up` 起任何东西之前先分开问两件事：`docker` 在不在
+PATH 上、引擎在不在跑——这两种失败长得像，答案却完全不同，而只有前一种能从 Docker
+自己的报错里看出来。WSL 上还有第三种：Docker Desktop 在 Windows 那边跑得好好的，
+而这个发行版没在 Settings > Resources > WSL Integration 里打开，于是 `docker` 根本
+不在这个 shell 的 PATH 上——重启 Docker Desktop 一百次也没用。这三句话各自指向不同的
+动作，所以分开说。
+
 ## 顺序不是整齐，是必须
 
 `up` 存在的理由不是少打几个字，是那个顺序**猜不出来也不容错**：

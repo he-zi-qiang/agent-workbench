@@ -292,6 +292,38 @@ _alive_after() {
   return 1
 }
 
+# Docker absent and Docker installed-but-not-running are two failures that look
+# alike from the outside and need different answers, and only the first is
+# obvious from what Docker prints. `scripts\stack.cmd` has separated them since
+# it was written; this is the same separation for the path that runs here.
+#
+# Measured 2026-09-02 with the engine stopped: `up` reached the services step
+# and printed Docker's own line -- "Cannot connect to the Docker daemon ... Is
+# the docker daemon running?" -- and nothing about which step that was or what
+# to do. It exited 1 and left no pid files, so the state was clean; the message
+# was the whole problem.
+#
+# The WSL case gets its own sentence because it is the one where `docker` is
+# genuinely absent from *this* shell while Docker Desktop is running perfectly
+# well on the Windows side, and no amount of restarting it helps.
+_require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "        no docker on PATH." >&2
+    echo "        Everything below needs it: PostgreSQL and Qdrant are containers," >&2
+    echo "        and the sandbox server creates one per call." >&2
+    echo "        On WSL this usually means Docker Desktop is running on Windows" >&2
+    echo "        while this distro is switched off under Settings > Resources >" >&2
+    echo "        WSL Integration. Turn it on there, then reopen this shell." >&2
+    return 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "        docker is on PATH but the engine is not running." >&2
+    echo "        Start Docker Desktop, wait until its whale stops animating," >&2
+    echo "        then run this again." >&2
+    return 1
+  fi
+}
+
 # The plan is computed in one place and printed by `--plan`, so "what will this
 # start" is answerable without starting it -- and so a test can assert the
 # ordering without a database, a key or a single real process.
@@ -494,6 +526,10 @@ up)
   # Containers and schema in the foreground: everything below is meaningless
   # without them, and both are fast and idempotent.
   _step_begin services "PostgreSQL 5433 · Qdrant 6333"
+  if ! _require_docker; then
+    _step_end "no container runtime"
+    exit 1
+  fi
   "$0" services >&2
   _step_end
 

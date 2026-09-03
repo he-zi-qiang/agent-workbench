@@ -389,3 +389,32 @@ def test_the_readiness_wait_needs_no_curl() -> None:
     source = waiter.read_text(encoding="utf-8")
     for third_party in ("import httpx", "import requests", "import aiohttp"):
         assert third_party not in source, third_party
+
+
+def test_up_separates_docker_absent_from_docker_not_running() -> None:
+    """Two failures that look alike and need different answers.
+
+    `scripts\\stack.cmd` has separated them since it was written, because only
+    the first is obvious from what Docker prints. Measured 2026-09-02 with the
+    engine stopped, before this: `up` reached the services step and emitted
+    Docker's own "Cannot connect to the Docker daemon" with nothing about which
+    step that was or what to do about it.
+
+    The WSL sentence is load-bearing on its own. There, `docker` can be absent
+    from the shell while Docker Desktop runs perfectly well on the Windows side,
+    and no amount of restarting it helps -- the fix is a checkbox in Settings >
+    Resources > WSL Integration, which nothing in Docker's own error mentions.
+    """
+
+    script = DEV_SCRIPT.read_text(encoding="utf-8")
+    body = script[script.index("_require_docker()") : script.index("_plan()")]
+
+    assert "command -v docker" in body, "the absent case must be probed by running it"
+    assert "docker info" in body, "a shim on PATH resolves and then fails"
+    assert "WSL Integration" in body
+    assert "not running" in body
+
+    # And it must be reached before anything is started, or the answer arrives
+    # after a container was already created.
+    arm = _up_arm()
+    assert arm.index("_require_docker") < arm.index('"$0" services')
