@@ -11,7 +11,9 @@ import {
 import type { ArtifactRef, EventEnvelope } from "../api/types";
 import { CommandTrace } from "./CommandTrace";
 import { LiveActivity } from "./LiveActivity";
+import { StepDetailBody } from "./StepDetailBody";
 import { StepDisclosure } from "./StepDisclosure";
+import { describeGroup } from "./groupDetail";
 import { TurnUsage, type PartialTurnUsage } from "./TurnUsage";
 import { presentActivity } from "./activityPresentation";
 import { foldForeignRuns, hasForeignRun, splitByRun } from "./runSections";
@@ -264,6 +266,14 @@ export function StepStream({
       );
     }
 
+    // 展开一个组，先看到的是这件事本身：传了什么进去、回来了什么、没成是为
+    // 什么（`describeGroup`）。五条簿记事件仍然一条不少，折在下面那层「事件记录」
+    // 里——此前它们是展开之后**唯一**的东西，读者要从「已提出 / 权限已完成 /
+    // 已开始 / 已完成」四行里自己拼出那三句，而参数还要再点一层。
+    // 命令类工具的参数和输出已经由 `CommandTrace` 画成终端的样子，这里不再要正文。
+    const detail = describeGroup(group, {
+      bodies: presentation.command === null,
+    });
     return (
       <li key={group.key}>
         {reasoning}
@@ -288,8 +298,25 @@ export function StepStream({
             </span>
             <GateBeads steps={group.gate} />
           </summary>
+          {detail.failure === null ? null : (
+            <p className="aw-step-failure">{detail.failure}</p>
+          )}
           {command}
-          <ol className="aw-stream-events">{group.events.map(step)}</ol>
+          <div className="aw-step-group-detail">
+            <StepDetailBody
+              artifact={detail.artifact}
+              bodies={detail.bodies}
+              facts={detail.facts}
+              onOpenArtifact={onOpenArtifact}
+            />
+          </div>
+          <details className="aw-step-events">
+            <summary>
+              <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+              事件记录 · {group.events.length} 条
+            </summary>
+            <ol className="aw-stream-events">{group.events.map(step)}</ol>
+          </details>
         </details>
       </li>
     );

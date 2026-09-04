@@ -21,6 +21,7 @@ from agent_workbench.domain.identifiers import new_id
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.ports.project_files import (
     DirectoryBrowser,
+    DirectoryEntry,
     DirectoryListing,
     ProjectFileStore,
     ProjectFileStoreFactory,
@@ -159,6 +160,23 @@ class ProjectService:
         if self.directories is None:
             raise NotFoundError("this deployment does not serve project directories")
         return await self.directories.browse(path)
+
+    async def create_directory(
+        self, principal: PrincipalContext, *, parent: str, name: str
+    ) -> DirectoryEntry:
+        """Make an empty folder the person can then choose (ADR-074).
+
+        Unscoped for the reason ``browse_directories`` gives, and it is worth
+        restating for a write: the process is one user on one machine, and a
+        folder made here is made as that user. The principal is kept in the
+        signature so the day browsing grows a notion of who may, this grows it
+        in the same place.
+        """
+
+        del principal
+        if self.directories is None:
+            raise NotFoundError("this deployment does not serve project directories")
+        return await self.directories.create(parent, name)
 
     async def open_files(
         self, principal: PrincipalContext, project_id: str

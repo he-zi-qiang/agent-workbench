@@ -1,9 +1,7 @@
 import {
-  Activity,
   BadgeCheck,
   KeyRound,
   Palette,
-  Wallet,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -12,8 +10,6 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { PrincipalIdentity } from "../api/types";
 import { IconButton } from "../components/ui";
 import { ProviderKeyPanel } from "../features/system/ProviderKeyPanel";
-import { HealthReport } from "../features/system/SystemPage";
-import { UsageReport } from "../features/usage/UsagePage";
 import { useIdentity } from "./IdentityContext";
 import { THEME_LABEL, THEME_MODES, useTheme } from "./ThemeContext";
 
@@ -22,22 +18,26 @@ import { THEME_LABEL, THEME_MODES, useTheme } from "./ThemeContext";
  *
  * **它替掉的是「本地身份模拟器」。** 那个框只做一件事——改三个 header——而它占着
  * 这个界面上唯一一个「设置」形状的位置：左下角那颗头像。于是这台部署所有其他可
- * 调的东西各自找了个别的地方住：主题在 rail 上一颗会循环三档的按钮里，用量是一
- * 条路由，运行状态是另一条。四件事，四个入口，没有一个地方能回答「这台东西都有
- * 什么可调的」。
+ * 调的东西各自找了个别的地方住。
  *
- * **分类是竖排的，不是标签页。** 右栏那两处用的是标签页，因为它们要在一栏宽度里
- * 挤下四五格；这里是一个宽对话框，竖排的分类既放得下说明文字，也留得下以后往下
- * 加。这是 Claude Desktop 那个设置窗的形状，抄的是它的**结构**（左类右容、每一
- * 类一屏），不是它的条目——它那些条目背后的能力这台部署一多半没有。
+ * **只装能改的东西，三类。** 第一版装了五类：身份、密钥、外观，再加用量和运行
+ * 状态。后两类各自本来就是一整页（`/usage`、`/system`），塞进这个框等于同一份
+ * 报表画了两遍，而且是在一个为表单定尺寸的框里画一张六列的表——用户的原话是
+ * 「更多和设置有些重复，设置的每个子页面设计也不统一，大小之类的」。两句都对，
+ * 而且是同一个原因：报表不是设置。现在这个框只回答「这台东西有什么可调的」，
+ * 三类全部有后端或本地状态撑着：身份（三个 header）、密钥（ADR-101）、外观
+ * （`ThemeContext`）。用量和运行状态回到「更多」里，那是它们作为**页面**的入口。
  *
- * **只装真能改或真能看的东西。** 一个设置面板最容易犯的错是把「以后想支持的」
- * 先画上：一个点了没反应的开关，读者读成的是坏了。所以这里四类，全部有后端或有
- * 本地状态撑着：外观（`ThemeContext`）、用量（`GET /v1/usage`）、本地身份（那三
- * 个 header）、运行状态（两个健康检查端点）。
+ * **分类是竖排的，不是标签页。** 抄的是 Claude Desktop 设置窗的**结构**（左类右容、
+ * 每一类一屏），不是它的条目——它那些条目背后的能力这台部署一多半没有。
+ *
+ * **三类同一个骨架。** 每一类都是：一个 `<h3>`、一段 `.aw-settings-lede` 说这一
+ * 类管什么、然后是它的字段或选项、动作贴在字段下面。此前身份那一类的标题叫
+ * 「本地身份模拟器」，左栏却写着「本地身份」——同一样东西两个名字，一眼就读成
+ * 两样东西。框的高度也固定下来：换一类不该让整个框跳一下。
  *
  * **打开时落在「本地身份」。** 左下角那颗头像此前打开的就是身份编辑框，而一次
- * 改版不该让一个用惯了的按钮换掉它的后果。其余几类就在旁边。
+ * 改版不该让一个用惯了的按钮换掉它的后果。其余两类就在旁边。
  */
 
 interface Section {
@@ -51,8 +51,6 @@ const SECTIONS: readonly Section[] = [
   { id: "identity", label: "本地身份", icon: BadgeCheck, hint: "这台环境用哪个身份发请求" },
   { id: "provider", label: "模型密钥", icon: KeyRound, hint: "这台部署用哪把 key 调模型" },
   { id: "appearance", label: "外观", icon: Palette, hint: "浅色、深色，还是跟着系统" },
-  { id: "usage", label: "用量", icon: Wallet, hint: "钱和 token 花在哪了" },
-  { id: "health", label: "运行状态", icon: Activity, hint: "本机这几个进程还在不在" },
 ];
 
 export function SettingsDialog() {
@@ -105,9 +103,9 @@ function SettingsDialogContent({
       return;
     }
     if (event.key !== "Tab" || dialogRef.current === null) return;
-    // 焦点关在框里。选择器里加了 `a` 和 `[tabindex]`：这个框现在装得下用量那张
-    // 表和运行状态那几条，里头不再只有 input 和 button——漏掉的那些会让 Tab 走
-    // 到框外面去，而背景是 `inert` 的，于是焦点消失在一个看不见的地方。
+    // 焦点关在框里。选择器里保留 `a` 和 `[tabindex]`：密钥那一类里有链接形状的
+    // 东西，漏掉的那些会让 Tab 走到框外面去，而背景是 `inert` 的，于是焦点消失
+    // 在一个看不见的地方。
     const focusable = Array.from(
       dialogRef.current.querySelectorAll<HTMLElement>(
         'input:not([disabled]), button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
@@ -181,8 +179,6 @@ function SettingsDialogContent({
             ) : null}
             {section === "provider" ? <ProviderKeyPanel /> : null}
             {section === "appearance" ? <AppearanceSection /> : null}
-            {section === "usage" ? <UsageReport /> : null}
-            {section === "health" ? <HealthReport /> : null}
           </div>
         </div>
       </section>
@@ -201,9 +197,11 @@ function IdentitySection({
 }) {
   return (
     <>
-      <h3>本地身份模拟器</h3>
+      {/* 和左栏同一个名字。「模拟器」这个词留给下面那句说明——它说的是**这些
+          字段是什么性质**，不是这一类叫什么。 */}
+      <h3>本地身份</h3>
       <p className="aw-settings-lede">
-        这些 Header 只用于 loopback 开发环境，不是生产登录。切换身份后，服务端会重新执行对象级授权，本地列表也会按身份隔离（ADR-044）。
+        这里模拟的是请求头里的身份，只用于 loopback 开发环境，不是生产登录。切换身份后，服务端会重新执行对象级授权，本地列表也会按身份隔离（ADR-044）。
       </p>
       <div className="aw-form-stack">
         <label>
@@ -236,8 +234,8 @@ function IdentitySection({
       </div>
       {/* 「应用」贴着它改的那三个框，不在对话框页脚。
           页脚那个位置在一个分类式的设置面板里是有歧义的：它看起来在为**整个面板**
-          负责，而它只能保存这一类里的东西——另外三类根本没有待保存的草稿（主题即点
-          即生效，另外两类是只读的）。 */}
+          负责，而它只能保存这一类里的东西——另外两类根本没有待保存的草稿（主题即点
+          即生效，密钥有自己的保存）。 */}
       <div className="aw-settings-actions">
         <button
           className="aw-button is-primary"
@@ -257,8 +255,12 @@ function AppearanceSection() {
   return (
     <>
       <h3>外观</h3>
+      {/* 说给用的人听，不说给写 CSS 的人听。上一版这句话是「不写 data-theme，
+          由 light-dark() 自己按 prefers-color-scheme 解析」——三个代码里的名字
+          压在一个只想选浅色还是深色的人面前。那三个名字仍然是事实（见
+          `ThemeContext`），但它们是注释，不是界面。 */}
       <p className="aw-settings-lede">
-        「跟随系统」不写 <code>data-theme</code>，由 <code>light-dark()</code> 自己按 <code>prefers-color-scheme</code> 解析；另外两档写死，压过系统的偏好。
+        「跟随系统」随操作系统当前的浅色或深色走，系统换了它就换；另外两档固定，不随系统变。改了立刻生效，不用保存。
       </p>
       <div className="aw-settings-choices" role="radiogroup" aria-label="主题">
         {THEME_MODES.map((option) => {

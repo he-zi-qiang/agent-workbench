@@ -200,6 +200,17 @@ class ProjectPathError(ValueError):
     """
 
 
+class DirectoryExistsError(ProjectPathError):
+    """A create-only ``mkdir`` found something already at that name.
+
+    A subclass rather than a message the route would have to string-match: the
+    next move differs from every other ``ProjectPathError``. A bad name is the
+    caller's to fix; an existing name is a fact about the disk, and the picker
+    can offer to walk into it instead. HTTP has a code for exactly that
+    distinction (409 against 400), and it should be decided by type.
+    """
+
+
 def _reject(path: str, reason: str) -> ProjectPathError:
     """Build the refusal.
 
@@ -340,6 +351,7 @@ __all__ = [
     "MAX_SEGMENT_BYTES",
     "PROJECT_RUN_SCOPE",
     "PROJECT_RUN_TOOL",
+    "DirectoryExistsError",
     "ProjectFileChangedError",
     "ProjectFileExistsError",
     "ProjectPathError",

@@ -1,4 +1,7 @@
 import type { ArtifactRef, EventEnvelope } from "../api/types";
+// `parseJsonDocument` 只认对象和数组：`"42"` 是合法 JSON，但它不是一份文档，
+// 一段碰巧以 `{` 开头的散文也不是。
+import { parseJsonDocument } from "./JsonView";
 import { formatDateTime } from "./ui";
 
 /**
@@ -18,6 +21,14 @@ export interface StepBody {
   text: string;
   /** Pretty-printed when the producer emitted JSON, so a plan reads as a plan. */
   format: "json" | "text";
+  /**
+   * 解析出来的那个值，只在 `format` 是 `json` 时有。
+   *
+   * 给 `StepDetailBody` 按形状画（`JsonView`），省得它再解析一次 `text`——两次
+   * 解析总有一天会因为一处改了而不一样。`text` 仍然保留：测试和纯文本的兜底
+   * 都读它。
+   */
+  value?: unknown;
 }
 
 export interface StepDetail {
@@ -408,26 +419,10 @@ function outputBodies(payload: Record<string, unknown>): StepBody[] {
 }
 
 function bodyOf(label: string, value: string): StepBody {
-  const pretty = prettyJson(value);
-  return pretty === null
+  const parsed = parseJsonDocument(value);
+  return parsed === undefined
     ? { label, text: value, format: "text" }
-    : { label, text: pretty, format: "json" };
-}
-
-/**
- * Re-indent a JSON payload so a plan or a critic verdict reads as a structure.
- * Returns null for anything that is not a JSON object or array, so ordinary
- * prose is never mangled by a parse that happened to succeed -- `"42"` is
- * valid JSON and is not a document.
- */
-function prettyJson(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2);
-  } catch {
-    return null;
-  }
+    : { label, text: JSON.stringify(parsed, null, 2), format: "json", value: parsed };
 }
 
 /**

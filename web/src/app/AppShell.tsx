@@ -28,7 +28,6 @@ import { SettingsDialog } from "./SettingsDialog";
 import { useIdentity } from "./IdentityContext";
 import { isPathWithin, NAVIGATION } from "./navigation";
 import { QuickSwitcher } from "./QuickSwitcher";
-import { THEME_LABEL, useTheme } from "./ThemeContext";
 import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
 const PRIMARY_NAVIGATION = NAVIGATION.filter((item) => item.primary);
@@ -50,8 +49,6 @@ interface PrimaryNavigationMemory {
 
 export function AppShell() {
   const { identity, editorOpen, setEditorOpen } = useIdentity();
-  const { mode: themeMode, cycleMode: cycleTheme } = useTheme();
-  const ThemeIcon = THEME_LABEL[themeMode].icon;
   const location = useLocation();
   const navigate = useNavigate();
   const navigationType = useNavigationType();
@@ -692,7 +689,12 @@ export function AppShell() {
                 return (
                   <NavLink
                     aria-label={item.label}
-                    className="aw-mobile-more-link"
+                    // 知识库在桌面端的 rail 上已经有自己的一行（「资源」那一组），
+                    // 这个面板在桌面端再列一次就是同一个去处两个入口。只在 rail
+                    // 藏起来的窄屏上画它——那时它是唯一的入口。
+                    className={`aw-mobile-more-link${
+                      item.to === "/knowledge" ? " is-mobile-only" : ""
+                    }`}
                     key={item.to}
                     onClick={() => closeMore()}
                     to={item.to}
@@ -717,21 +719,14 @@ export function AppShell() {
                   <small>按名称或用途查找所有页面</small>
                 </span>
               </button>
-              {/* 主题也在这里出现一次：rail 在 760px 以下是隐藏的，而它是
-                  主题按钮唯一的入口，只放在 rail 上等于移动端没有主题开关。
-                  这一项不关闭面板——连点三下看三档，比每点一次都要重新打开
-                  「更多」要合理。 */}
+              {/* 主题不再在这里单列一行。它此前是 rail 上那颗循环三档的按钮
+                  搬进来的，而设置面板的「外观」已经把三档并排画出来了——同一
+                  个开关两个入口、两种形状，用户读成的是重复。「设置」这一行
+                  留着，它是窄屏上唯一能到设置面板的路。 */}
               <button
-                className="aw-mobile-more-link"
-                onClick={cycleTheme}
-                type="button"
-              >
-                <ThemeIcon aria-hidden="true" size={19} />
-                <span className="aw-mobile-more-copy">
-                  <strong>主题：{THEME_LABEL[themeMode].text}</strong>
-                </span>
-              </button>
-              <button
+                // 名字只有两个字。下面那行小字是说明，不是名字——和上面每一
+                // 条 NavLink 的 `aria-label={item.label}` 同一条规矩。
+                aria-label="设置"
                 className="aw-mobile-more-link"
                 onClick={openSettingsFromMore}
                 type="button"
@@ -739,6 +734,7 @@ export function AppShell() {
                 <Settings2 aria-hidden="true" size={19} />
                 <span className="aw-mobile-more-copy">
                   <strong>设置</strong>
+                  <small>本地身份、模型密钥、外观</small>
                 </span>
               </button>
             </nav>

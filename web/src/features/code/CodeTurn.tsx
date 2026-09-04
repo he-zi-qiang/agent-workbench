@@ -41,6 +41,25 @@
  * once: streaming at the top of the page, formatted inside its step, and
  * verbatim again in that step's raw JSON dump.
  *
+ * ## 一个动作行打得开，这是补上的
+ *
+ * 动作行此前只说「读取项目目录 README.md」，读者要知道**读到了什么**，只能去
+ * 整轮底下那份「原始事件」——一个 `JSON.stringify` 出来的数组，几千行，文件正文
+ * 在里面是一行带 `\n` 的转义。用户的原话：「多次的调用和回答，还有里面的 json
+ * 文件，展现的不是很好。」现在每个动作行是一个 `<details>`，展开是这一步作为一件
+ * 事的正文（`describeGroup`）：参数、返回、没成是为什么，JSON 按形状画。命令类
+ * 工具照旧由 `CommandTrace` 画成终端的样子，那一栏不重复参数与输出。
+ *
+ * 整轮底下的那份 JSON 换成了一条一行的事件记录：每条能展开成它自己的事实与载荷，
+ * 用的是 Task 时间线同一个零件（`StepDisclosure`），同一张词表。
+ *
+ * ## 没跑完的那一轮要说为什么
+ *
+ * 一段会话里三轮因为模型服务 400 而失败，此前看到的是三张只有指令、脚注写着
+ * `0 → 0` 的卡片，什么也没说。终止事件就在那一轮自己的事件里
+ * （`turnBlocks.stopOf`），现在它是报告位置上的一句话——和正在跑时停下的那句
+ * 是同一个词表（`stopNote`）。
+ *
  * ## Why a produced file is a card here and not only a row over there
  *
  * "生成的文件应该在对话生成中" is a claim about *when*, not only about where.
@@ -53,10 +72,10 @@
 
 import {
   Check,
+  ChevronRight,
   FilePenLine,
   FileSearch,
   FolderOpen,
-  MoreHorizontal,
   Search,
   Sparkles,
   TerminalSquare,
@@ -68,11 +87,16 @@ import type { WorkspaceEntryView } from "../../api/types";
 import { CommandTrace } from "../../components/CommandTrace";
 import { LiveActivity, type LiveActivityKind } from "../../components/LiveActivity";
 import { MarkdownContent } from "../../components/MarkdownContent";
+import { StepDetailBody } from "../../components/StepDetailBody";
+import { StepDisclosure } from "../../components/StepDisclosure";
 import { TurnUsage } from "../../components/TurnUsage";
 import { presentActivity } from "../../components/activityPresentation";
+import { runEventTitle } from "../../components/eventVocabulary";
+import { describeGroup } from "../../components/groupDetail";
 import type { StepGroup } from "../../components/stepGroups";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
+import { stopNote } from "./stopNote";
 import type { CodeTurnBlock, TurnStep } from "./turnBlocks";
 
 /** Success is the unmarked case: a reader scans for the one that did not. */
@@ -199,17 +223,43 @@ export function CodeTurn({
         </section>
       )}
 
+      {/* 没跑完的那一轮，在报告的位置说为什么。有报告也说：一轮撞了时限之后
+          最后一次模型输出照样会落成报告，而那份报告不知道自己是被打断的。 */}
+      {block.stop === null ? null : (
+        <p
+          aria-label="这一轮为什么停下"
+          className={`aw-code-stop is-${block.stop.kind}`}
+          role="status"
+        >
+          {stopNote(block.stop.reason, block.stop.code, block.stop.message)}
+        </p>
+      )}
+
       {/* 在答案下面、原始事件上面。和 Chat 那一处同一个位置、同一个零件：三个
           模式对同一个数说同一句话，是这个脚注唯一要守住的东西。 */}
       <TurnUsage usage={block.usage} />
 
       {block.events.length === 0 ? null : (
         <details className="aw-code-raw">
-          <summary title="查看这一轮的原始事件">
-            <MoreHorizontal aria-hidden="true" size={14} />
-            <span>原始事件</span>
+          <summary title="这一轮的每一条事件，按发生的顺序">
+            <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+            <span>事件记录 · {block.events.length} 条</span>
           </summary>
-          <pre>{JSON.stringify(block.events, null, 2)}</pre>
+          {/* 一条一行，每条可展开成它自己的事实与载荷——Task 时间线同一个零件、
+              同一张词表。此前这里是整轮 `JSON.stringify` 出来的一份数组。
+              不带正文：思考、参数、返回都已经画在上面的转录里了，这一折只是
+              原料。 */}
+          <ol aria-label="这一轮的事件" className="aw-stream-events">
+            {block.events.map((event) => (
+              <li key={event.event_id}>
+                <StepDisclosure
+                  bodies={false}
+                  event={event}
+                  title={runEventTitle(event)}
+                />
+              </li>
+            ))}
+          </ol>
         </details>
       )}
     </li>
@@ -261,21 +311,13 @@ function TurnStepRow({
     >
       {text === "" ? null : <Thought live={live} text={text} />}
       {step.group === null ? null : (
-        <div className={`aw-code-action is-${step.group.outcome}`}>
-          <ActionIcon
-            outcome={step.group.outcome}
-            toolName={presentation?.toolName ?? null}
-          />
-          <span className="aw-code-action-title">{step.group.title}</span>
-          {step.group.subject === null ? null : (
-            <span className="aw-code-action-subject" title={step.group.subject}>
-              {step.group.subject}
-            </span>
-          )}
-          <span className="aw-code-action-outcome">
-            {OUTCOME_LABELS[step.group.outcome]}
-          </span>
-        </div>
+        <ActionRow
+          group={step.group}
+          hasCommand={
+            presentation?.command !== null && presentation?.command !== undefined
+          }
+          toolName={presentation?.toolName ?? null}
+        />
       )}
       {presentation?.command === null || presentation?.command === undefined ? null : (
         <CommandTrace
@@ -285,6 +327,74 @@ function TurnStepRow({
       )}
       {progress === undefined ? null : <Progress progress={progress} />}
     </li>
+  );
+}
+
+/**
+ * 动作那一行，以及它展开之后的正文。
+ *
+ * 行本身一个像素没动（`.aw-code-action` 仍然是它，测试也仍然按这个类数动作），
+ * 只是现在它是一个 `<details>` 的 `<summary>`，行首多一枚三角。展开是这一步作为
+ * 一件事的正文：参数、返回、没成是为什么。命令类工具的参数与输出已经由下面的
+ * `CommandTrace` 画成终端的样子，这里不重复正文，只留事实与失败那一句。
+ *
+ * 默认收着，跑着的也收着：正在跑的那一步的动静在 `Progress` 那一块，那一块本
+ * 来就在行下面、不用点。
+ */
+function ActionRow({
+  group,
+  hasCommand,
+  toolName,
+}: {
+  group: StepGroup;
+  hasCommand: boolean;
+  toolName: string | null;
+}) {
+  const merged = describeGroup(group, { bodies: !hasCommand });
+  // 思考不进这一折：它已经是这一步上面那一行（`Thought`），同一段话在同一步里
+  // 出现两次，读者会以为是两段。
+  const detail = {
+    ...merged,
+    bodies: merged.bodies.filter((body) => body.label !== "思考摘要"),
+  };
+  const hasBody =
+    detail.failure !== null ||
+    detail.facts.length > 0 ||
+    detail.bodies.length > 0 ||
+    detail.artifact !== null;
+  const row = (
+    <>
+      <ActionIcon outcome={group.outcome} toolName={toolName} />
+      <span className="aw-code-action-title">{group.title}</span>
+      {group.subject === null ? null : (
+        <span className="aw-code-action-subject" title={group.subject}>
+          {group.subject}
+        </span>
+      )}
+      <span className="aw-code-action-outcome">{OUTCOME_LABELS[group.outcome]}</span>
+    </>
+  );
+  // 一个什么也展不开的行不是 <details>：点开之后是空的三角，比没有三角更糟。
+  if (!hasBody) {
+    return <div className={`aw-code-action is-${group.outcome}`}>{row}</div>;
+  }
+  return (
+    <details className={`aw-code-action-fold is-${group.outcome}`}>
+      <summary className={`aw-code-action is-${group.outcome}`}>
+        <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+        {row}
+      </summary>
+      <div className="aw-code-action-body">
+        {detail.failure === null ? null : (
+          <p className="aw-step-failure">{detail.failure}</p>
+        )}
+        <StepDetailBody
+          artifact={detail.artifact}
+          bodies={detail.bodies}
+          facts={detail.facts}
+        />
+      </div>
+    </details>
   );
 }
 

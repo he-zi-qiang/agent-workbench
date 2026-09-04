@@ -781,3 +781,69 @@ def test_the_browse_route_is_not_swallowed_by_the_project_id_route() -> None:
     code, keys = _run(world, scenario)
     assert code == 200
     assert keys == ["entries", "parent", "path", "truncated"]
+
+
+# --- making a directory (ADR-074) ---------------------------------------------
+
+
+def test_creating_a_directory_returns_the_entry_the_picker_can_walk_into(
+    tmp_path: Path,
+) -> None:
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, Any, list[str]]:
+        made = await client.post(
+            "/v1/projects/directories",
+            json={"parent": str(tmp_path), "name": "fresh"},
+            headers=_headers(),
+        )
+        listed = await client.get(
+            "/v1/projects/directories",
+            params={"path": str(tmp_path)},
+            headers=_headers(),
+        )
+        return (
+            made.status_code,
+            made.json(),
+            [entry["name"] for entry in listed.json()["entries"]],
+        )
+
+    code, body, names = _run(world, scenario)
+    assert code == 201
+    # The same shape as one entry of a listing, because that is what it is:
+    # the client's next request is `?path=<this>`.
+    assert body == {"name": "fresh", "path": str(tmp_path / "fresh")}
+    assert names == ["fresh"]
+    assert (tmp_path / "fresh").is_dir()
+
+
+def test_a_taken_name_is_409_and_a_bad_name_is_400(tmp_path: Path) -> None:
+    """Two refusals the picker treats differently, so they must arrive as two codes.
+
+    409 means "walk into it instead" and 400 means "fix the name". Folding both
+    into 400 would leave the picker unable to offer the one useful next step.
+    """
+
+    world = _World()
+    (tmp_path / "taken").mkdir()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, int, int]:
+        taken = await client.post(
+            "/v1/projects/directories",
+            json={"parent": str(tmp_path), "name": "taken"},
+            headers=_headers(),
+        )
+        escaping = await client.post(
+            "/v1/projects/directories",
+            json={"parent": str(tmp_path), "name": "../escape"},
+            headers=_headers(),
+        )
+        not_a_dir = await client.post(
+            "/v1/projects/directories",
+            json={"parent": str(tmp_path / "missing"), "name": "x"},
+            headers=_headers(),
+        )
+        return taken.status_code, escaping.status_code, not_a_dir.status_code
+
+    assert _run(world, scenario) == (409, 400, 400)
+    assert not (tmp_path.parent / "escape").exists()

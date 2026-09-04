@@ -2290,16 +2290,17 @@ select {
   white-space: nowrap;
 }
 
+/* 时间**常显**，这是改过的。
+   上一版把它设成静止 `opacity: 0`、指上去才现，理由是省宽度——但它 `flex: none`，
+   静止时既不显示、又占着那 79px，一个像素也没省下。省下的只是信息：一列
+   「对比评估三个互不…」×6 的任务，没有时间是六行一模一样的字，读者认不出哪
+   一条是今天早上那次。用户的原话是「侧边栏的展示不是很直观」。
+   字号 11、等宽、淡色：它是附注，标题仍然是这一行的主语。 */
 .aw-task-list-item small {
   flex: none;
-  opacity: 0;
-  font-size: 12px;
-  transition: opacity var(--aw-duration-fast) var(--aw-ease);
-}
-
-.aw-task-list-item:hover small,
-.aw-task-list-item.is-active small {
-  opacity: 1;
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 .aw-task-list-item.is-active strong {
@@ -2376,16 +2377,15 @@ select {
   display: inline;
 }
 
+/* 和任务行同一条改法：时间常显。收窄到一个文件夹的那一档，行里只有标题和
+   时间两样，此前时间静止 `opacity: 0` 却仍占着 79px——一列「请你操控电脑打…」
+   ×6 的会话，没有时间就是六行一模一样的字。「全部会话」那一档仍按上面
+   `:has(.aw-code-recent-project)` 的规矩：静止说文件夹，指上去说时间。 */
 .aw-code-recent-when {
   flex: none;
-  opacity: 0;
-  font-size: 12px;
-  transition: opacity var(--aw-duration-fast) var(--aw-ease);
-}
-
-.aw-code-recent-link:hover .aw-code-recent-when,
-.aw-code-recent-link[aria-current="page"] .aw-code-recent-when {
-  opacity: 1;
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 .aw-chat-session:hover,
