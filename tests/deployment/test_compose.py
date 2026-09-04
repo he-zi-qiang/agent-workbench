@@ -405,10 +405,12 @@ def test_the_windows_launcher_says_the_stack_is_not_everything() -> None:
     the image was built without the extra -- and became a lie the moment
     `Dockerfile` gained `--extra embedding`, with this test holding the lie in
     place. So it now names what is still absent rather than what was absent
-    once: a topology of Linux containers cannot assemble the sandbox or
-    computer use at all, and until somebody saves a provider key the Workers
-    run synthetic handlers, which is the absence that looks least like one --
-    a Task reaches `succeeded` having called no model and no tool.
+    once -- and the list moved again with ADR-0107 and ADR-0108: the sandbox
+    is present (and its one failure mode, an image the broker could not pull,
+    is named), computer use is a second launcher on the host rather than an
+    absence, and until somebody saves a provider key the Workers run synthetic
+    handlers, which is the absence that looks least like one -- a Task reaches
+    `succeeded` having called no model and no tool.
 
     Asserted on the executable lines, because the paragraph of `rem` above them
     explains the same thing and would satisfy a whole-file search while the
@@ -420,12 +422,17 @@ def test_the_windows_launcher_says_the_stack_is_not_everything() -> None:
     )
     assert "System page" in printed
     assert "SYNTHETIC" in printed, "a synthetic Worker must not look like a real one"
-    assert "Sandbox" in printed and "computer use" in printed
+    # Since ADR-0107 the sandbox is present, and its one failure mode is named;
+    # since ADR-0108 computer use is a second launcher on the host, not an
+    # absence, and the summary says which file.
+    assert "Sandbox" in printed and "sandbox container" in printed
+    assert "computer.cmd" in printed
+    assert "absent from any container topology" not in printed
 
 
 def test_the_windows_launcher_measures_the_machine_before_it_spends_its_time() -> None:
-    """Four processes here load the retrieval models, and the machine may not
-    have room for them.
+    """One process here loads the retrieval models (ADR-0106), and the machine
+    may not have room for it.
 
     The cost of not asking is specific: tens of minutes of image build and
     weight download, and then `up --wait` timing out in swap -- which reads as
@@ -446,6 +453,11 @@ def test_the_windows_launcher_measures_the_machine_before_it_spends_its_time() -
     run = "\n".join(_launcher_commands())
     assert "MemTotal" in run, "the launcher never asks how much memory Docker has"
     assert "set /a" not in run, "cmd arithmetic overflows on a byte count"
+    # The two lines are the one measured figure (12 GB for one model-holding
+    # process) and that figure plus a stated allowance; the pre-ADR-0106
+    # floors were four times that and are gone.
+    assert "GEQ 16 goto :memory_ok" in run and "GEQ 12 goto :memory_tight" in run
+    assert "GEQ 51" not in run and "GEQ 29" not in run
 
     dispatch = run.index('if /i "%~1"=="restart" goto :restart')
     assert run.index("MemTotal") > dispatch, (
@@ -534,17 +546,32 @@ def test_the_windows_launcher_can_restart_just_the_processes_that_read_config() 
     restarts = [
         line for line in _launcher_commands() if "compose" in line and "restart" in line
     ]
+    # The sandbox broker joins the list (ADR-0107): it picks its image at start,
+    # so an image built by `sandbox-image` is seen only after this. The encoder
+    # is deliberately absent -- restarting it reloads three models.
     assert restarts == [
-        "docker compose --profile demo restart api task-worker task-worker-b"
+        "docker compose --profile demo restart sandbox api task-worker task-worker-b"
     ], restarts
+    assert not any("encoder" in line for line in restarts)
     assert 'if /i "%~1"=="restart" goto :restart' in _launcher_commands()
     # Listed where the other subcommands are, so a person finds it.
     assert "scripts\\stack.cmd restart" in _launcher()
 
 
-#: Every service that builds a real embedder, and therefore loads BGE-M3 dense,
-#: BGE-M3 sparse and the reranker into its own address space.
+#: The processes that retrieve, and therefore used to load BGE-M3 dense, BGE-M3
+#: sparse and the reranker each into its own address space. Since ADR-0106
+#: they ask the encoder instead, and this tuple names what must *not* hold the
+#: weights any more.
 RETRIEVING_SERVICES = ("api", "task-worker", "task-worker-b", "ingestion-worker")
+#: The one process that does.
+ENCODER = "encoder"
+HF_CACHE = "/var/lib/agent-workbench/hf-cache"
+
+
+def _mounts(service: dict[str, object], target: str) -> list[dict[str, object]]:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    return [m for m in volumes if isinstance(m, dict) and m.get("target") == target]
 
 
 def test_the_stack_names_the_profile_it_runs() -> None:
@@ -586,38 +613,59 @@ def test_the_stack_names_the_profile_it_runs() -> None:
     assert "qdrant" not in parsed
 
 
-def test_every_process_that_retrieves_gets_the_weights_it_needs() -> None:
-    """Four processes, one cache, and a one-shot that fills it first.
+def test_the_stack_names_the_profile_for_the_encoder_too() -> None:
+    """It reads the same `[rag.embedding]` the other four read, which is what
+    keeps "the model the encoder loads" and "the model they expect" one
+    declaration (ADR-0106 §3.2)."""
 
-    The ordering is not an optimisation. The sparse arm checks the cache for
-    BGE-M3's trained lexical head *before* it builds the model and raises when
-    it is absent -- because FlagEmbedding's own behaviour there is to
-    substitute a randomly initialised projection and carry on. So a cold cache
-    does not make the first start slow; it makes all four of these exit.
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    environment = services[ENCODER].get("environment") or {}
+    assert environment.get("AW_CONFIG_FILE") == "/app/config/config.compose-local.toml"
+
+
+def test_only_the_encoder_gets_the_weights_and_everyone_else_waits_for_it() -> None:
+    """One cache, one process, four clients (ADR-0106).
+
+    The ordering half is not an optimisation: the sparse arm checks the cache
+    for BGE-M3's trained lexical head *before* it builds the model and raises
+    when it is absent, so a cold cache does not make the encoder slow, it
+    makes it exit. The other half is the whole point of the ADR: a service
+    that still mounted the cache would be a service that could still load the
+    weights, and the memory floor the launcher checks assumes exactly one does.
     """
 
     services = _compose()["services"]
     assert isinstance(services, dict)
 
+    encoder = services[ENCODER]
+    assert (encoder.get("environment") or {}).get("HF_HOME") == HF_CACHE
+    mounts = _mounts(encoder, HF_CACHE)
+    assert len(mounts) == 1 and str(mounts[0]["source"]).endswith("hf_cache")
+    assert encoder["depends_on"]["weights-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert "fetch_weights.py" in " ".join(services["weights-init"]["command"])
+
     for name in RETRIEVING_SERVICES:
         service = services[name]
-        environment = service.get("environment") or {}
-        assert environment.get("HF_HOME") == "/var/lib/agent-workbench/hf-cache", name
-        mounts = [
-            mount
-            for mount in service.get("volumes", [])
-            if mount.get("target") == "/var/lib/agent-workbench/hf-cache"
-        ]
-        assert len(mounts) == 1, name
-        assert mounts[0]["source"].endswith("hf_cache"), name
-        assert service["depends_on"]["weights-init"]["condition"] == (
-            "service_completed_successfully"
-        ), name
+        assert _mounts(service, HF_CACHE) == [], f"{name} still mounts the weights"
+        assert "weights-init" not in service["depends_on"], name
+        assert service["depends_on"][ENCODER]["condition"] == "service_healthy", name
 
-    # Not baked into the image: gigabytes in a layer are re-pulled on every
-    # rebuild, and the build machine would need to reach Hugging Face even with
-    # a warm volume sitting beside it.
-    assert "fetch_weights.py" in " ".join(services["weights-init"]["command"])
+
+def test_the_encoder_is_reached_by_name_and_published_nowhere() -> None:
+    """Its own container, bound on its interface the way Qdrant is, and the
+    only project server allowed to be: it is not an MCP server and holds no
+    identity (ADR-0106 §3.3). No port reaches the host."""
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    command = " ".join(services[ENCODER]["command"])
+    assert command.startswith("agent-encoder")
+    assert "--host 0.0.0.0" in command
+    assert "ports" not in services[ENCODER]
+    assert services[ENCODER]["healthcheck"]["test"][-1].count("/health") == 1
 
 
 def test_the_ingestion_worker_writes_vectors_that_mean_something() -> None:
@@ -702,3 +750,133 @@ def test_every_application_service_keeps_the_hardening() -> None:
         assert service.get("read_only") is True, name
         assert "no-new-privileges:true" in service.get("security_opt", []), name
         assert service.get("cap_drop") == ["ALL"], name
+
+
+# --- the sandbox broker (ADR-0107) --------------------------------------------
+
+SOCKET = "/var/run/docker.sock"
+
+
+def test_exactly_one_service_holds_the_docker_socket_and_it_is_the_broker() -> None:
+    """The trade ADR-0105 refused to make by mount, made by topology instead.
+
+    A socket in the API's container is root on the VM for anything that gets
+    into a process that also holds a provider key, a database and every
+    workspace. The broker holds none of those -- no key volume, no artifact
+    volume, no configuration -- so what a compromise of it buys is the daemon
+    and nothing else, which is what the native path already hands the sandbox
+    server. Asserted as *exactly one*, because the failure this guards is a
+    second mount added to a service that looked like it needed one.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    holders = sorted(name for name, spec in services.items() if _mounts(spec, SOCKET))
+    assert holders == ["sandbox"], holders
+
+    broker = services["sandbox"]
+    assert "run-sandbox-local.sh" in " ".join(broker["command"])
+    assert _mounts(broker, "/var/lib/agent-workbench/provider-key") == []
+    assert _mounts(broker, "/var/lib/agent-workbench/artifacts") == []
+    assert "AW_CONFIG_FILE" not in (broker.get("environment") or {})
+    assert "AW_DATABASE__DSN" not in (broker.get("environment") or {})
+    # Root, because the socket is root-owned; the hardening anchor still
+    # applies (`test_every_application_service_keeps_the_hardening` covers it).
+    assert broker.get("user") == "0:0"
+    assert "ports" not in broker
+
+
+def test_the_clients_of_the_broker_reach_it_through_a_loopback_tunnel() -> None:
+    """Every guard on that path -- the settings validator, the MCP SDK's Host
+    check, the server's own `--host` choice list -- is about a loopback
+    address, and a tunnel whose two ends are both loopback keeps every one of
+    them true (docker/loopback_proxy.py). The tunnel has to be up before the
+    process that dials it, and the probe has to be behind the tunnel."""
+
+    for launcher in (
+        ROOT / "docker" / "run-api-local.sh",
+        ROOT / "docker" / "run-task-worker-local.sh",
+    ):
+        text = "\n".join(
+            line
+            for line in launcher.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        tunnel = text.index(
+            'LOCAL_PROXY_UPSTREAM_HOST="${SANDBOX_UPSTREAM_HOST:-sandbox}"'
+        )
+        probe = text.index("decide_sandbox.py")
+        started = text.index(
+            "agent-api" if "api" in launcher.name else "exec agent-task-worker"
+        )
+        assert tunnel < probe < started, launcher.name
+        assert "LOCAL_PROXY_LISTEN_HOST=127.0.0.1" in text, launcher.name
+        assert (
+            "LOCAL_PROXY_PORT=8766" in text
+            or 'LOCAL_PROXY_PORT="$SANDBOX_PORT"' in text
+        )
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    for name in ("api", "task-worker", "task-worker-b"):
+        assert services[name]["depends_on"]["sandbox"]["condition"] == "service_healthy"
+
+
+def test_the_launchers_decide_the_sandbox_and_leave_an_operators_value_alone() -> None:
+    """On without a broker that answers is a startup error by design (ADR-057),
+    so the profile leaves it off and the launcher turns it on when the
+    runtime answers -- the shape web search already has (ADR-102 §3)."""
+
+    api = _api_launcher()
+    assert (
+        'if [ -z "${AW_CODE__SANDBOX_ENABLED:-}" ] && [ -z "${AW_SANDBOX__ENABLED:-}" ]'
+        in api
+    )
+    assert api.index("decide_sandbox.py") < api.index("AW_CODE__SANDBOX_ENABLED=true")
+    worker = (ROOT / "docker" / "run-task-worker-local.sh").read_text(encoding="utf-8")
+    assert 'if [ -z "${AW_SANDBOX__ENABLED:-}" ]; then' in worker
+    assert worker.index("decide_sandbox.py") < worker.index("AW_SANDBOX__ENABLED=true")
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    assert services["api"]["environment"]["AW_CODE__SANDBOX_ENABLED"] == ""
+    assert services["api"]["environment"]["AW_SANDBOX__ENABLED"] == ""
+    for name in ("task-worker", "task-worker-b"):
+        assert services[name]["environment"]["AW_SANDBOX__ENABLED"] == "", name
+
+
+def test_the_image_carries_the_docker_cli_for_the_broker() -> None:
+    """Copied from Docker's own CLI image rather than installed from an apt
+    repository; inert in every container that has no socket."""
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY --from=docker:" in dockerfile
+    assert "/usr/local/bin/docker /usr/local/bin/docker" in dockerfile
+
+
+def test_the_windows_launcher_builds_the_pdf_sandbox_image_without_compose() -> None:
+    builds = [line for line in _launcher_commands() if line.startswith("docker build")]
+    assert any("sandbox-pdf.Dockerfile" in line for line in builds), builds
+    assert 'if /i "%~1"=="sandbox-image" goto :sandbox_image' in _launcher_commands()
+
+
+# --- computer use on the host (ADR-0108) --------------------------------------
+
+
+def test_the_api_can_name_the_host_and_tunnels_the_screen_servers_session() -> None:
+    """No container can reach the desktop, so the screen server runs on the
+    host; the API reads its one read-only route through a loopback tunnel to
+    the host's name, and `host-gateway` makes that name resolve on a Linux
+    engine as well as under Docker Desktop."""
+
+    raw = COMPOSE_FILE.read_text(encoding="utf-8")
+    assert '"host.docker.internal:host-gateway"' in raw
+    api = _compose()["services"]["api"]
+    assert "host.docker.internal" in str(api.get("extra_hosts"))
+
+    launcher = _api_launcher()
+    assert (
+        'LOCAL_PROXY_UPSTREAM_HOST="${COMPUTER_UPSTREAM_HOST:-host.docker.internal}"'
+        in launcher
+    )
+    assert "LOCAL_PROXY_PORT=8768" in launcher

@@ -26,15 +26,28 @@ set -eu
 WORD_PORT=8765
 WEB_PORT=8767
 
+SANDBOX_PORT=8766
+
 agent-word-mcp --port "$WORD_PORT" &
 word_pid=$!
 agent-web-mcp --port "$WEB_PORT" &
 web_pid=$!
+# The sandbox is not a sidecar: it is the one container allowed to hold the
+# Docker socket (ADR-0107), and this Worker reaches it through a tunnel whose
+# both ends are loopback -- `docker/loopback_proxy.py` says why that keeps
+# every guard on the path intact.
+LOCAL_PROXY_LISTEN_HOST=127.0.0.1 \
+LOCAL_PROXY_PORT="$SANDBOX_PORT" \
+LOCAL_PROXY_UPSTREAM_HOST="${SANDBOX_UPSTREAM_HOST:-sandbox}" \
+LOCAL_PROXY_UPSTREAM_PORT="$SANDBOX_PORT" \
+    python /app/docker/loopback_proxy.py &
+sandbox_tunnel_pid=$!
 
 cleanup() {
-  kill -TERM "$word_pid" "$web_pid" 2>/dev/null || true
+  kill -TERM "$word_pid" "$web_pid" "$sandbox_tunnel_pid" 2>/dev/null || true
   wait "$word_pid" 2>/dev/null || true
   wait "$web_pid" 2>/dev/null || true
+  wait "$sandbox_tunnel_pid" 2>/dev/null || true
 }
 trap 'cleanup; exit 0' INT TERM
 
@@ -62,6 +75,20 @@ if ! python /app/scripts/smoke_mcp_server.py \
     echo "task-worker: the web MCP server never advertised its tools" >&2
     cleanup
     exit 1
+fi
+
+# Whether this Worker looks for a sandbox at all is decided the way the API
+# decides it, with the same probe (ADR-0107): `[sandbox] enabled` is what
+# puts `sandbox_run` into a projection, and a Worker projected without one
+# never probes. Not fatal either way -- the Worker's own probe is a real
+# `run_python` and fail-soft (ADR-029 §3.6) -- but a Worker that never asked
+# would hold no sandbox tool on a stack whose broker is healthy, and would
+# say so only in a log line nobody is watching.
+if [ -z "${AW_SANDBOX__ENABLED:-}" ]; then
+    if python /app/docker/decide_sandbox.py; then
+        AW_SANDBOX__ENABLED=true
+        export AW_SANDBOX__ENABLED
+    fi
 fi
 
 # `--demo` or not, decided here rather than in compose.yaml, because it cannot

@@ -957,6 +957,26 @@ class EmbeddingSettings(StrictModel):
     sparse_vocabulary_size: int = Field(default=250_002, ge=1)
     dense_vector_name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]*$")
     sparse_vector_name: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+    #: Where the dense and sparse encoders live when they are **not** in this
+    #: process (ADR-0106). Empty -- the default, and what every profile before
+    #: that ADR meant -- loads the weights here. A URL makes this process a
+    #: client of `agent-encoder`, the one process in a deployment that holds
+    #: them, and it then loads no torch runtime at all.
+    #:
+    #: A leaf with a default under an existing section rather than a new
+    #: `[rag.encoder]` table, on the rule `docs/configuration.md` §2 states: a
+    #: new table bumps `config_schema_version`, a defaulted leaf does not. The
+    #: same URL is repeated under `[rag.reranker]` because each factory reads
+    #: only its own section and a factory that reached across for another
+    #: section's field would be a second place deciding what a deployment
+    #: means. One service serves all three; two fields say so.
+    #:
+    #: Plain HTTP to a named host is allowed here, as it is for `qdrant.url`
+    #: and deliberately *unlike* `mcp.servers.endpoint`: what crosses this
+    #: connection is tenant text and vectors on a private network, the same
+    #: material the Qdrant connection carries in the clear on the same network,
+    #: and no credential.
+    service_url: str = ""
 
     @field_validator("revision")
     @classmethod
@@ -967,6 +987,13 @@ class EmbeddingSettings(StrictModel):
         if re.fullmatch(r"[0-9a-fA-F]{40}", cleaned):
             return cleaned.lower()
         return cleaned
+
+    @field_validator("service_url")
+    @classmethod
+    def validate_service_url(cls, value: str) -> str:
+        return _validate_service_endpoint(
+            value, field_name="rag.embedding.service_url", allow_empty=True
+        )
 
     @model_validator(mode="after")
     def validate_vector_names(self) -> EmbeddingSettings:
@@ -1020,6 +1047,13 @@ class RerankerSettings(StrictModel):
     failure_mode: Literal["fail_open_with_fused_results"] = (
         "fail_open_with_fused_results"
     )
+    #: The cross-encoder's home when it is not this process (ADR-0106). Same
+    #: contract and same reasoning as `rag.embedding.service_url`; a profile
+    #: that points one at `agent-encoder` points both, because that server
+    #: loads all three models and a process that fetched dense vectors from it
+    #: while loading its own reranker would be the topology this field exists
+    #: to retire.
+    service_url: str = ""
 
     @field_validator("revision")
     @classmethod
@@ -1030,6 +1064,13 @@ class RerankerSettings(StrictModel):
         if re.fullmatch(r"[0-9a-fA-F]{40}", cleaned):
             return cleaned.lower()
         return cleaned
+
+    @field_validator("service_url")
+    @classmethod
+    def validate_service_url(cls, value: str) -> str:
+        return _validate_service_endpoint(
+            value, field_name="rag.reranker.service_url", allow_empty=True
+        )
 
 
 class GraphRetrievalSettings(StrictModel):

@@ -54,6 +54,7 @@ dependencies = [
 
 [package.optional-dependencies]
 computer-use = [
+    { name = "pillow", marker = "sys_platform == 'win32'" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
     { name = "pyobjc-framework-screencapturekit", marker = "sys_platform == 'darwin'" },
@@ -85,6 +86,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.27,<2" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27,<2" },
     { name = "opentelemetry-sdk", specifier = ">=1.27,<2" },
+    { name = "pillow", marker = "sys_platform == 'win32' and extra == 'computer-use'", specifier = ">=10,<13" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "pydantic-settings", specifier = ">=2.14.2,<3" },
     { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' and extra == 'computer-use'", specifier = ">=10,<13" },

@@ -10,7 +10,10 @@
 # healthy, and get a console with no MCP tool, no Code session and no triage in
 # it. The defaults were not wrong. Nothing had chosen.
 #
-# This is that choice, written down. Read it beside `config.demo-local.toml`:
+# This is that choice, written down. Since ADR-0106 it also names where the
+# retrieval models live -- in the `encoder` service, and in no other process
+# -- and since ADR-0107 it leaves the sandbox to be decided per start rather
+# than declared absent. Read it beside `config.demo-local.toml`:
 # the two describe the same product on two different machines, and the
 # differences between them are the differences between a process group on
 # somebody's laptop and a container topology. Each difference is commented
@@ -48,15 +51,19 @@ enabled = true
 
 [code]
 enabled = true
-# Off, and this is the one line that would take the API down if it were copied
-# from config.demo-local.toml. `SandboxSession.open` is fail-fast by design
-# (apps/api/dependencies.py:236-245): a session that was told in configuration
-# that it may run code, and then fails per call, is the arrangement ADR-057 §3
-# refused -- so it raises at boot. In this topology nothing can answer that
-# probe: `sandbox_run` starts a `--network=none` container per call, which
-# needs a Docker socket inside services that are `read_only` with
-# `cap_drop: ALL`. Trading that hardening away is its own decision and needs
-# its own ADR, not a mount (see docs/deployment.md).
+# Off *in this file*, and decided per start by the launcher (ADR-0107) -- the
+# same arrangement `research.enabled` has. `SandboxSession.open` is fail-fast
+# by design (ADR-057 §3): a session told in configuration that it may run
+# code, which then fails per call, is worse than one never offered, so the
+# API raises at boot when this is on and the sandbox does not answer. Since
+# ADR-0107 this topology *has* a sandbox -- the `sandbox` service, the one
+# container holding the Docker socket, reached through a loopback tunnel --
+# but it may be pulling its interpreter image, or its socket mount may have
+# failed, and a `true` here would turn either into a stack that does not
+# come up. So `docker/run-api-local.sh` probes the broker's runtime and
+# exports `AW_CODE__SANDBOX_ENABLED=true` when it answers; an explicit value
+# from the operator is left alone. Until ADR-0107 the sentence here was "in
+# this topology nothing can answer that probe", and it was true.
 sandbox_enabled = false
 
 [multi_agent]
@@ -70,11 +77,26 @@ delegation_enabled = true
 # rather than this file promising something a keyless stack cannot deliver.
 search_tools_enabled = true
 
-# `[sandbox]` is deliberately absent, not merely left at its shipped `false`.
-# config.demo-local.toml turns it on, so a reader comparing the two files will
-# look for it here; the answer is the one `code.sandbox_enabled` gives above.
-# An empty `[sandbox]` table would have said the same thing less clearly and
-# would have been an overlay of nothing.
+# `[sandbox]` is deliberately absent, and its `enabled` is decided the way
+# `code.sandbox_enabled` is: `docker/run-api-local.sh` and
+# `docker/run-task-worker-local.sh` export `AW_SANDBOX__ENABLED=true` when the
+# broker's runtime answers (ADR-0107). The endpoint it would name is the
+# shipped default, `http://127.0.0.1:8766/mcp` -- loopback, because each
+# container reaches the broker through a tunnel that listens on its own
+# 127.0.0.1:8766 (`docker/loopback_proxy.py`). Written here as a table it
+# would have to say `enabled = true`, and that is the value that stops a
+# stack whose broker is still pulling its image.
+
+# The encoder service (ADR-0106). Both leaves, because each factory reads
+# only its own section; one process serves all three models. `encoder` is
+# the service name on the Compose network, and plain HTTP to it is allowed on
+# the same terms as `http://qdrant:6333` above: tenant text on a private
+# network, no credential.
+[rag.embedding]
+service_url = "http://encoder:8769"
+
+[rag.reranker]
+service_url = "http://encoder:8769"
 
 [optional_labs]
 mcp_adapter = true
@@ -94,7 +116,7 @@ mcp_adapter = true
 # The API loads this same file and never connects to either. It reads
 # `[[mcp.servers]]` to write tool names into each Task's authorization envelope
 # at submission and to report `task.mcp_tools` on the System page; the one MCP
-# connection the API makes is to the sandbox, which is off above.
+# connection the API makes is to the sandbox, when its launcher decided it on.
 [[mcp.servers]]
 alias = "word"
 transport = "http"

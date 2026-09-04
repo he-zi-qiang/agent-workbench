@@ -100,13 +100,23 @@ embedding = [
   "FlagEmbedding>=1.3,<2",
 ]
 
-# Computer use: the adapter that actually touches a screen. macOS only, and
-# optional for that reason -- `pyobjc-framework-Quartz` does not install on
+# Computer use: the adapters that actually touch a screen. macOS and Windows,
+# and optional for that reason -- `pyobjc-framework-Quartz` does not install on
 # Linux, where CI runs, and the layer above it (tier gate, screenshot budget,
 # focus check) is platform-independent and covered without it. A deployment
 # that wants the screen tools installs this and gets `agent-computer-mcp`;
 # without it the adapter raises at startup rather than silently doing nothing.
 computer-use = [
+  # Windows (ADR-0108) needs no binding: `adapters/screen/win32.py` reaches
+  # user32, gdi32, dwmapi and shcore through ctypes, which is the standard
+  # library. What it does need is one image library, to compose the frame
+  # from the per-window renders, scale it into the token budget and encode
+  # it -- three things Quartz does on macOS and nothing in the Win32 API does.
+  # Pillow already arrives transitively through llama-index-core; it is
+  # declared here for the reason langchain-core and regex are declared above:
+  # "we use this" and "a resolver happens to give us this" are different
+  # claims, and only the first survives a resolver's change of mind.
+  "pillow>=10,<13; sys_platform == 'win32'",
   "pyobjc-framework-Quartz>=10,<13; sys_platform == 'darwin'",
   "pyobjc-framework-Cocoa>=10,<13; sys_platform == 'darwin'",
   # ScreenCaptureKit, and it is the difference between "the model did not see
@@ -128,6 +138,7 @@ agent-word-mcp = "agent_workbench.apps.word_mcp.main:main"
 agent-sandbox-mcp = "agent_workbench.apps.sandbox_mcp.main:main"
 agent-web-mcp = "agent_workbench.apps.web_mcp.main:main"
 agent-computer-mcp = "agent_workbench.apps.computer_mcp.main:main"
+agent-encoder = "agent_workbench.apps.encoder.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 agent-evidence = "agent_workbench.bootstrap.evidence:main"
 

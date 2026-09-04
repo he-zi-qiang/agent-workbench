@@ -192,3 +192,118 @@ def test_the_default_button_is_the_refusal() -> None:
     """A person who hits Return by reflex must not have approved anything."""
 
     assert "default button denyLabel" in consent._SCRIPT
+
+
+# --- Windows -------------------------------------------------------------------
+#
+# The dialog itself is `MessageBoxTimeoutW`, which no test here can drive. What
+# can be driven is the reading of its answer, which is where a consent check
+# goes wrong: three return values and everything else, and only one of them
+# is a person saying yes (ADR-0108 §3).
+
+
+def _box(answer: int) -> tuple[list[tuple[str, str, int]], consent.MessageBox]:
+    calls: list[tuple[str, str, int]] = []
+
+    def fake(title: str, body: str, milliseconds: int) -> int:
+        calls.append((title, body, milliseconds))
+        return answer
+
+    return calls, fake
+
+
+def test_on_windows_the_yes_button_is_the_only_thing_that_grants() -> None:
+    _, yes = _box(consent._IDYES)
+    _, no = _box(consent._IDNO)
+
+    assert asyncio.run(consent.ask_win32((NOTES,), message_box=yes)) is True
+    assert asyncio.run(consent.ask_win32((NOTES,), message_box=no)) is False
+
+
+def test_on_windows_a_dialog_nobody_answered_refuses() -> None:
+    """`MB_TIMEDOUT` is its own value, checked by name for the reason the
+    macOS path checks `gave up:true` explicitly."""
+
+    _, timed_out = _box(consent._MB_TIMEDOUT)
+
+    assert asyncio.run(consent.ask_win32((NOTES,), message_box=timed_out)) is False
+
+
+@pytest.mark.parametrize("answer", [0, 1, 2, 5, 8, 11, -1])
+def test_on_windows_any_other_answer_refuses(answer: int) -> None:
+    """A closed dialog (0 -- out of memory, or no desktop), Cancel, OK, and
+    anything a future Windows might invent: none is a yes."""
+
+    _, other = _box(answer)
+
+    assert asyncio.run(consent.ask_win32((NOTES,), message_box=other)) is False
+
+
+def test_on_windows_the_person_reads_the_tier_and_which_button_is_which() -> None:
+    """A Yes/No box cannot label its buttons, so the body has to say what
+    'yes' grants -- and the tier line the macOS body carries is still there."""
+
+    calls, yes = _box(consent._IDYES)
+
+    asyncio.run(
+        consent.ask_win32(
+            (NOTES, TERMINAL), reason="整理笔记", message_box=yes, timeout_seconds=30
+        )
+    )
+
+    ((title, body, milliseconds),) = calls
+    assert title == "屏幕控制批准"
+    assert "权限" in body and ": full" not in body
+    assert "full" in body and "click" in body
+    assert "整理笔记" in body
+    assert "「是」" in body and "「否」" in body
+    assert milliseconds == 30_000
+
+
+def test_on_windows_the_text_is_data_and_reaches_the_box_verbatim() -> None:
+    """No interpreter sits between this call and the screen, so a name that
+    would be code in an AppleScript is only ever a string here."""
+
+    hostile = ApplicationIdentity(
+        bundle_id="evil.exe", name='x" & do shell script "touch /tmp/pwned'
+    )
+    calls, yes = _box(consent._IDYES)
+
+    asyncio.run(consent.ask_win32((hostile,), message_box=yes))
+
+    assert hostile.name in calls[0][1]
+
+
+def test_on_windows_an_empty_list_is_not_a_question_worth_asking() -> None:
+    calls, yes = _box(consent._IDYES)
+
+    assert asyncio.run(consent.ask_win32((), message_box=yes)) is False
+    assert calls == []
+
+
+def test_a_platform_that_is_not_windows_takes_the_osascript_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux is not Windows, so it is asked the way it always was: through
+    `osascript`, and refused by name when there is none. CI runs this file on
+    Linux with a stand-in `osascript`, which is why the dispatch must not
+    raise for a platform it has no box for."""
+
+    monkeypatch.setattr(consent.sys, "platform", "linux")
+    monkeypatch.setattr(consent.shutil, "which", lambda _: None)
+
+    with pytest.raises(consent.ConsentUnavailableError, match="osascript"):
+        asyncio.run(consent.ask((NOTES,)))
+
+
+def test_ask_routes_to_the_windows_dialog_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate calls `ask`; which dialog it gets is decided here, by platform."""
+
+    calls, yes = _box(consent._IDYES)
+    monkeypatch.setattr(consent.sys, "platform", "win32")
+    monkeypatch.setattr(consent, "_windows_message_box", yes)
+
+    assert asyncio.run(consent.ask((NOTES,), reason="r")) is True
+    assert len(calls) == 1

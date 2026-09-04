@@ -70,7 +70,10 @@ def _serve(app: Any, *, host: str, port: int) -> None:
     """
 
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False))
-    if sys.platform != "darwin":  # pragma: no cover - guarded by create_app
+    if sys.platform != "darwin":
+        # Windows (ADR-0108) has no run-loop requirement: `SetForegroundWindow`
+        # is a call, not a request to a window server that needs this thread
+        # to be listening, so uvicorn keeps the main thread as it always did.
         server.run()
         return
 

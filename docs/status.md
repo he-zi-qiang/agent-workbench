@@ -27,6 +27,146 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-03（第七十一批）：一台 32 GB 的 Windows 起得来，有沙箱，有 computer use
+
+第七十批把 Windows 那条路装配到「容器装配得出的全部」，然后在一台完全正常的 32 GB Windows
+上起不来：它要 29 GB 才肯构建，而 Docker Desktop 默认只给 16 GB。同一批还留了两件「装配不出」。
+这一批三条 ADR，各推翻第七十批的一句话。
+
+### 1. 权重只住在一个进程里（[ADR-0106](./adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md)）
+
+四个进程各加载一整套模型，而 dense 与 sparse BGE-M3 还是**同一份权重**经两个库各装一次——
+「6.7 GB」是三份 2.2 GB 里有两份是同一个模型，再乘四。问题不在模型多大，在同一份权重被装进了
+几个进程。
+
+新进程 `agent-encoder`（`apps/encoder/`）加载三个模型一次、预热、在五条路由上服务；
+`adapters/encoder/` 三个远程适配器各实现一个已有 port，在连接时做本地适配器在加载时做的每项检查
+（dense 宽度、sparse 词表），外加一项本地不需要做的——报回来的身份必须等于本进程配置拼出的
+`model_id@revision`，两个进程读两份文件是摄取用一个模型写、查询用另一个模型读的来路。
+两片默认空的叶子 `rag.embedding.service_url` / `rag.reranker.service_url`，不抬 schema；三个工厂
+各读自己那一片，在同一处分叉。Compose 里只有 `encoder` 挂权重卷、等 `weights-init`，另外四个
+`depends_on: encoder: service_healthy`——健康等的是「热」不是「起」（`/health` 预热完成前 503）。
+`stack.cmd` 两条线 29 / 51 → 12 / 16：12 是那唯一一个实测数（原生路径上**一个**加载模型的进程），
+16 是同一个数加 4 GB **留量**——留给没量过的三个 Python 进程、PostgreSQL、Qdrant 与 collector——
+`stack.cmd` 里写明是留量。一台 32 GB 的 Windows 在 Docker Desktop 默认设置下过第二条线。
+
+**原生路径这次没接上**：`demo-api` 与 `ingest` 仍各持一份；两片叶子对它同样可用，缺的是 `up`
+里先起 `agent-encoder` 那一步。写在 ADR §4.2。
+
+### 2. 沙箱 broker 独占 socket（[ADR-0107](./adr/0107-the-sandbox-broker-alone-holds-the-socket.md)）
+
+第七十批 §4.1 那句「挂 `docker.sock` 会抵消 `cap_drop: ALL`」每个字都对，它论证的是不能挂进
+**那些**容器，不是不能挂进任何容器。新服务 `sandbox` 只跑 `agent-sandbox-mcp`：不挂 key 卷、不挂
+产物卷、不读配置、不连数据库，`tests/deployment/test_compose.py` 断言**恰好一个**服务挂 socket
+且不是 api / worker。root（socket 是 root:root 660，靠所有者位打开，不需要 capability）+ 硬化
+锚点原样。主镜像从 `docker:29-cli`（按 index digest 钉住）复制一个静态 CLI。
+
+API 与 Worker 怎么够到它：`docker/loopback_proxy.py` 参数化后多出「向内」用法，各容器里起一条
+`127.0.0.1:8766 → sandbox:8766` 的隧道，broker 容器里则是 `0.0.0.0:8766 → 127.0.0.1:8776`
+（同一端口的通配绑定与回环绑定会撞，所以 server 在 8776）。三道回环守卫一字不改地成立：settings
+校验看到回环、Host 头是 `127.0.0.1:8766`（实测 mcp 2.x 允许列表是 `127.0.0.1:*`，端口通配）、
+server 自己是 `--host 127.0.0.1` 起的。那段「这不是绕过守卫」的论证写在 `loopback_proxy.py`
+的 docstring 里，因为下一个读到「两端回环」的人会先问它是不是在作弊。
+
+开不开由启动器决定，形状照抄 web search：profile 里留 `false`，`docker/decide_sandbox.py`
+探 broker `/health` 里的 `container_runtime_available`（`docker version` 答上来之前是 503），
+最多 90 秒，探到才导出 `AW_CODE__SANDBOX_ENABLED` / `AW_SANDBOX__ENABLED`；显式值不碰。
+broker 自己的 Compose 健康检查因此是「HTTP 应答即健康」——否则一次慢拉取会让 `up --wait`
+判整栈失败。`stack.cmd` 加 `sandbox-image`，`restart` 多重启 `sandbox`、**不**重启 `encoder`。
+
+### 3. Windows 的屏幕适配器（[ADR-0108](./adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md)）
+
+「补不上」对容器拓扑永远成立；ADR-070 的分层让缺的只是第二个薄模块。`adapters/screen/win32.py`
+用 ctypes 直连 user32 / gdi32 / dwmapi / shcore，零新绑定（Windows 这一半 extra 只有 Pillow，
+它本来就经 llama-index-core 传递到场，按「我们用它」而不是「解析器碰巧给了它」的规矩声明）。
+四件事各有一段论证：`exclude_native` 靠「逐扇 `PrintWindow` 已批准窗口再合成」兑现而不是靠
+过滤，未批准像素从没进过缓冲区，代价是被遮挡的已批准窗口完整可见（F-35）；per-monitor-v2 DPI
+让点即物理像素；激活**不敲 Alt**（ADR-091 §2.3：激活不合成输入），`SetForegroundWindow` →
+轮询 → `AttachThreadInput` → 如实报；`SendInput` 的返回值被数，UIPI 拒绝是错误不是成功。
+同意用 `MessageBoxTimeoutW`，默认「否」，文本是函数参数不是脚本。`domain/computer.py` 多一张
+`_KIND_BY_EXECUTABLE`（与 bundle id 表永不相交，测试钉住），拒绝文案第三段加 PowerShell 与
+SendKeys。server 在主机上由 `scripts\computer.cmd` 起（只要 uv），API 容器经
+`127.0.0.1:8768 → host.docker.internal:8768` 隧道读 `/session`，`extra_hosts: host-gateway`
+让同一个名字在 Linux 引擎上也解析。
+
+### 4. 证据
+
+| 环境 | 结果 |
+|---|---|
+| 后端，不起任何外部服务（本机） | `3474 passed / 800 skipped`（1 分 36 秒，评审修完之后的最终一跑） |
+| 前端 | **本批没改 `web/`，没有重跑** |
+| 后端，真实 PostgreSQL + Qdrant；CI 那组五个目录（本机 `scripts/dev.sh services`） | `1408 passed / 2 skipped`（2 分 07 秒）——和第六十八批一个数，但这次是**重测的**：本批改了三个组装根（`apps/api/dependencies.py`、`apps/task_worker/composition.py`、`apps/ingestion_worker/composition.py`），`tests/api` 与 `tests/e2e` 正好跑它们 |
+
+离线 **+125**（第六十九批 3349 → 3474），逐个文件：`tests/apps/test_encoder_service.py` 16 条
+（确定性替身、真实回环 socket、真 uvicorn：三个适配器往返逐字节相等、跨请求分批保序、身份 /
+宽度 / 词表三种拒绝、缺席变 typed absence、连不上变 typed absence 并点名修法、runtime 置为不可
+导入后三个工厂仍交出远程适配器、服务端 400 / 413 不回显、503 带工厂原话）；
+`tests/config/test_encoder_settings.py` 9 条；`tests/config/test_compose_profile.py` +2；
+`tests/deployment/test_compose.py` 25 → 33 个函数：+9（encoder 也读 profile、只有 encoder 挂权重卷
+且另外四个等它、encoder 按名字够到且不发布端口、socket 恰好一处、隧道先于进程、探针在启动器里且
+显式值不碰、CLI 在镜像里、`sandbox-image` 不走 compose、api 能叫出主机名），−1（四进程各挂权重卷
+那条被 encoder 那条取代），另改 3 条（restart 列表、摘要、内存线）；
+`tests/deployment/test_sandbox_decision.py` 5 条（真 http.server：200 带运行时 / 503 / 200 不带
+运行时 / 无人应答 / 只用标准库）；`tests/deployment/test_loopback_proxy.py` 3 条（真 socket：Host
+头逐字节到达、上游不在时断连不挂、默认值仍是向外那组）；`tests/apps/test_computer_win32.py`
+16 条（12 个函数，一条 5 组参数：chord 解析、画布只含被交给它的东西、z 序、裁剪、空 allowlist 是
+一张空图、预算尺寸、非 Windows 拒绝构造）；`tests/apps/test_computer_consent.py` +8 个函数、
++14 条（一条 7 组参数：Windows 三种返回值与其余一切、正文有 tier 与按钮说明、文本原样到达、
+非 Windows 非 macOS 抛 `ConsentUnavailableError`、`ask` 按平台分派）；`tests/domain/test_computer.py`
++5 个函数、+17 条（一条 13 组参数：Windows 可执行文件按文件名分级、大小写无关、未列出的浏览器仍按
+名字判、两张精确表永不相交、拒绝文案点名 PowerShell 与 SendKeys）；
+`tests/config/test_local_computer_profile.py` +2。
+`tests/architecture` 那两条守配置所有权的红过一次（新叶子没登记进 `config/ownership.yaml`），
+守 bootstrap 边界的红过一次（`apps/encoder/main.py` 直接从 `bootstrap.settings` 取 `load_settings`），
+都按它们的本意改了代码而不是改测试。
+
+**CI 第一跑红了九条，都是原有的 osascript 测试**：`ask()` 的平台分派对 Linux 直接抛
+`ConsentUnavailableError`，而 CI 跑在 Linux 上、那些测试靠替身 `osascript` 一直是绿的。改回
+「非 Windows 照旧走 osascript 路径」；本机没有暴露它，因为本机是 macOS。
+
+静态门禁：`ruff format --check .`、`ruff check .`、pyright strict 0 错误（`win32.py` 带四条文件级抑制，
+与 `darwin.py` 同一种交易，理由写在文件头）、`uv lock --check`、`agent-config-check` 的
+`development` / `test` / `production` 三个档与 `--config config/config.compose-local.toml` 全部退出 0。
+Docker 起来之后 `tests/deployment/test_compose.py` 32 条全过（`docker compose config` 真渲染）。
+
+**评审怎么做的，按使用者的要求记一笔**：一个四维度的评审工作流（Python 正确性、Win32 API 用法、
+拓扑与脚本、文档一致性）各由一个 Sonnet 代理找问题，17 条发现里的前 14 条各由一个 Haiku 代理
+单独尝试反驳，14 条全部站住（另 3 条是文档计数，未经反驳直接核实为真）。18 个代理，约 138 万
+token。据此改的东西：
+
+- **一条会拖垮整栈的**：`encoder` 容器读的正是设了两片 `service_url` 的 compose profile，而
+  `apps/encoder/main.py` 见到自己的地址就拒绝启动——另外四个服务都等它 healthy。改成清空两片、
+  走本进程分支并记一行 `encoder_ignores_service_url`（`loads_in_process`，有测试）。它是在
+  任何机器上起过这套栈之前被抓到的；§5 的「没有端到端起过一次」在这里是原因不是借口。
+- 客户端的每文本上限 `check_lengths` 写了没调（docstring 承诺的「不付传输的钱」只有服务端在守）；
+  接上，加一条经适配器而不是裸 HTTP 的测试。
+- `httpx.AsyncClient` 改为首次请求时才建：三个组装根在事件循环起来之前同步建端口，一个后来的
+  拒绝（`RerankerRequiredError`、摄取 worker 的 sparse 没加载）会把已建的池丢下没人关。惰性之后
+  建了没用的适配器不持有任何 socket，`aclose` 是空操作。
+- Win32 四处：BOOL 用 `c_int` 而不是 `c_bool`（后者只读返回寄存器的低字节，0x100 会读成假）；
+  `SetProcessDpiAwarenessContext` / `GetDpiForMonitor` 用 `getattr` 解析，缺了才真的能退到
+  `SetProcessDPIAware` / 96 dpi（此前缺席会在构造函数就 `AttributeError`，注释里写的回退根本
+  够不到）；`VkKeyScanW` 高字节的 Ctrl / Alt 位也读（AltGr 字符）；frame host 里优先找
+  `Windows.UI.Core.CoreWindow` 类的子窗口而不是第一个别的进程的子窗口。
+- 文档计数：ADR 92 → 95、编号到 0108；`adapters/` 22 → 23；`ownership.yaml` 叶子 311 → 313；
+  「共用构建上下文的服务有四个」→ 今天是八个（README 两版、deployment、快速开始、`stack.cmd`）。
+
+### 5. 口径
+
+**三条 ADR 全部是 Tested，不是 Demonstrated，而且 ADR-0108 碰屏幕的那一半连 Tested 都不是。**
+本机没装 `embedding` extra，`agent-encoder` 没有用真实权重起过一次；容器栈没有在任何机器上
+端到端起过一次（本机镜像未构建）；`win32.py` 里碰 `user32` 的每一行一次也没在 Windows 上执行过
+（F-36）。§3.2「Docker Desktop 的 socket 是 root:root 660」是从文档写下的，不是这台机器量的。
+`docs/windows-quickstart.md` 开头那句「测试跑在 POSIX 上，断言的是规则不是运行」照旧成立，
+而且这一批让它管的东西更多了。
+
+### 6. 明确没做
+
+- 原生路径接 encoder（§1 末）。
+- 让 dense 与 sparse 共享一份权重（ADR-0106 §3.1：做成服务后它从「必需」变成「可选」）。
+- 在 Windows 上跑一次。做完的判据写在 F-36。
+
+---
 ## 2026-09-03（第七十批）：容器这条路装配起容器装配得出的全部
 
 Windows 上只有一条路——`scripts\stack.cmd` → Compose，因为 `scripts/dev.sh` 是 bash。

@@ -107,6 +107,82 @@ _KIND_BY_BUNDLE_ID: Final[dict[str, ApplicationKind]] = {
     "com.neovide.neovide": "shell",
 }
 
+#: Windows executables, matched exactly against the lower-cased file name of
+#: the process that owns the foreground window (ADR-0108).
+#:
+#: The same table as the one above, for the other platform's idea of an exact
+#: identity. Windows has no bundle id; what a process cannot rename its way
+#: out of is the file it was started from, and `adapters/screen/win32.py`
+#: reports that file's name, lower-cased, as the identity. Kept as a second
+#: dictionary rather than folded into the first so a reader auditing "what
+#: does this project refuse to type into" finds one list per platform, and
+#: so a bundle id and an executable name can never be confused for one
+#: another in a diff.
+#:
+#: Packaged (Store) applications are hosted by `applicationframehost.exe`;
+#: the adapter looks through that frame to the process inside it, so the
+#: name that reaches this table is the application's own.
+_KIND_BY_EXECUTABLE: Final[dict[str, ApplicationKind]] = {
+    # Browsers, tier "read".
+    "chrome.exe": "browser",
+    "msedge.exe": "browser",
+    "msedgewebview2.exe": "browser",
+    "firefox.exe": "browser",
+    "brave.exe": "browser",
+    "vivaldi.exe": "browser",
+    "opera.exe": "browser",
+    "opera_gx.exe": "browser",
+    "chromium.exe": "browser",
+    "iexplore.exe": "browser",
+    "tor.exe": "browser",
+    "arc.exe": "browser",
+    # Money, tier "read".
+    "ledger live.exe": "trading",
+    "trezor suite.exe": "trading",
+    "electrum.exe": "trading",
+    "coinbase.exe": "trading",
+    "binance.exe": "trading",
+    "thinkorswim.exe": "trading",
+    "tws.exe": "trading",  # Interactive Brokers Trader Workstation
+    # Terminals, tier "click". `conhost.exe` is the console host every
+    # classic console window lives in; `openconsole.exe` is Windows
+    # Terminal's copy of it.
+    "windowsterminal.exe": "terminal",
+    "wt.exe": "terminal",
+    "cmd.exe": "terminal",
+    "conhost.exe": "terminal",
+    "openconsole.exe": "terminal",
+    "powershell.exe": "terminal",
+    "powershell_ise.exe": "shell",
+    "pwsh.exe": "terminal",
+    "mintty.exe": "terminal",
+    "alacritty.exe": "terminal",
+    "wezterm-gui.exe": "terminal",
+    "hyper.exe": "terminal",
+    "tabby.exe": "terminal",
+    "conemu64.exe": "terminal",
+    "cmder.exe": "terminal",
+    "putty.exe": "terminal",
+    # IDEs, tier "click", the same argument as on macOS.
+    "code.exe": "shell",
+    "code - insiders.exe": "shell",
+    "vscodium.exe": "shell",
+    "cursor.exe": "shell",
+    "windsurf.exe": "shell",
+    "idea64.exe": "shell",
+    "pycharm64.exe": "shell",
+    "webstorm64.exe": "shell",
+    "goland64.exe": "shell",
+    "rider64.exe": "shell",
+    "clion64.exe": "shell",
+    "studio64.exe": "shell",  # Android Studio
+    "devenv.exe": "shell",  # Visual Studio
+    "zed.exe": "shell",
+    "sublime_text.exe": "shell",
+    "neovide.exe": "shell",
+    "emacs.exe": "shell",
+}
+
 #: Lower-cased substrings of an application's *name*, tried when the bundle id
 #: is unknown.
 #:
@@ -153,6 +229,9 @@ _KIND_BY_NAME_SUBSTRING: Final[tuple[tuple[str, ApplicationKind], ...]] = tuple(
             ("warp", "terminal"),
             ("tabby", "terminal"),
             ("console", "terminal"),
+            ("powershell", "terminal"),
+            ("command prompt", "terminal"),
+            ("visual studio", "shell"),
             ("visual studio code", "shell"),
             ("vscode", "shell"),
             ("vscodium", "shell"),
@@ -193,6 +272,11 @@ def kind_of(application: ApplicationIdentity) -> ApplicationKind:
     """Classify one application, bundle id first."""
 
     known = _KIND_BY_BUNDLE_ID.get(application.bundle_id)
+    if known is not None:
+        return known
+    # The Windows identity is an executable name and arrives lower-cased from
+    # the adapter; `casefold` here is for a caller that built one by hand.
+    known = _KIND_BY_EXECUTABLE.get(application.bundle_id.casefold())
     if known is not None:
         return known
     lowered = application.name.casefold()
@@ -420,7 +504,8 @@ def frontmost_is_not_approved(*, action: str) -> str:
         "person to approve them, or wait until an approved application is in "
         "front.\n"
         "Do not attempt to work around this restriction -- never use "
-        "AppleScript, System Events, shell commands, or any other method to "
+        "AppleScript, System Events, PowerShell, SendKeys, shell commands, or "
+        "any other method to "
         "send input to an application."
     )
 
@@ -452,7 +537,8 @@ def refusal(
         f"so {action} is not available for it.\n"
         f"{remedy}\n"
         "Do not attempt to work around this restriction -- never use "
-        "AppleScript, System Events, shell commands, or any other method to "
+        "AppleScript, System Events, PowerShell, SendKeys, shell commands, or "
+        "any other method to "
         "send input to this application."
     )
 
@@ -554,7 +640,8 @@ def activation_needs_a_grant(*, bundle_id: str) -> str:
         "Call request_access with the applications you need and wait for the "
         "person to approve them.\n"
         "Do not attempt to work around this restriction -- never use "
-        "AppleScript, System Events, shell commands, or any other method to "
+        "AppleScript, System Events, PowerShell, SendKeys, shell commands, or "
+        "any other method to "
         "activate an application."
     )
 
@@ -582,8 +669,8 @@ def activation_would_take_the_screen(*, target: ApplicationIdentity) -> str:
         "until an approved application is in front, or ask the person to "
         "approve the one they are working in.\n"
         "Do not poll this call, and do not attempt to work around it -- never "
-        "use AppleScript, System Events, shell commands, or any other method "
-        "to activate an application."
+        "use AppleScript, System Events, PowerShell, SendKeys, shell commands, "
+        "or any other method to activate an application."
     )
 
 

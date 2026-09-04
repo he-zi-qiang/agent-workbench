@@ -28,6 +28,10 @@ from agent_workbench.adapters.embedding.bge import (
     EmbeddingBackendUnavailableError,
     load_sentence_transformer,
 )
+from agent_workbench.adapters.encoder import (
+    EncoderServiceUnavailableError,
+    RemoteEmbedder,
+)
 from agent_workbench.bootstrap.projections import EmbeddingConfig
 from agent_workbench.ports.embedding import EmbeddingPort
 
@@ -56,6 +60,18 @@ def build_embedder(
     that, and the raise is deliberate -- unlike a missing extra, it is not a
     state anybody chose.
     """
+
+    if config.service_url:
+        # ADR-0106. The weights live in `agent-encoder`; this process asks it.
+        # An encoder that is not answering is the same kind of absence as a
+        # runtime that is not installed -- expected, reported once, and
+        # branched on by the caller -- so it takes the same exit. A width or
+        # an identity that disagrees with the configuration is a refusal and
+        # propagates, exactly as it does for a locally loaded model.
+        try:
+            return RemoteEmbedder.connect(config)
+        except EncoderServiceUnavailableError as unreachable:
+            return EmbeddingUnavailable(reason=str(unreachable))
 
     device = None if config.device == "auto" else config.device
     try:

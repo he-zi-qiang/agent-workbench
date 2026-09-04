@@ -125,6 +125,21 @@ RUN uv sync --frozen --no-dev --no-editable --extra embedding \
        /var/lib/agent-workbench/hf-cache \
     && chown -R app:app /app /var/lib/agent-workbench
 
+# The Docker CLI, for exactly one service (ADR-0107). `agent-sandbox-mcp`
+# shells out to `docker run` once per call, and the `sandbox` service in
+# compose.yaml is the one container that holds the daemon's socket. The binary
+# is copied from Docker's own CLI image rather than installed from an apt
+# repository: it is one static Go binary, the copy needs no network beyond the
+# registry every other stage already pulls from, and it adds nothing else.
+#
+# It is in the shared image rather than a second one because a CLI without a
+# socket is inert -- every other container here has the binary and nothing to
+# point it at, which is the same as not having it. A second image would be a
+# second build step for the Windows launcher to explain.
+# Pinned by index digest like every other base here (resolved 2026-09-03
+# through `docker buildx imagetools inspect docker:29-cli`).
+COPY --from=docker:29-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e /usr/local/bin/docker /usr/local/bin/docker
+
 USER app:app
 
 CMD ["agent-api"]

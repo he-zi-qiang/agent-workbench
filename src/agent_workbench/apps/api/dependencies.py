@@ -37,6 +37,7 @@ from agent_workbench.adapters.delegation import (
     EventDelegationChannel,
     FencedDelegationChannel,
 )
+from agent_workbench.adapters.encoder import aclose_encoders
 from agent_workbench.adapters.evaluation import SubprocessEvaluationLauncher
 from agent_workbench.adapters.events import ObservingEventSink, ScopedEventSink
 from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrowser
@@ -525,6 +526,9 @@ class ApiDependencies:
             await self.http.aclose()
         if self.qdrant is not None:
             await self.qdrant.close()
+        # Remote encoders hold a connection pool to `agent-encoder` (ADR-0106);
+        # in-process ones hold nothing and are skipped.
+        await aclose_encoders(*self.encoders)
         await self.engine.dispose()
 
     async def startup(self) -> None:

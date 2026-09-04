@@ -63,7 +63,7 @@ Qdrant、不需要 API key、不联网**——它读的是工作树本身。十�
 | HTTP 接口 | 77 个端点，从路由装饰器解析 |
 | 工具目录 | 进程内工具与 MCP 工具，读的是声明它们的那个常量 |
 | 配置画像 | 十一个 profile，以及 82 条写成单值 `Literal` 的不变量 |
-| 决策记录 | 92 份 ADR，可搜 |
+| 决策记录 | 95 份 ADR，可搜 |
 | 门禁与规模 | 测试目录、控制台 feature、进程入口 |
 
 **面板上每一个数字都是构建那一刻数出来的，没有一个是写在页面里的。** 这不是讲究：
@@ -471,7 +471,7 @@ task_runs.submitted_authorization_envelope   permitted_tools(profile, …)      
 | **runtime**<br/>`runtime/`（11 个模块） | 全仓唯一一份工具循环：把一次运行跑到**终态**，并在循环上装齐预算、截止、上下文、取消、重复调用五道闸 | 仅 domain + ports | import 任何框架；**任何模块（含 adapters）不得再写第二份消费模型流的循环**；把 "allow, pending approval" 当 allow 直接派发 |
 | **workflows**<br/>`workflows/`（10 个模块） | 控制流写成能单独读、单独测的**声明**：边是数据、路由是纯函数、每个 agent 能看什么够到什么是一张写死的表 | domain、ports、application | import langgraph（图的编译只在 `adapters/langgraph/`）；画像扩权（`permitted_tools` 只做交集，没有能反转方向的参数）；节点回头向注册表要当前 epoch |
 | **application**<br/>`application/`（36 个模块） | 把"一次问答""一个 Task""一次编码会话"的编排步骤、授权围栏与失败处理写在只依赖 domain/ports 的地方 | domain、ports、workflows | import 框架；直接读 `os.environ`；**自己长出工具循环**——要跑 agent 只能过 `ports/agent_executor` |
-| **adapters**<br/>`adapters/`（22 个目录 + 两个散装模块） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
+| **adapters**<br/>`adapters/`（23 个目录 + 两个散装模块） | 一个目录接一个外部世界，把各家方言在自己边界上翻成 ports 的协议 | ports、domain、第三方框架 | 除 `adapters/langgraph` 外不得 import langgraph 或 `workflows`；**LlamaIndex 的 agent / query_engine / response_synthesizer 在整棵源码树里都禁用**，连 `as_query_engine()` 这类方法调用一并禁 |
 | **apps + bootstrap + workers** | 让"一份 TOML"变成"若干个各自只拿到自己那一份、启动时就能验伪的独立进程" | core 四层 + adapters + 框架 | `os.environ` **只允许出现在 bootstrap 包内**；`Settings` 类型不得越过 `projections.py` 继续传播；TOML 里禁止写库连接串；单值 `Literal` 表达的不变量改不动——要改先写 ADR |
 | **web**<br/>`web/src/` | 把后端那套事实翻译成人能核对的界面，而不是自己再造一份执行模型 | `web/src/api/`（唯一出网处）、后端 HTTP + SSE | 直连数据库或向量库（`fetch` 只出现在两个文件里）；折叠事件时丢弃事件——原始 payload 必须仍可达 |
 
@@ -684,7 +684,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `src/agent_workbench/runtime/` | 11 个模块。**唯一的工具循环**与 Tool Gateway |
 | `src/agent_workbench/workflows/` | 10 个模块。两张图、agent 画像、审批中断点、执行租约作用域 |
 | `src/agent_workbench/application/` | 36 个模块。Chat 回合、Task 生命周期、编码会话、崩溃恢复、运行树 |
-| `src/agent_workbench/adapters/` | 22 个目录 + 2 个散装模块。一个目录接一个外部世界 |
+| `src/agent_workbench/adapters/` | 23 个目录 + 2 个散装模块。一个目录接一个外部世界 |
 | `src/agent_workbench/apps/` | `agent-api`、三个 worker/CLI，以及四个自有 MCP server |
 | `src/agent_workbench/bootstrap/` | 18 个模块。设置、投影、各类工厂、启动期校验 |
 | `tests/` | 20 个目录。`architecture/` 是让越界变红的那个，`contracts/` 是"一个契约，每种实现"的那个，`e2e/` 是杀掉 Worker 再看它恢复的那个 |
@@ -692,7 +692,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `config/` | 十一个 profile |
 | `migrations/` | 32 个 Alembic 版本，单 head |
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
-| `docs/adr/` | 92 份决策记录，编号 0012–0105（0050 与 0053 预留未写） |
+| `docs/adr/` | 95 份决策记录，编号 0012–0108（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
 | `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`stack.cmd`（**Windows 上起整栈的唯一入口**，ASCII + CRLF）、`panel.cmd`（面板的 Windows 入口）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
@@ -754,15 +754,21 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 ```
 
 控制台在 `http://127.0.0.1:8000/ui/`。**首次运行按几十分钟算**：镜像带真实检索运行时，
-起来之前还要把约 6.7 GB 模型权重取进一个具名卷。这套栈有**四个进程各加载一整套模型**，
-所以它在构建之前先量一次内存——两条线与那一个实测数字见
+起来之前还要把约 6.7 GB 模型权重取进一个具名卷。模型**只在 `encoder` 一个服务里加载一次**
+（[ADR-0106](docs/adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md)），
+其余进程向它要向量，所以一台 32 GB 的 Windows 在 Docker Desktop 默认设置下就够——
+它仍在构建之前先量一次内存，两条线与那一个实测数字见
 [Windows 快速开始 §0](docs/windows-quickstart.md)。
 
 自 [ADR-0105](docs/adr/0105-one-command-may-assemble-everything-a-container-can.md) 起，
 容器这条路装配起一台 Linux 容器拓扑装配得出的**全部**：真实检索、Word 与 web MCP、
-真实图 Worker 与人工审批、Code、分流、子代理委派。**装配不出的是两件，各有其不能的
-理由**：沙箱执行要容器内的 Docker socket，而那会抵消这套拓扑的 `cap_drop: ALL`；
-Computer use 的依赖是 macOS 专属。控制台的「运行状态」页逐行列出实际装配结果
+真实图 Worker 与人工审批、Code、分流、子代理委派；自
+[ADR-0107](docs/adr/0107-the-sandbox-broker-alone-holds-the-socket.md) 起还有**沙箱**——
+Docker socket 只挂进一个只跑沙箱 server 的容器，API 与 Worker 经两端回环的隧道够到它。
+**Computer use 是唯一留在容器外的一件**：容器够不着桌面，所以它在 Windows 主机上原生跑
+（`scripts\computer.cmd`，只需要 uv，
+[ADR-0108](docs/adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md)）。
+控制台的「运行状态」页逐行列出实际装配结果
 （[ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)）。
 
 原生拓扑见[本机运行手册](docs/running-locally.md)，容器化细节见
@@ -776,7 +782,7 @@ approval 自己批自己，**任务会走到 `succeeded` 而一次模型调用�
 然后重启**读配置的那三个进程**：
 
 ```bat
-scripts\stack.cmd restart    :: Windows；只重启 API 与两个 Worker，数据库不动
+scripts\stack.cmd restart    :: Windows；只重启沙箱、API 与两个 Worker，数据库与 encoder 不动
 ```
 
 ```bash
@@ -850,7 +856,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [**Windows 快速开始**](docs/windows-quickstart.md) | **Windows 上从零到全套**，中文，唯一的那条路 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来（后者为英文） |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 92 份实施期决策记录（0012–0105，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 95 份实施期决策记录（0012–0108，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

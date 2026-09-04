@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.embedding import DeterministicEmbedder
+from agent_workbench.adapters.encoder import aclose_encoders
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.ingestion import (
     ApproximateTokenCounter,
@@ -73,6 +74,10 @@ class IngestionWorkerDependencies:
     # Present only when the second pass is configured; owned here because the
     # process that opened it is the one that must close it.
     model_http: httpx.AsyncClient | None = None
+    #: What this process assembled to encode with. Remote encoders hold a
+    #: connection pool to `agent-encoder` (ADR-0106) and are closed here; the
+    #: in-process ones hold nothing and are skipped.
+    encoders: tuple[object, ...] = ()
 
     async def startup(self) -> None:
         """Fail closed before claiming work from the durable outbox."""
@@ -89,6 +94,7 @@ class IngestionWorkerDependencies:
         await self.qdrant.close()
         if self.model_http is not None:
             await self.model_http.aclose()
+        await aclose_encoders(*self.encoders)
         await self.guards.dispose()
         await self.engine.dispose()
 
@@ -207,6 +213,7 @@ def build_ingestion_worker_dependencies(
         guards=guards,
         worker=worker,
         model_http=http,
+        encoders=(embedder, sparse_encoder),
     )
 
 

@@ -6,7 +6,7 @@
 - `config.test.toml`：测试环境深度合并覆盖，专门开启确定性 failpoint；
 - `config.production.toml`：无密钥的 production 合同覆盖，缺少部署注入时
   必须失败关闭；
-- `config/ownership.yaml`：311 个配置叶子字段的唯一 owner 与生命周期登记
+- `config/ownership.yaml`：313 个配置叶子字段的唯一 owner 与生命周期登记
   （53 组 / 43 owner）。**owner 必须是可 import 的真实模块**——它一度有 41 个
   不是，见[已知缺口 A-08](./known-gaps.md)；
 - `.env.example`：本地开发需要注入的 DSN、模型 ID 和密钥名称；
@@ -41,6 +41,11 @@
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
 分支，没有再抬 schema：它复用同一组字段，只是多了一个消费方。
+
+[ADR-0106](./adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md) 在 `1.19`
+之下加了两片**既有段下带默认值的叶子**——`rag.embedding.service_url` 与
+`rag.reranker.service_url`，默认空——同样不抬版：一份从没听说过它们的配置照常加载，
+意思照旧（权重在本进程加载）。见 §9.3。
 
 配置字段对应的代码所有者、工作包与集成测试见
 [代码实施计划 v1.0](./implementation-plan.md)。
@@ -858,6 +863,42 @@ profile 是按**实际注册到的工具**加宽的，不是按配置。两者�
 解析不到的工具。
 
 可直接使用的本地 profile 见 `config/config.sandbox-local.toml`。
+
+### 9.3 检索模型住在哪个进程里
+
+`rag.embedding.service_url` 与 `rag.reranker.service_url`（[ADR-0106](./adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md)）：
+
+```toml
+[rag.embedding]
+service_url = "http://encoder:8769"
+
+[rag.reranker]
+service_url = "http://encoder:8769"
+```
+
+| 值 | 运行语义 |
+|---|---|
+| `""`（默认） | 本进程加载权重，和这两片叶子存在之前一样 |
+| 一个 URL | 本进程成为 `agent-encoder` 的客户端：三个工厂交出 `RemoteEmbedder` / `RemoteSparseEncoder` / `RemoteReranker`，**不 import torch** |
+
+两片而不是一段 `[rag.encoder]`，因为每个工厂只读自己那一段；一个 `agent-encoder` 服务三个模型，
+所以指一个就要指两个。校验和 `qdrant.url` 同一条：禁 userinfo、禁 query、禁 fragment，
+允许明文 http 到具名主机——这条连接上走的是租户文本与向量，没有凭据，和 Qdrant 那条在同一张
+私有网上明文带着同样的东西；它**不像** `mcp.servers.endpoint`，那条会带 provider key。
+
+远程适配器在**连接时**做本地适配器在加载时做的每项检查（dense 宽度对 `vector_size`、sparse
+宽度对 `sparse_vocabulary_size`），外加一项本地不需要的：报回来的身份必须等于本进程配置拼出的
+`model_id@revision`——两个进程读两份文件，是摄取用一个模型写、查询用另一个模型读的来路，
+不一致是启动拒绝，两个名字都写在错误里。
+
+连不上是**缺席**不是拒绝：三个工厂各自返回它们原本的 `*Unavailable`，API 与 Worker 按原有路径
+降级并报一次。运行中连不上则抛 `EncoderServiceUnavailableError`，不会静默返回空。
+
+`agent-encoder` 自己读同一份 profile，而 profile 里这两片叶子指的是它的**客户端**。所以它启动时
+把两片清空、走工厂的本进程分支，并在 profile 点了名的情况下记一行 `encoder_ignores_service_url`。
+它曾经是「设了就拒绝启动」——那道守卫在 Compose 这台唯一的部署上必然触发（五个进程读一份文件），
+并且会拖垮整栈（另外四个都等它 healthy），评审在它跑起来之前抓到了。Compose profile
+（`config.compose-local.toml`）设了这两片；十个原生 profile 没设。
 
 ## 10. 外部检索
 

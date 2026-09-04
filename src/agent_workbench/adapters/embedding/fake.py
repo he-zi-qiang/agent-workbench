@@ -20,6 +20,7 @@ import struct
 from dataclasses import dataclass
 
 from agent_workbench.ports.embedding import Vector
+from agent_workbench.ports.sparse import SparseVector
 
 # Prepended before hashing so the same string embeds differently as a query
 # than as a passage, the way a real model's instructions make it. Without this
@@ -69,4 +70,56 @@ class DeterministicEmbedder:
         return tuple(value / norm for value in values)
 
 
-__all__ = ["DOCUMENT_PREFIX", "QUERY_PREFIX", "DeterministicEmbedder"]
+@dataclass(frozen=True, slots=True)
+class DeterministicSparseEncoder:
+    """Stable pseudo lexical weights, with no vocabulary behind them.
+
+    The same bargain as :class:`DeterministicEmbedder`, for the other arm: a
+    term index is the hash of a whitespace token, so the same text always gives
+    the same indices, two different texts almost never share one, and nothing
+    about the result depends on a model. It exists so the encoder service and
+    its client adapters (ADR-0106) can be exercised end to end, over a real
+    socket, without weights -- what those tests are about is that a vector
+    survives the wire unchanged, not what the vector means.
+
+    ``vocabulary_size`` defaults to BGE-M3's real one so a projection built
+    from ``config.default.toml`` accepts this double where it would accept the
+    model; the identity says loudly that it is not the model.
+    """
+
+    vocabulary_size: int = 250_002
+
+    @property
+    def identity(self) -> str:
+        return f"deterministic-hash-sparse-v1-{self.vocabulary_size}"
+
+    async def encode_documents(
+        self, texts: tuple[str, ...]
+    ) -> tuple[SparseVector, ...]:
+        return tuple(self._encode(DOCUMENT_PREFIX + text) for text in texts)
+
+    async def encode_query(self, text: str) -> SparseVector:
+        return self._encode(QUERY_PREFIX + text)
+
+    def _encode(self, text: str) -> SparseVector:
+        weights: dict[int, float] = {}
+        for token in text.split():
+            digest = hashlib.sha256(token.encode()).digest()
+            index = int.from_bytes(digest[:4], "big") % self.vocabulary_size
+            weights[index] = weights.get(index, 0.0) + 1.0
+        # Sorted by index, the way the real adapter orders them: the same terms
+        # in a different order are the same vector, and a digest comparison
+        # downstream should say so.
+        items = sorted(weights.items())
+        return SparseVector(
+            indices=tuple(index for index, _ in items),
+            values=tuple(value for _, value in items),
+        )
+
+
+__all__ = [
+    "DOCUMENT_PREFIX",
+    "QUERY_PREFIX",
+    "DeterministicEmbedder",
+    "DeterministicSparseEncoder",
+]

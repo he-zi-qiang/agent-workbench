@@ -71,7 +71,7 @@ Twelve sections:
 | HTTP surface | 77 endpoints, parsed from the route decorators |
 | Tool catalogue | In-process and MCP tools, read from the constant that declares each name |
 | Config profiles | Ten profiles, and the 82 invariants written as single-valued `Literal`s |
-| Decision records | 92 ADRs, searchable |
+| Decision records | 95 ADRs, searchable |
 | Gates and scale | Test directories, console features, process entry points |
 
 **Every number on that page is counted at build time; not one of them is typed
@@ -554,7 +554,7 @@ A tool carrying an `operation_key` takes a longer path:
 | **runtime**<br/>`runtime/` (11 modules) | The one tool loop: drives a run to a **terminal** outcome with budget, deadline, context, cancellation and repeat-call gates on it | domain + ports only | Importing any framework; **no module — adapters included — may write a second loop consuming a model stream**; treating "allow, pending approval" as allow |
 | **workflows**<br/>`workflows/` (10 modules) | Control flow written as a **declaration** that can be read and tested on its own: edges are data, routing is pure functions, and what each agent may see and reach is a fixed table | domain, ports, application | Importing langgraph (compilation lives in `adapters/langgraph/`); widening a profile (`permitted_tools` only intersects, and no argument reverses that); asking the registry for the current epoch mid-run |
 | **application**<br/>`application/` (36 modules) | Where one Q&A, one Task and one coding session have their steps, authorization fences and failure handling — depending on nothing but domain and ports | domain, ports, workflows | Importing frameworks; reading `os.environ`; **growing its own tool loop** — running an agent goes through `ports/agent_executor` |
-| **adapters**<br/>`adapters/` (22 directories plus two loose modules) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
+| **adapters**<br/>`adapters/` (23 directories plus two loose modules) | One directory per outside concern, translating each vendor's dialect into the ports' contracts at its own edge | ports, domain, third-party frameworks | Importing langgraph or `workflows` outside `adapters/langgraph`; **LlamaIndex's agent / query_engine / response_synthesizer are banned across the whole source tree**, method calls like `as_query_engine()` included |
 | **apps + bootstrap**<br/>`apps/` `bootstrap/` `workers/` | Turns one TOML file into several processes, each handed only its own slice and each able to be falsified at startup | all four core layers + adapters + frameworks | `os.environ` **only inside the bootstrap package**; the `Settings` type may not travel past `projections.py`; connection strings are forbidden in TOML; invariants written as single-valued `Literal`s cannot be changed — that takes an ADR first |
 | **web**<br/>`web/src/` | Translates the backend's facts into something a person can check, rather than inventing a second execution model | `web/src/api/` (the only place that goes out), backend HTTP + SSE | Talking to the database or vector store directly (`fetch` appears in exactly two files); dropping events while folding them — the raw payload must stay reachable |
 
@@ -806,7 +806,7 @@ package.
 | `src/agent_workbench/runtime/` | 11 modules. **The only tool loop**, and the Tool Gateway |
 | `src/agent_workbench/workflows/` | 10 modules. Both graphs, agent profiles, the approval interrupt, the execution-lease scope |
 | `src/agent_workbench/application/` | 36 modules. Chat turns, Task lifecycle, coding sessions, crash recovery, the run tree |
-| `src/agent_workbench/adapters/` | 22 directories plus two loose modules. One directory per outside concern |
+| `src/agent_workbench/adapters/` | 23 directories plus two loose modules. One directory per outside concern |
 | `src/agent_workbench/apps/` | `agent-api`, three worker/CLI entry points, and four project-owned MCP servers |
 | `src/agent_workbench/bootstrap/` | 18 modules. Settings, projections, the factories, startup validation |
 | `tests/` | 20 directories. `architecture/` is the one that turns a boundary breach red, `contracts/` is "one contract, every implementation", `e2e/` is the one that kills a Worker and watches it recover |
@@ -814,7 +814,7 @@ package.
 | `config/` | Ten profiles |
 | `migrations/` | 32 Alembic revisions, a single head |
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
-| `docs/adr/` | 92 decision records, numbered 0012–0105 (0050 and 0053 reserved but never written) |
+| `docs/adr/` | 95 decision records, numbered 0012–0108 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
 | `scripts/` | `dev.sh` (the one place that knows this machine; bash), `stack.cmd` (**the only way into the whole stack on Windows**; ASCII + CRLF), `panel.cmd` (the panel's Windows entry point), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
@@ -875,19 +875,27 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 
 The console is at `http://127.0.0.1:8000/ui/`. **Budget tens of minutes for the
 first run**: the image carries the real retrieval runtime, and about 6.7 GB of
-model weights are fetched into a named volume before anything serves. Four
-processes here each load the full model set, which is why the launcher measures
-the machine's memory before it starts building — the two floors, and the one
-measurement they are arithmetic on, are in
-[the Windows quick start](docs/windows-quickstart.md) (Chinese).
+model weights are fetched into a named volume before anything serves. The
+models are loaded **once, by one service** — `encoder`
+([ADR-0106](docs/adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md)) —
+and the other processes ask it over HTTP, so a 32 GB Windows at Docker Desktop's
+default settings is enough. The launcher still measures the machine's memory
+before it starts building; the two floors, and the one measurement they are
+arithmetic on, are in [the Windows quick start](docs/windows-quickstart.md)
+(Chinese).
 
 Since [ADR-0105](docs/adr/0105-one-command-may-assemble-everything-a-container-can.md)
 this path assembles **everything a Linux container topology can**: real
 retrieval, the Word and web MCP servers, real graph Workers with human approval,
-Code, triage, sub-agent delegation. **Two things it cannot**, each for its own
-reason: sandbox execution needs a Docker socket inside services that run
-`read_only` with `cap_drop: ALL`, and computer use depends on macOS-only
-packages. The System page lists what this deployment actually assembled
+Code, triage, sub-agent delegation — and since
+[ADR-0107](docs/adr/0107-the-sandbox-broker-alone-holds-the-socket.md) the
+sandbox as well: the Docker socket is mounted into one container that runs the
+sandbox server and nothing else, and the API and Workers reach it through a
+tunnel whose both ends are loopback. **Computer use is the one part that stays
+outside the containers**: no container can reach the desktop, so it runs on the
+Windows host itself (`scripts\computer.cmd`, which needs only uv,
+[ADR-0108](docs/adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md)).
+The System page lists what this deployment actually assembled
 ([ADR-102](docs/adr/0102-a-deployment-says-what-it-could-not-assemble.md)).
 
 **A fresh stack has no provider key, so Chat cannot answer yet — and its Tasks
@@ -1164,7 +1172,7 @@ Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
 Scale: 82,718 lines of Python across 326 files, 101,465 lines of tests across 269
 files, 52,314 lines of frontend TypeScript across 143 files; 91 files under
-`docs/adr/`, numbered 0012–0105 — **with gaps**: 0050 and 0053 were claimed by the
+`docs/adr/`, numbered 0012–0108 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -1225,7 +1233,7 @@ the one that cannot go stale.
 | [**Windows quick start**](docs/windows-quickstart.md) | **From a bare Windows machine to the whole stack** (Chinese) — the only route there |
 | [Running locally](docs/running-locally.md) (Chinese) / [Compose deployment](docs/deployment.md) | How to run it |
 | [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
-| [ADR index](docs/adr/) | 92 implementation-period decision records (0012–0105; 0050 and 0053 reserved but never written) |
+| [ADR index](docs/adr/) | 95 implementation-period decision records (0012–0108; 0050 and 0053 reserved but never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---

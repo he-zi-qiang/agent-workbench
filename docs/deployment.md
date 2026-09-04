@@ -27,7 +27,7 @@ contains value with non-printable ASCII characters
 ```
 
 Measured 2026-09-01 on Docker 29.4.0. It needs both halves — two or more
-services sharing one build context, which this topology has four of, *and* a
+services sharing one build context, which this topology has eight of today, *and* a
 non-ASCII directory name. One service under a non-ASCII name builds; four under
 an ASCII name build; four under a non-ASCII name never do, and `COMPOSE_BAKE=false`
 does not change it. Plain `docker build` does not take that path.
@@ -51,10 +51,11 @@ key** in the console to store a DeepSeek key in the dedicated
 Compose file or command line. The public `deepseek-chat` model ids are pinned in
 the topology so that the restarted API can assemble Direct Chat.
 
-The embedding extra and its multi-gigabyte weights remain intentionally absent
-from this image. That costs knowledge-base-grounded Chat, not Direct Chat: a
-question sent with “do not use a knowledge base” reaches the configured model
-without loading an embedding runtime.
+Since ADR-0105 the image carries the embedding extra, and since ADR-0106 the
+weights are loaded by one service — `encoder` — that the API, both Workers and
+the ingestion worker call over HTTP. The weights themselves live in a named
+volume filled once by `weights-init`; `docker/fetch_weights.py` says why they
+cannot simply be downloaded on first use.
 
 **A Task Worker on that stack is a v2-only Worker, and needs the matching
 submission default.** With no embedding runtime to load, real assembly opens no
@@ -129,8 +130,8 @@ of its front half removed. What a fresh Compose stack answers today:
 | `chat.web_search` | optional | after a key is saved | see below — it follows the key rather than a static switch |
 | `task.external_search` | optional | follows the same switch | the envelope is frozen at submission from the API's own configuration |
 | `task.mcp_tools` | optional | yes | `config.compose-local.toml` declares `word` and `web`, and each Worker starts both as loopback sidecars before it freezes its catalogue |
-| `task.sandbox` | optional | **absent** | `sandbox_run` needs a server that can create containers; see the bullet above |
-| `code.sessions` | optional | yes, without `sandbox_run` | `code.enabled` is on in this profile; its sandbox arm is not, for the same reason |
+| `task.sandbox` | optional | yes, once the broker's runtime answers | the `sandbox` service alone holds the Docker socket (ADR-0107); each launcher probes it and switches the sandbox on for that start |
+| `code.sessions` | optional | yes, with `sandbox_run` on the same condition | `code.enabled` is on in this profile; its sandbox arm follows the same probe |
 | `task.delegation` | optional | yes | `multi_agent.delegation_enabled` is on in this profile |
 | `task.triage` | optional | yes | `triage.enabled` is on in this profile, as it is in `config.demo-local.toml` |
 
@@ -199,14 +200,22 @@ Not shipped, and the reasons are worth having before anybody tries:
   *both* processes parks every Task at `waiting_migration`, as the section above
   describes. `v2_general`'s `work` node does declare the `research` and
   `synthesis` dynamic tool sources, so MCP tools do reach it once they exist.
-* **The sandbox cannot join this topology as it stands.** `sandbox_run` runs each
-  call in a fresh `--network=none` container, so its server needs to create
-  containers — which means the Docker socket, inside a topology whose services
-  are deliberately `read_only` with `cap_drop: ALL`. That trade needs its own
-  decision, not a mount. ADR-0105 assembled everything else this topology can
-  hold and deliberately did not do this one, so `config.compose-local.toml`
-  keeps `code.sandbox_enabled = false` — `SandboxSession.open` is fail-fast, and
-  the API would refuse to start rather than degrade.
+* **The sandbox joined by topology, not by mount** (ADR-0107). `sandbox_run`
+  runs each call in a fresh `--network=none` container, so its server needs a
+  daemon — the Docker socket, which ADR-0105 refused to put into services that
+  also hold a provider key, a database and every workspace. The `sandbox`
+  service is a container that runs `agent-sandbox-mcp` and nothing else: no
+  key volume, no artifact volume, no configuration, no database, and it is the
+  only service that mounts the socket (a test holds it to *exactly one*). The
+  API and the Workers reach it through a TCP tunnel whose both ends are
+  loopback (`docker/loopback_proxy.py`), so their own `--host` choice lists,
+  the MCP SDK's Host check and the settings validator all keep seeing the
+  loopback address they were written for. `config.compose-local.toml` still
+  says `code.sandbox_enabled = false`: `SandboxSession.open` is fail-fast, and
+  the broker may be pulling its interpreter image, so `docker/run-api-local.sh`
+  and `docker/run-task-worker-local.sh` probe its runtime
+  (`docker/decide_sandbox.py`) and export `AW_CODE__SANDBOX_ENABLED` /
+  `AW_SANDBOX__ENABLED` for that start — the shape web search already has.
 
 ## Windows
 
@@ -241,17 +250,29 @@ It starts `--profile demo`, not the default topology. The default one has no
 Task Worker in it, so the console opens on Chat and an empty task list and
 shows nothing of claim, lease, epoch or fencing.
 
-**It measures the machine before it builds** (ADR-0105). Four services here each
-load the full retrieval model set, and the one measurement this repository has is
-for a single process on the native path: about 12 GB of available memory, of
-which about 6.7 GB is the three model files. The floors the launcher compares
-against — roughly 29 GB and 51 GB — are arithmetic on that number rather than a
-second measurement, and they are decimal GB because the comparison slices digits
-off `MemTotal` instead of going through `set /a`, which is 32-bit signed and
-overflows on any byte count above ~2.1 GB. Under the lower floor it stops: the
-alternative is tens of minutes of build and weight download followed by
-`up --wait` timing out in swap, which reads as "this project does not run".
+**It measures the machine before it builds** (ADR-0105, floors from ADR-0106).
+One service here loads the retrieval model set — the `encoder` — and the API,
+both Workers and the ingestion worker ask it over HTTP instead of loading their
+own copies. The one measurement this repository has is for exactly such a
+process, on the native path: about 12 GB of available memory, of which about
+6.7 GB is the three model files. The floors the launcher compares against are
+12 GB (that figure) and 16 GB (that figure plus a stated *allowance* for the
+unmeasured rest: three lean processes, PostgreSQL, Qdrant, the collector). They
+are decimal GB because the comparison slices digits off `MemTotal` instead of
+going through `set /a`, which is 32-bit signed and overflows on any byte count
+above ~2.1 GB. Under the lower floor it stops: the alternative is tens of
+minutes of build and weight download followed by `up --wait` timing out in
+swap, which reads as "this project does not run". A 32 GB Windows at Docker
+Desktop's default (half of RAM) clears the upper floor untouched.
 `scripts\stack.cmd anyway` overrides it.
+
+**Computer use is the one part that stays outside the containers** (ADR-0108).
+No container can reach the desktop, so `agent-computer-mcp` runs on the host
+itself, started by `scripts\computer.cmd` — the only step on the Windows route
+that needs a Python, and it asks for it through `uv`. The API reads that
+server's read-only `/session` route through a loopback tunnel to
+`host.docker.internal:8768`; when nothing listens there, the console's Computer
+page says so, exactly as it does on a machine that never started one.
 
 On the first run Chat has no provider yet. Open the identity button at the
 bottom of the navigation rail, choose **Model key**, save the key, then run:
@@ -260,8 +281,10 @@ bottom of the navigation rail, choose **Model key**, save the key, then run:
 scripts\stack.cmd restart
 ```
 
-That restarts the API and both Workers — the three processes that read
-configuration once — and leaves PostgreSQL, Qdrant and the collector running.
+That restarts the sandbox broker, the API and both Workers — the processes
+that read configuration (or, for the broker, pick an image) once — and leaves
+PostgreSQL, Qdrant, the collector and the encoder running; restarting the
+encoder would reload three models for nothing.
 The same command is what a flipped switch on the System page needs (ADR-103).
 Reload the console after the API is healthy. `scripts\stack.cmd down` leaves
 the named key volume intact, and with it `switches.json`; removing volumes
