@@ -281,14 +281,18 @@ def test_on_windows_an_empty_list_is_not_a_question_worth_asking() -> None:
     assert calls == []
 
 
-def test_a_platform_with_no_dialog_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Distinct from a refusal, for the reason the osascript case is: it is a
-    different thing to fix, and the screen tools stay unavailable rather than
-    granting themselves."""
+def test_a_platform_that_is_not_windows_takes_the_osascript_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux is not Windows, so it is asked the way it always was: through
+    `osascript`, and refused by name when there is none. CI runs this file on
+    Linux with a stand-in `osascript`, which is why the dispatch must not
+    raise for a platform it has no box for."""
 
     monkeypatch.setattr(consent.sys, "platform", "linux")
+    monkeypatch.setattr(consent.shutil, "which", lambda _: None)
 
-    with pytest.raises(consent.ConsentUnavailableError, match="linux"):
+    with pytest.raises(consent.ConsentUnavailableError, match="osascript"):
         asyncio.run(consent.ask((NOTES,)))
 
 

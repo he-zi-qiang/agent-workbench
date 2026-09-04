@@ -34,8 +34,9 @@ extra 的三个依赖全带 `sys_platform == 'darwin'`，`adapters/screen/__init
 2. `domain/computer.py` 多一张 `_KIND_BY_EXECUTABLE` 表：Windows 的精确身份是可执行文件名
    （小写），与 bundle id 那张表并列、永不相交；拒绝文案的第三段把 PowerShell 与 SendKeys
    加进「永远不要用」的清单。
-3. `apps/computer_mcp/consent.py` 按平台分派：darwin 仍是 osascript，win32 是
-   `MessageBoxTimeoutW`（默认按钮是「否」），其余平台抛 `ConsentUnavailableError`。
+3. `apps/computer_mcp/consent.py` 按平台分派：win32 是 `MessageBoxTimeoutW`（默认按钮是
+   「否」），其余平台照旧走 osascript 路径、缺 `osascript` 时以它的名字拒绝——Linux 一直得到的
+   就是这个答案，CI 也靠它用替身 `osascript` 跑这个文件。
 4. `pyproject.toml` 的 `computer-use` extra 多一行 `pillow; sys_platform == 'win32'`。
 5. `scripts\computer.cmd`：Windows 上起 server 的入口（只需要 uv）；`compose.yaml` 的 api
    加 `extra_hosts: host.docker.internal:host-gateway`，`docker/run-api-local.sh` 起一条

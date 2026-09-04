@@ -141,9 +141,13 @@ async def ask(
     about one set, which is also what ADR-070 §2 describes.
 
     One dialog per platform, and the platform is decided here rather than by
-    the caller: the gate knows how to ask, not what a dialog is made of. Any
-    platform without one raises rather than answering, because the only thing
-    worse than a dialog nobody saw is a grant nobody gave (ADR-0108 §3).
+    the caller: the gate knows how to ask, not what a dialog is made of.
+    Windows gets its own box (ADR-0108 §3.6); everything else takes the
+    osascript path below, which refuses on its own terms when the binary is
+    absent -- the answer a Linux machine has always been given, and the one
+    CI relies on to exercise this file with a stand-in `osascript`. A platform
+    dispatch that raised for Linux here read as tidier and turned nine green
+    tests red on the first CI run.
     """
 
     if not applications:
@@ -151,12 +155,6 @@ async def ask(
     if sys.platform == "win32":
         return await ask_win32(
             applications, reason=reason, timeout_seconds=timeout_seconds
-        )
-    if sys.platform != "darwin":
-        raise ConsentUnavailableError(
-            f"no approval dialog is implemented for {sys.platform}, so nothing "
-            "can be approved. The screen tools stay unavailable rather than "
-            "granting themselves."
         )
     binary = shutil.which("osascript")
     if binary is None:
