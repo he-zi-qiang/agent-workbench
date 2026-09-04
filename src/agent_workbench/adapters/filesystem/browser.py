@@ -45,12 +45,32 @@ from agent_workbench.ports.project_files import (
 class FilesystemDirectoryBrowser:
     """The machine's directory tree, one level at a time."""
 
-    __slots__ = ("_runner",)
+    __slots__ = ("_runner", "_start")
 
-    def __init__(self, *, runner: BlockingCallRunner | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        runner: BlockingCallRunner | None = None,
+        start: str | None = None,
+    ) -> None:
         self._runner = runner
+        self._start = start
 
     def home(self) -> str:
+        """Where the picker opens: the configured root, else the user's home.
+
+        The configured root wins only while it *is* a directory. A Compose
+        stack names ``/projects`` (ADR-0109), and the bind mount behind it is
+        the one thing in that topology a person can leave out -- start the
+        stack from a checkout without the folder and the mount is an empty
+        directory Docker made, which is fine, but a topology edited to drop
+        the mount would leave a path that does not exist. Falling back to the
+        home directory then is the same picker the native path shows, rather
+        than a 400 on the first request the page makes.
+        """
+
+        if self._start is not None and Path(self._start).is_dir():
+            return self._start
         return str(Path.home())
 
     async def browse(self, path: str | None = None) -> DirectoryListing:

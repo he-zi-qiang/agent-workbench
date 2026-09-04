@@ -11,6 +11,7 @@ import {
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
+  getDeploymentCapabilities,
   getCodeTools,
   getCodeWorkspace,
   getCodeWorkspaceFileBlob,
@@ -76,6 +77,9 @@ vi.mock("../../api/client", async () => ({
   // ADR-074. Code 现在有一道门：没选文件夹就没有起始屏。这些是那道门读的东西，
   // 默认给一个已经有目录的项目，好让绝大多数用例只需要多点一下就回到原来的形状。
   listProjects: vi.fn(() => Promise.resolve({ projects: [PROJECT] })),
+  // ADR-0109. 起始屏那一行「这里能碰到」读的是能力清单。默认给一份空的：
+  // 空清单画不出那一行，绝大多数用例因此看不见它——它有自己的用例。
+  getDeploymentCapabilities: vi.fn(() => Promise.resolve({ capabilities: [] })),
   getProject: vi.fn(() => Promise.resolve(PROJECT)),
   createProjectAtDirectory: vi.fn(() => Promise.resolve(PROJECT)),
   browseDirectories: vi.fn(() =>
@@ -1502,6 +1506,66 @@ describe("CodePage", () => {
     expect(
       within(pane).getByRole("tab", { name: /本次会话/, selected: true }),
     ).toBeInTheDocument();
+  });
+
+  it("起始屏说出这台部署里编码会话能碰到什么，缺的划掉并指向运行状态", async () => {
+    // ADR-0109：Windows 的容器栈上 Code 是开的，而沙箱、宿主命令、联网搜索
+    // 一件都没有——这一行让人在第一句指令之前就知道，而不是从模型嘴里听到。
+    vi.mocked(getDeploymentCapabilities).mockResolvedValue({
+      capabilities: [
+        {
+          id: "code.sandbox",
+          title: "编码会话的沙箱运行（sandbox_run）",
+          tier: "optional",
+          state: "available",
+          reason: "",
+          remedy: "",
+          detail: [],
+          provision: "install",
+          switch: null,
+        },
+        {
+          id: "code.host_commands",
+          title: "编码会话的宿主命令（project_run）",
+          tier: "optional",
+          state: "absent",
+          reason: "policy.shell_tools_enabled 为假：项目会话只有读写文件的五件工具，没有 shell。",
+          remedy: "只有原生路径打开它。",
+          detail: [],
+          provision: "install",
+          switch: null,
+        },
+        {
+          id: "code.web_search",
+          title: "编码会话联网搜索",
+          tier: "optional",
+          state: "absent",
+          reason: "没有搜索 provider。",
+          remedy: "打开「联网搜索」开关。",
+          detail: [],
+          provision: "switch",
+          switch: null,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    mounted("/code");
+    await chooseFolder(user);
+
+    const reach = await screen.findByLabelText("这台部署里编码会话能碰到什么");
+    expect(within(reach).getByText("沙箱运行")).not.toHaveClass("is-absent");
+    const shell = within(reach).getByText("宿主命令");
+    expect(shell).toHaveClass("is-absent");
+    // 原因在 title 里：划掉的字只说「没有」，鼠标停上去才说为什么。
+    expect(shell).toHaveAttribute("title", expect.stringContaining("shell"));
+    expect(within(reach).getByText("联网搜索")).toHaveClass("is-absent");
+    // 这些用例跑在 MemoryRouter 里，href 没有 hash 前缀；生产里是 HashRouter，
+    // 同一个 `to="/system"` 画出来是 `#/system`。断言路由，不断言前缀。
+    expect(within(reach).getByRole("link", { name: "缺的怎么补 →" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/\/system$/),
+    );
   });
 
   it("opens on a centered start when there is no session", async () => {

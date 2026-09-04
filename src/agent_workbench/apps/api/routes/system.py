@@ -63,6 +63,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from agent_workbench.adapters.documents.fidelity import find_soffice
 from agent_workbench.adapters.tools.export_artifact import (
     TOOL_NAME as EXPORT_ARTIFACT_TOOL,
 )
@@ -125,6 +126,14 @@ _RESTART_HINT: Final[str] = "重启 agent-api 与 agent-task-worker 后这个选
 _NEEDS_MODEL: Final[str] = (
     "这一项要有模型才装配得起来：先在「模型密钥」里存一把 key，再重启。"
 )
+
+#: Whether this process can lay a Word document out (ADR-0045), asked the
+#: way the artifact route asks it. A module attribute rather than a direct
+#: call so the tests can pin the answer: `find_soffice` reads `PATH` and one
+#: macOS bundle path, and a row whose state depended on what the test
+#: machine happens to have installed would be green on one laptop and red on
+#: the next.
+layout_converter = find_soffice
 
 router = APIRouter(prefix=SYSTEM_PREFIX, tags=["system"])
 
@@ -328,6 +337,12 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
     )
     mcp_tools = tuple(name for name in allowed if name not in _BUILT_IN_TASK_TOOLS)
     web_search_available = dependencies.serves_chat and config.research is not None
+    # Each and-ed with `serves_code`: a flag that is on in a process with no
+    # Code is a row about a session that cannot exist.
+    code_sandbox = dependencies.serves_code and config.code.sandbox_enabled
+    code_host_commands = dependencies.serves_code and config.code.host_commands_enabled
+    code_web_search = dependencies.serves_code and config.code.web_search_enabled
+    layout_available = layout_converter() is not None
     switches = _switch_views(dependencies)
     research_held = (
         switches[RESEARCH_SWITCH].held if RESEARCH_SWITCH in switches else ""
@@ -458,6 +473,123 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
             else "打开这一行的开关并提供 Provider Key，然后重启 API。",
             provision="switch",
             switch=switches.get(CODE_SWITCH),
+        ),
+        # The three things a coding session may reach beyond its files, one
+        # row each (ADR-0109). Reported separately from `code.sessions`
+        # because they fail separately and are repaired separately: a Windows
+        # console had Code on and every one of these off, and the only place
+        # that said so was the model's own "本环境没有 shell 与网络" -- a
+        # sentence that reads as a lazy model rather than as a fact about the
+        # deployment. Each row says which it is.
+        Capability(
+            id="code.sandbox",
+            title="编码会话的沙箱运行（sandbox_run）",
+            tier="optional",
+            state="available" if code_sandbox else "absent",
+            reason=(
+                ""
+                if code_sandbox
+                else "Code 会话没装配起来，沙箱无从谈起。"
+                if not dependencies.serves_code
+                else (
+                    "这个进程启动时沙箱没有打开：code.sandbox_enabled 为假，"
+                    "或 [sandbox] 没有应答。不挂项目的会话因此没有 sandbox_run。"
+                )
+            ),
+            remedy=(
+                ""
+                if code_sandbox
+                else (
+                    "Compose 栈里它是 `sandbox` 容器（ADR-0107）：API 启动时探它的"
+                    "运行时，探到才打开；看 docker compose logs sandbox，然后"
+                    " restart。原生路径：scripts/dev.sh sandbox-server。"
+                )
+            ),
+            provision="install",
+        ),
+        Capability(
+            id="code.host_commands",
+            title="编码会话的宿主命令（project_run）",
+            tier="optional",
+            state="available" if code_host_commands else "absent",
+            reason=(
+                ""
+                if code_host_commands
+                else "Code 会话没装配起来。"
+                if not dependencies.serves_code
+                else (
+                    "policy.shell_tools_enabled 为假：项目会话只有读写文件的五件"
+                    "工具，没有 shell，也开不了这台机器上的浏览器。"
+                )
+            ),
+            remedy=(
+                ""
+                if code_host_commands
+                else (
+                    "这是宿主机自己的 shell（ADR-077），只有 API 跑在你机器上的"
+                    "原生路径（scripts/dev.sh up）打开它。容器里没有这台机器的"
+                    " shell，Compose 栈不提供（ADR-0109）。"
+                )
+            ),
+            provision="install",
+        ),
+        Capability(
+            id="code.web_search",
+            title="编码会话联网搜索",
+            tier="optional",
+            state="available" if code_web_search else "absent",
+            reason=(
+                ""
+                if code_web_search
+                else "Code 会话没装配起来。"
+                if not dependencies.serves_code
+                else "policy.search_tools_enabled 为假。"
+                if not config.code.search_tools_enabled
+                else research_held
+                if research_held
+                else "没有搜索 provider：「联网搜索」开关是关的，或没有 key。"
+            ),
+            remedy=(
+                ""
+                if code_web_search
+                else "在配置档的 [policy] 里打开 search_tools_enabled，然后重启 API。"
+                if dependencies.serves_code and not config.code.search_tools_enabled
+                else (
+                    "打开「联网搜索」开关——它和「对话联网搜索」是同一个——然后重启 API。"
+                )
+            ),
+            # A switch only where flipping it can help. With the policy flag
+            # off, the research switch would light up and change nothing.
+            provision="switch" if config.code.search_tools_enabled else "install",
+            switch=(
+                switches.get(RESEARCH_SWITCH)
+                if config.code.search_tools_enabled
+                else None
+            ),
+        ),
+        Capability(
+            id="artifact.layout_preview",
+            title="Word 版面预览",
+            tier="optional",
+            state="available" if layout_available else "absent",
+            reason=(
+                ""
+                if layout_available
+                else (
+                    "这个进程找不到 LibreOffice（soffice）：.docx 只有文字预览，"
+                    "没有版面。"
+                )
+            ),
+            remedy=(
+                ""
+                if layout_available
+                else (
+                    "Compose：用 scripts\\stack.cmd 重新构建镜像，它自 ADR-0109 起"
+                    "默认带 LibreOffice（`lite` 不带）。原生路径：安装 LibreOffice，"
+                    "让 soffice 在 PATH 上。"
+                )
+            ),
+            provision="install",
         ),
         Capability(
             id="task.external_search",

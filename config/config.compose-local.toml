@@ -65,6 +65,16 @@ enabled = true
 # from the operator is left alone. Until ADR-0107 the sentence here was "in
 # this topology nothing can answer that probe", and it was true.
 sandbox_enabled = false
+# Where the folder picker opens (ADR-0109). In this topology the API's home
+# is `/app` -- the image's own read-only tree, where every folder can be
+# chosen and none can be written -- and `compose.yaml` binds the host's
+# `var/projects` (or `AGENT_WORKBENCH_PROJECTS_DIR`) at `/projects` for
+# exactly this. Named here rather than discovered by the picker, because a
+# picker that opened wherever it found a writable directory would be
+# guessing at a fact the deployment already knows. The ten native profiles
+# leave it unset: there the process runs as the user on the user's machine,
+# and the home directory is the right answer.
+projects_root = "/projects"
 
 [multi_agent]
 delegation_enabled = true

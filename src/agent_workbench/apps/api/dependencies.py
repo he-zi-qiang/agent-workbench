@@ -677,7 +677,12 @@ def build_dependencies(
     projects = ProjectService(
         PostgresProjectStore(engine),
         files=FilesystemProjectFileStoreFactory(runner=blocking),
-        directories=FilesystemDirectoryBrowser(runner=blocking),
+        # ADR-0109. Where the picker opens is a deployment fact, not a
+        # browser default: in a container the home is the image's read-only
+        # tree, and `code.projects_root` names the mounted folder instead.
+        directories=FilesystemDirectoryBrowser(
+            runner=blocking, start=config.code.projects_root
+        ),
     )
     artifacts = LocalArtifactStore(Path(config.artifacts.local_root), runner=blocking)
     conversations = PostgresConversationStore(engine)

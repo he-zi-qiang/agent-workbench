@@ -1043,9 +1043,13 @@ pre {
 
 .aw-capability-list li {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  /* 三列：图标、文字、开关。第三列 auto，没有开关的行它是 0 宽，所以不带
+     开关的行和带开关的行的文字列对齐在同一条线上。开关放到这一列的理由在
+     `CapabilityRow` 的注释里。 */
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
   padding: 10px 0;
-  gap: 8px;
+  gap: 8px 10px;
   border-bottom: 1px solid var(--aw-border);
 }
 
@@ -1107,8 +1111,26 @@ pre {
    启动」和它们何时会一样，用 `.aw-capability-list span` 同一套灰与字号。 */
 .aw-capability-switch {
   display: grid;
-  margin-top: 8px;
   gap: 5px;
+  /* 在右列里靠右对齐，下面那几行 small 也跟着靠右：它们说的是这个开关的事，
+     贴着开关读比贴着左边的标题读顺。 */
+  justify-items: end;
+  text-align: right;
+}
+
+/* 一行三列排不下的宽度，开关回到文字下面，恢复原来的竖排。720 是这一列
+   （min(1080px, 100%) 减去页边距）里标题、状态标签和三颗按钮开始互相挤的
+   实测宽度。 */
+@media (max-width: 720px) {
+  .aw-capability-list li {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .aw-capability-switch {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
 }
 
 .aw-capability-switch .aw-settings-choices {
@@ -4714,6 +4736,12 @@ pre {
 
 .aw-code-turns {
   display: grid;
+  /* 显式的 minmax(0, 1fr)，理由和 `.aw-code-main` 那条一样：不写的话这是一条
+   * 隐式 `auto` 轨道，按内容的 max-content 定尺——「原始事件」那折的 <pre> 一行
+   * JSON 几万像素宽，它自己会滚动，但它的固有宽度照样把整条轨道撑到实测 1622px
+   * （栏宽 576），转录右边三分之二被裁掉。`<li>` 上的 `min-width: 0` 拦不住这
+   * 个：那管的是网格项的自动最小尺寸，不管轨道自己按什么定尺。 */
+  grid-template-columns: minmax(0, 1fr);
   width: min(820px, 100%);
   margin: 0 auto;
   padding: 0;
@@ -4725,6 +4753,13 @@ pre {
  * 各块之间大，让「一轮到哪儿为止」不用靠读就能看出来。 */
 .aw-code-turn {
   display: grid;
+  /* 同一条规则再写一次，因为一轮自己也是一个网格：指令、步骤、报告、原始事件
+   * 各是一个网格项，落在一条隐式 `auto` 轨道上，按它们的 max-content 定尺。
+   * 思考正文是 `pre-wrap`，它的 max-content 是最长那一行不换行的宽度——实测
+   * 1524px——于是外层轨道修好之后，这一层照样把整轮撑到 1622。`min-width: 0`
+   * 只管这一项在父网格里的自动最小尺寸，管不了它自己的轨道。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 10px;
 }
 
@@ -5018,6 +5053,12 @@ p.aw-code-step-thought {
 .aw-code-raw {
   margin-top: 8px;
   padding-left: 8px;
+  /* 这一折里的 <pre> 是一轮的原始事件，一行 JSON 可以有几万像素宽。它自己
+   * `overflow: auto`，但滚动容器的固有宽度仍然是最长那一行——于是它把整条
+   * `<li>` 撑到实测 1622px（栏宽 576），转录右边三分之二被裁掉，思考摘要和
+   * 代码块都在句子中间断掉，看起来像是它们不会换行。`contain: inline-size`
+   * 让这一折的固有宽度不由内容决定，它拿到栏宽，滚动条回到 <pre> 上。 */
+  contain: inline-size;
 }
 
 .aw-code-raw pre {
@@ -5488,6 +5529,53 @@ p.aw-code-step-thought {
 .aw-code-start .aw-code-composer {
   width: 100%;
   padding: 0;
+}
+
+/* 起始屏标题下面那一行：这台部署里编码会话能碰到什么（ADR-0109）。
+ *
+ * 一行 12px 的灰字，居中，和上面的引子同一种颜色——它是引子的续句，不是一块
+ * 面板。缺席的项划掉：划线比变灰更能被一眼读出「这一个没有」，而变灰在浅色
+ * 主题上和 muted 正文几乎同色。三个项之间用中点分隔，靠 ::before 画，所以
+ * 读屏软件读到的是名字本身。 */
+.aw-code-reach {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: baseline;
+  margin: -4px 0 0;
+  gap: 4px 0;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.aw-code-reach-lead {
+  margin-right: 6px;
+}
+
+.aw-code-reach-item + .aw-code-reach-item::before {
+  content: "·";
+  margin: 0 6px;
+  color: var(--aw-faint);
+}
+
+.aw-code-reach-item.is-absent {
+  color: var(--aw-faint);
+  text-decoration: line-through;
+  /* 划线用比字更淡的颜色画，不然线会比字重。 */
+  text-decoration-color: var(--aw-border-strong);
+}
+
+.aw-code-reach-link {
+  margin-left: 10px;
+  color: var(--aw-text-soft);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.aw-code-reach-link:hover {
+  color: var(--aw-text);
+  text-decoration: underline;
 }
 
 /* --- 窄屏 --- */

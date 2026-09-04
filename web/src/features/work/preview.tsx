@@ -114,7 +114,9 @@ export type PanelLayoutDecline = DocumentLayoutDecline | "viewer_unavailable";
 
 export function layoutDeclineNote(reason: PanelLayoutDecline): string {
   if (reason === "converter_unavailable") {
-    return "这套部署没有版面预览：服务器上没有可用的文档转换器。下面是文字预览，需要原样查看请下载。";
+    // 补法跟在事实后面，因为读到这句的人下一个问题就是「那怎么办」，而答案
+    // 取决于他跑的是哪条路（ADR-0109）。
+    return "这套部署没有版面预览：服务器上没有可用的文档转换器。下面是文字预览，需要原样查看请下载。Windows 上用 scripts\\stack.cmd 重新构建镜像就有；原生路径装 LibreOffice。";
   }
   if (reason === "too_large") {
     return "这份文档的版面太大，页面里不展开。下面是文字预览，需要原样查看请下载。";

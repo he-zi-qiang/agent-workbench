@@ -200,9 +200,14 @@ select {
   line-height: 1.65;
 }
 
-.aw-eyebrow {
-  color: var(--aw-accent);
-}
+/* 眉题是标签，不是动作。
+ *
+ * 这里曾经把它染成强调色。tokens.css 给强调色定的规矩是「暖色只承担动作，不进
+ * 入大面积表面」，而眉题是全站出现最多的一种小字——运行状态页一屏里有四处、
+ * Code 的右栏和会话栏各一处——每一处都在说「下面这一段是什么」，没有一处能被
+ * 点。把它们涂成和发送键同一个橙，读者的眼睛会先落到七个不能点的地方，再找
+ * 那一个能点的。app.css 里的基础值（muted 灰、10px、加宽字距、大写）就是它
+ * 该有的样子，这里不再覆盖。 */
 
 .aw-card-grid {
   gap: 0 32px;
@@ -1656,6 +1661,14 @@ select {
 .aw-work-page:not(.has-selection) .aw-work-advanced {
   padding: 4px 0 0;
   border-top: 0;
+}
+
+/* 起始屏上这一行是整栏里唯一靠左的东西：标题、引子、输入框、三个起手式全部
+ * 居中，然后一个 11px 的「高级设置」孤零零贴在左边缘，读起来像是掉出去的。
+ * 收起时把它摆到中线上，和上面那排起手式对齐；展开之后的表单仍然靠左——
+ * 一组单选项靠左才读得顺，那是表单的规矩，不是这一行的。 */
+.aw-work-page:not(.has-selection) .aw-work-advanced > summary {
+  justify-content: center;
 }
 
 .aw-code-main.is-start {

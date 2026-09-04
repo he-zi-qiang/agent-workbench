@@ -356,20 +356,30 @@ function KnowledgeBaseDetail({
        *
        * 「索引失败」为 0 时照样画，不再隐藏。隐藏它省下的是一张卡，代价是读者
        * 分不清「没有失败」和「这一版根本不报失败」。 */}
+      {/* 颜色只给非零的数。四张卡此前各自常驻一种语义色，于是一个什么问题都
+          没有的知识库也顶着一张红卡（「0 索引失败」）和一张黄卡（「0 正在索引」）
+          ——两个 0 用最响的颜色说「没事」。语义色是给要读出状态的地方用的
+          （tokens.css），而 0 不是一个状态，它是这一格没有话要说。卡还在，
+          分不清「没有失败」和「不报失败」的那个理由没变；变的只是它安静了。 */}
       <div className="aw-kb-stats">
         <div className="aw-kb-stat">
           <strong>{documents.data?.documents.length ?? knowledgeBase.document_count}</strong>
           <span>文档</span>
         </div>
-        <div className="aw-kb-stat is-success">
+        <div className={statClass(ready ?? knowledgeBase.ready_document_count, "is-success")}>
           <strong>{ready ?? knowledgeBase.ready_document_count}</strong>
           <span>可以检索</span>
         </div>
-        <div className="aw-kb-stat is-warning">
+        <div
+          className={statClass(
+            processing ?? knowledgeBase.processing_document_count,
+            "is-warning",
+          )}
+        >
           <strong>{processing ?? knowledgeBase.processing_document_count}</strong>
           <span>正在索引</span>
         </div>
-        <div className="aw-kb-stat is-danger">
+        <div className={statClass(failed ?? knowledgeBase.failed_document_count, "is-danger")}>
           <strong>{failed ?? knowledgeBase.failed_document_count}</strong>
           <span>索引失败</span>
         </div>
@@ -729,4 +739,9 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 一张统计卡的类名：数是 0 时不带语义色，卡就只是一张卡。 */
+function statClass(count: number, tone: "is-success" | "is-warning" | "is-danger"): string {
+  return count > 0 ? `aw-kb-stat ${tone}` : "aw-kb-stat";
 }

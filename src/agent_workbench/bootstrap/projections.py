@@ -474,6 +474,21 @@ class CodeConfig:
     #: downstream the question is "does this turn get the tool", and
     #: "search tools" is the deployment's word rather than the session's.
     web_search_enabled: bool
+    #: The policy half of the conjunction above, on its own.
+    #:
+    #: Carried for one reader, the capability report (ADR-102): when
+    #: ``web_search_enabled`` is false it has to say *which* half is missing,
+    #: because the two have different remedies -- a provider is the console's
+    #: 「联网搜索」 switch plus a key, the policy flag is a line in a profile
+    #: nothing on that page can write. Nothing downstream branches on this
+    #: for a turn; a turn reads the conjunction.
+    search_tools_enabled: bool
+    #: Where the folder picker opens (ADR-0109). ``None`` is the user's home,
+    #: which is only right when this process runs on the user's machine;
+    #: carried as a string because the consumer is a filesystem adapter that
+    #: resolves it on its own thread, and a path resolved here would be
+    #: resolved twice.
+    projects_root: str | None
     turn_timeout_seconds: int
     approval_timeout_seconds: int
     max_steps: int
@@ -1460,6 +1475,8 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
                 settings.policy.search_tools_enabled
                 and _project_research(settings) is not None
             ),
+            search_tools_enabled=settings.policy.search_tools_enabled,
+            projects_root=settings.code.projects_root,
             turn_timeout_seconds=settings.code.turn_timeout_seconds,
             approval_timeout_seconds=settings.code.approval_timeout_seconds,
             max_steps=settings.code.max_steps,

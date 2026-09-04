@@ -2121,6 +2121,7 @@ production build 四步，**没有覆盖率那一步**。
 | F-34 | computer 页把门禁规则手抄了一遍，无交叉校验 | 已知代价 |
 | F-35 | Windows 抓屏逐窗渲染再合成：被遮挡的已批准窗口在图里完整可见 | 已知代价 |
 | F-36 | Windows 上 `activate_application` 受前台锁限制，且碰屏幕的那一半从未在 Windows 上跑过 | 未实现（证据） |
+| F-37 | Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器 | **拒绝** |
 
 > 编号一经退休不再复用。**F-18（合成器过滤是 allowlist 形状，抓屏不是遮盖）
 > 已于 2026-08-28 关闭**，按维护规则从正文删除，落地记录在
@@ -2708,6 +2709,33 @@ FileDescription——**一次也没在 Windows 上执行过**。CI 也不跑它�
 一次真实的 `request_access → screenshot → left_click` 走通，并把那台机器的数字（激活成功率、
 一次抓屏的毫秒数）写进 ADR-0108，替换掉「未量」。在此之前，Windows 快速开始 §7 那三条实情
 就是全部口径。
+
+### F-37 Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器 —— 拒绝
+
+**证据**：[config.compose-local.toml](../config/config.compose-local.toml) 的 `[policy]`
+没有 `shell_tools_enabled`（[config.demo-local.toml](../config/config.demo-local.toml) 有，
+并且注释写着那是「被人明确批准后才写下的」）；
+[ADR-0109 §3.3](./adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)
+是拒绝本身；控制台的 `code.host_commands` 那一行
+（[routes/system.py](../src/agent_workbench/apps/api/routes/system.py)）把它说出来，
+Code 起始屏那行「这里能碰到」（[CodeReach.tsx](../web/src/features/code/CodeReach.tsx)）
+在第一句指令之前把它划掉。
+
+**这是拒绝，不是遗漏。** `project_run` 技术上在容器里跑得起来，不放进去是因为它会同时违反两份
+已有的论证：ADR-0077 的整个前提是「**这台机器**上的一条命令」——工具描述、提示词、审批卡说的
+全是用户自己的工具链、凭据与网络，容器里一样都不是真的，给模型一个这样描述的 shell 然后让它
+发现什么都没有，正是 ADR-0057 拒绝的「提供兑现不了的工具」；而 API 容器持有 key、数据库与
+每一个工作区，ADR-0105 §4.1 拒绝让它同时碰到 daemon 的理由，对「同时能跑任意 shell 命令」
+以更弱的形式成立。「浏览器」是同一件事的一半：原生路径上模型经 `project_run` 跑 `open https://…`，
+容器里没有那条命令，也没有桌面。
+
+**2026-09-04 之前它是「口径不实」的一种——不是文档说了假话，是没有一处说话**：Windows
+用户看到的唯一一句是模型在回合里自陈「本环境没有 shell 与网络」，读起来像模型偷懒。
+这一条登记为「拒绝」而不是「已知代价」，因为想要宿主 shell 的正确做法是换路
+（`scripts/dev.sh up` 的 demo 档），不是等这条被修。
+
+**做完的判据**：不适用。要改，先推翻 ADR-0109 §3.3——那意味着回答「容器里的 shell 是谁的
+shell」，以及一个不持有 key 的、只跑 shell 的容器该长什么样。
 
 ## 优先级建议
 

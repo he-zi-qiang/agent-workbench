@@ -234,6 +234,22 @@ def _launcher() -> str:
     return WINDOWS_LAUNCHER.read_bytes().decode("ascii")
 
 
+#: The one `docker build` that produces the tag the topology runs. Build
+#: arguments may sit between `build` and `-t` (ADR-0109 added one); the tag
+#: and the bare `.` context are what the rules below are about.
+_IMAGE_BUILD = re.compile(
+    r"^docker build (?P<args>(?:--build-arg \S+ )*)-t (?P<tag>\S+) \.$"
+)
+
+
+def _image_build_line() -> str:
+    """The launcher's image build command, or a failure naming what was found."""
+
+    matches = [line for line in _launcher_commands() if _IMAGE_BUILD.match(line)]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
 def _launcher_commands() -> list[str]:
     """Its executable lines only.
 
@@ -305,7 +321,9 @@ def test_the_windows_launcher_never_builds_through_compose() -> None:
         line for line in _launcher_commands() if "compose" in line and "--build" in line
     ]
     assert not through_compose, through_compose
-    assert "docker build -t agent-workbench:local ." in _launcher()
+    match = _IMAGE_BUILD.match(_image_build_line())
+    assert match is not None
+    assert match.group("tag") == "agent-workbench:local"
 
 
 def test_the_windows_launcher_refuses_to_start_a_stale_image() -> None:
@@ -320,9 +338,7 @@ def test_the_windows_launcher_refuses_to_start_a_stale_image() -> None:
 
     text = _launcher()
     between = text[
-        text.index("docker build -t agent-workbench:local .") : text.index(
-            "docker compose --profile demo up"
-        )
+        text.index(_image_build_line()) : text.index("docker compose --profile demo up")
     ]
     assert "errorlevel 1" in between, "a failed build reaches compose up unchallenged"
 
@@ -358,9 +374,10 @@ def test_the_windows_launcher_builds_the_tag_the_topology_runs() -> None:
     }
     assert built, "no service in this topology builds an image"
 
-    text = _launcher()
+    match = _IMAGE_BUILD.match(_image_build_line())
+    assert match is not None
     for name, image in built.items():
-        assert f"docker build -t {image} ." in text, (
+        assert match.group("tag") == image, (
             f"service {name} runs {image}, which scripts/stack.cmd never builds"
         )
 
@@ -464,7 +481,7 @@ def test_the_windows_launcher_measures_the_machine_before_it_spends_its_time() -
         "the memory gate runs before the subcommand dispatch, so `down` on a "
         "small machine would refuse to stop the stack"
     )
-    assert run.index("MemTotal") < run.index("docker build -t"), (
+    assert run.index("MemTotal") < run.index("docker build "), (
         "the machine is measured after the build, which is the whole cost the "
         "measurement exists to avoid"
     )
@@ -880,3 +897,75 @@ def test_the_api_can_name_the_host_and_tunnels_the_screen_servers_session() -> N
         in launcher
     )
     assert "LOCAL_PROXY_PORT=8768" in launcher
+
+
+# --- ADR-0109: the two things a Windows console still could not do ----------
+
+
+def test_the_windows_launcher_builds_the_image_that_can_lay_a_document_out() -> None:
+    """`stack.cmd` passes the fidelity build argument; the Dockerfile default stays off.
+
+    ADR-0045 left LibreOffice out of the default image and said why: a
+    several-hundred-megabyte download that has failed mid-build, on an image
+    that is not broken without it. That default is right for CI and wrong for
+    the one launcher whose job since ADR-0105 is to assemble everything a
+    container can -- a console that shows a Word report as extracted text
+    reads as a console that cannot preview Word, and one did.
+    """
+
+    commands = _launcher_commands()
+    builds = [
+        line for line in commands if line.startswith("docker build ") and " ." in line
+    ]
+    assert len(builds) == 1, builds
+    assert "--build-arg WITH_FIDELITY_PREVIEW=%FIDELITY%" in builds[0]
+    assert 'set "FIDELITY=1"' in commands
+    # The lighter image is a word somebody types, not a second launcher.
+    assert 'if /i "%~1"=="lite" set "FIDELITY=0"' in commands
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "ARG WITH_FIDELITY_PREVIEW=0" in dockerfile, (
+        "the Dockerfile default moved; the launcher's argument is the decision"
+    )
+
+
+def test_the_api_alone_can_write_one_host_folder_and_the_picker_opens_there() -> None:
+    """A coding session edits real files, so the topology has to hand it a folder.
+
+    Before this the picker opened at `/app`, the image's read-only tree:
+    every directory was choosable and the first `project_write` failed with a
+    sentence about a read-only filesystem. Three facts have to agree -- the
+    mount in `compose.yaml`, the root the profile names, and the launcher
+    creating the folder -- and this pins each to the same path.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    def bind_targets(name: str) -> set[str]:
+        spec = services[name]
+        assert isinstance(spec, dict)
+        volumes = spec.get("volumes", [])
+        assert isinstance(volumes, list)
+        return {
+            str(volume["target"])
+            for volume in volumes
+            if isinstance(volume, dict) and volume.get("type") == "bind"
+        }
+
+    assert "/projects" in bind_targets("api")
+    # Only the process that runs Code turns. A Worker holding a writable host
+    # folder would be a second write path into the user's disk for no reader.
+    for name in ("task-worker", "task-worker-b", "ingestion-worker", "encoder"):
+        assert "/projects" not in bind_targets(name), name
+
+    profile = tomllib.loads(
+        (ROOT / "config/config.compose-local.toml").read_text(encoding="utf-8")
+    )
+    assert profile["code"]["projects_root"] == "/projects"
+
+    assert 'if not exist "var\\projects" mkdir "var\\projects"' in _launcher_commands()
+    # Outside the `AW_` namespace: settings reject unknown `AW_*` variables,
+    # and this one is Compose's, never the application's.
+    text = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    assert "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects" in text

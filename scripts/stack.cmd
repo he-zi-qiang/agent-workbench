@@ -7,6 +7,7 @@ rem  uv, a Python 3.12 and a Node 24. This drives Compose instead, so the only
 rem  thing the machine needs is Docker Desktop.
 rem
 rem      scripts\stack.cmd            build, start, wait for healthy, open the console
+rem      scripts\stack.cmd lite       the same, without LibreOffice in the image
 rem      scripts\stack.cmd down       stop everything and remove the containers
 rem      scripts\stack.cmd logs       follow the logs
 rem      scripts\stack.cmd status     what is running
@@ -163,10 +164,38 @@ rem  against the same directory. A Windows checkout under a path like
 rem  D:\projects\... is fine either way, and one under D:\Chinese-name\... is
 rem  the common case here, so the two-step is unconditional rather than
 rem  conditional on a check that would have to guess at the same rule.
+rem  WITH_FIDELITY_PREVIEW=1: the image also carries headless LibreOffice
+rem  and a CJK font, so a Word document on the Tasks page can be shown as a
+rem  laid-out page and not only as extracted text (ADR-0045, ADR-0109).
+rem
+rem  The Dockerfile leaves that build argument off by default and says why:
+rem  it is a several-hundred-megabyte download that has failed mid-build
+rem  before, and a default image is not broken without it -- `GET
+rem  /v1/artifacts/{id}/pdf` answers 503 and the console shows the text.
+rem  That default is right for CI and for anybody typing `docker build`
+rem  themselves. It is wrong for THIS file, whose one job since ADR-0105 is
+rem  to assemble everything a container can: an image that already carries
+rem  a multi-gigabyte retrieval runtime, and then shows a Word report as
+rem  plain text because 700 MB was saved, reads as a console that cannot
+rem  preview Word -- which is what a Windows user reported (2026-09-04).
+rem  To build the lighter image on purpose: scripts\stack.cmd lite
+set "FIDELITY=1"
+if /i "%~1"=="lite" set "FIDELITY=0"
+
+rem  The folder the API container may write on this machine (ADR-0109).
+rem  compose.yaml binds var\projects at /projects and the profile opens the
+rem  folder picker there. Created here, before `compose up`: on a Linux
+rem  engine Docker would create a missing bind source as root, and then
+rem  the non-root API could not write into it. Docker Desktop does not have
+rem  that problem, but a launcher that only works on the engine it was
+rem  tested on is the kind of launcher this file exists to replace.
+if not exist "var\projects" mkdir "var\projects"
+
 echo Building the image. First run pulls Node 24, Python 3.12, the Docker
-echo CLI and the retrieval runtime, then downloads about 6.7 GB of model
-echo weights into a named volume. Expect tens of minutes, once.
-docker build -t agent-workbench:local .
+echo CLI, LibreOffice and the retrieval runtime, then downloads about
+echo 6.7 GB of model weights into a named volume. Expect tens of minutes,
+echo once.
+docker build --build-arg WITH_FIDELITY_PREVIEW=%FIDELITY% -t agent-workbench:local .
 if errorlevel 1 (
     echo stack: image build failed -- see the output above. 1>&2
     rem  Stopping here matters. `compose up` would fall back to whatever
@@ -222,6 +251,13 @@ echo   Docker socket; if its image could not be pulled the System page says
 echo   the sandbox is absent, and scripts\stack.cmd logs says why. Computer
 echo   use cannot run in a container at all: to have it, run
 echo   scripts\computer.cmd on this machine (it needs uv, nothing else).
+echo.
+echo   Coding sessions read and write folders under var\projects in this
+echo   checkout (the only host folder the container can see); put a project
+echo   there, or start with AGENT_WORKBENCH_PROJECTS_DIR set to another one.
+echo   They have no shell here: project_run is the native launcher's, and a
+echo   container cannot open a browser on this desktop. The System page's
+echo   Code rows say so, with what each would take.
 echo.
 start "" "http://127.0.0.1:8000/ui/"
 set "RC=0"

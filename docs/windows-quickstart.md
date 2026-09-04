@@ -131,8 +131,10 @@ scripts\stack.cmd
 
 1. 探 Docker（两种失败分开报）
 2. 量内存（§0）
-3. `docker build -t agent-workbench:local .`——首次要拉 Node 24、Python 3.12、Docker CLI
-   和检索运行时
+3. `docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench:local .`——首次要拉
+   Node 24、Python 3.12、Docker CLI、LibreOffice 和检索运行时。LibreOffice 是给 Word 版面
+   预览的（[ADR-0109](adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)），
+   约 700 MB；不要它就 `scripts\stack.cmd lite`
 4. `docker compose --profile demo up -d --wait`——十四个容器，等到全部 healthy，最多 600 秒。
    `encoder` 要把三个模型加载并预热完才算 healthy，其余四个进程都等它
 5. 打开 `http://127.0.0.1:8000/ui/`
@@ -189,9 +191,12 @@ key 和「运行状态」页上的开关都只对**下一次启动**生效
 | 提交任务 / 真实图 Worker / 人工审批 | 有 |
 | 两个 Worker 的 claim / lease / epoch 竞争 | 有 |
 | Word MCP（`render_document`） | 有 |
+| 任务产出里 .docx 的**版面**预览（LibreOffice 转 PDF） | 有（`lite` 构建的没有，只有文字预览） |
 | web MCP（`fetch_page` / `download_document`） | 有 |
 | 对话联网搜索 / 任务联网搜索 | 有（用同一把 provider key） |
-| Code 会话，含 `sandbox_run` | 有——沙箱在 `sandbox` 容器里，见下 |
+| Code 会话，含 `sandbox_run`（不挂项目的会话） | 有——沙箱在 `sandbox` 容器里，见下 |
+| Code 项目会话：读写 `var\projects` 下的真实文件 | 有，见下 |
+| **Code 项目会话的宿主命令 `project_run`、开这台机器的浏览器** | **没有，而且不会有**——原生路径才有，见下 |
 | **任务沙箱执行** | **有**，见下 |
 | 任务分流（自动选图） / 子代理委派 | 有 |
 | 评测页的报告 | 能看；**从界面发起评测不行**，页面会给你手敲的命令 |
@@ -214,12 +219,27 @@ key 和「运行状态」页上的开关都只对**下一次启动**生效
   镜像（约 70 MB，要网络），再 `scripts\stack.cmd restart`。broker 起来时会在日志里说它用的
   是哪个镜像，**不静默回退**。
 
+**Code 会话在哪个文件夹里，以及它够不着什么：**
+
+- 容器够不着你的磁盘，只够得着一个文件夹：这个 checkout 下的 `var\projects`，
+  `stack.cmd` 会建它，Compose 把它挂在 `/projects`，Code 的文件夹选择器就从那里打开
+  （[ADR-0109](adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)）。
+  把要编码的项目放进去，或者从终端里 `set AGENT_WORKBENCH_PROJECTS_DIR=D:\projects`
+  再跑 `stack.cmd`。选择器里能看到 `/app` 之类别的目录，别选——那是镜像自己的只读树。
+- **这里的编码会话没有 shell，也开不了浏览器。** Mac 上原生跑（`scripts/dev.sh up`）的
+  demo 档给项目会话一条 `project_run`——你机器上的真 shell，能 `open` 网页、能跑你装的任何
+  工具；容器里没有你的工具链、没有桌面，给一个这样的 shell 是给一个兑现不了的工具，所以不给
+  （ADR-0109 §3.3，已知缺口 F-37）。有的是：读写项目文件的五件工具，不挂项目时的 `sandbox_run`
+  （一次性容器、断网），以及打开「联网搜索」后的 `web_search`。Code 起始屏在你敲第一句之前
+  会把这三样列出来，缺的划掉；「运行状态」页说怎么补。
+
 ---
 
 ## 7. 日常操作
 
 ```bat
 scripts\stack.cmd                :: 构建、启动、等到健康、打开控制台
+scripts\stack.cmd lite           :: 同上，但镜像不带 LibreOffice（没有 Word 版面预览）
 scripts\stack.cmd status         :: 什么在跑
 scripts\stack.cmd logs           :: 跟日志
 scripts\stack.cmd restart        :: 只重启沙箱、API 与两个 Worker；数据库与 encoder 不动
@@ -292,6 +312,9 @@ docker compose --profile demo down -v
 | 上传的文档一直是「处理中」 | 摄取 worker 死了，或 `encoder` 没起来。`scripts\stack.cmd logs`，多半是权重或内存 |
 | 「运行状态」页说沙箱缺失 | broker 拉不到 `python:3.12-slim`。看 `sandbox` 容器的日志，手动 pull，然后 restart |
 | 「计算机」页说服务器没应答 | 没跑 `scripts\computer.cmd`，或它退出了。看那个窗口 |
+| Code 里点开 .docx 只有文字，任务页说「没有可用的文档转换器」 | 用 `lite` 构建的，或是 2026-09-04 之前构建的镜像。`scripts\stack.cmd` 重新构建，「运行状态」页 `Word 版面预览` 那一行会变成可用 |
+| Code 的文件夹选择器里只有 `/app` 这类目录，写文件报只读 | 镜像是 ADR-0109 之前的。重新跑 `scripts\stack.cmd`；选 `/projects` 下的文件夹 |
+| Code 会话说「本环境没有 shell 与网络」 | 说的是实话。shell 与浏览器这条路上没有（§6）；联网搜索要开「联网搜索」开关并 restart |
 | 控制台开了但 Chat 说它没有联网功能 | 没 key，或 key 存了没 `restart`。见 §5 |
 | 任务秒过、报告像模像样但引用是假的 | 合成 Worker。见 §5 那一段 |
 | 手敲 `docker compose up --build` 直接死在 gRPC header 上 | §2。用 `stack.cmd`，别用 `--build` |

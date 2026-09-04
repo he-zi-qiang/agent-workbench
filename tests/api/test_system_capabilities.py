@@ -45,6 +45,19 @@ class _StubPrincipals:
         return PRINCIPAL
 
 
+@pytest.fixture(autouse=True)
+def _no_layout_converter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test below runs on a deployment without LibreOffice.
+
+    `find_soffice` reads `PATH` and one macOS bundle path, so left alone the
+    `artifact.layout_preview` row would say whatever the machine running the
+    suite has installed. The one test about the converter being present
+    replaces this hook itself.
+    """
+
+    monkeypatch.setattr(system_route, "layout_converter", lambda: None)
+
+
 def _switch_states(**overrides: SwitchState) -> tuple[SwitchState, ...]:
     """Every switch off and undecided, unless a test says otherwise."""
 
@@ -64,6 +77,10 @@ def _dependencies(
     rag_unavailable: str | None = "no embedding runtime is installed",
     serves_search: bool = False,
     serves_code: bool = False,
+    code_sandbox: bool = False,
+    code_host_commands: bool = False,
+    code_web_search: bool = False,
+    code_search_tools: bool = False,
     triage: object | None = None,
     research: object | None = None,
     envelope: Any = None,
@@ -90,7 +107,16 @@ def _dependencies(
                 )
             ),
             research=research,
-            code=SimpleNamespace(enabled=False),
+            # The four booleans `CodeConfig` carries about what a session may
+            # reach (ADR-0109). All off by default, like the flat Compose
+            # stack before anybody typed anything.
+            code=SimpleNamespace(
+                enabled=False,
+                sandbox_enabled=code_sandbox,
+                host_commands_enabled=code_host_commands,
+                web_search_enabled=code_web_search,
+                search_tools_enabled=code_search_tools,
+            ),
             model=SimpleNamespace(
                 api_key=SecretStr(active_key) if active_key is not None else None
             ),
@@ -264,7 +290,18 @@ def test_an_assembled_deployment_reports_no_reason_where_nothing_is_missing() ->
         assert rows[row_id]["remedy"] == "", row_id
 
 
-@pytest.mark.parametrize("row_id", ["chat.direct", "chat.web_search", "task.mcp_tools"])
+@pytest.mark.parametrize(
+    "row_id",
+    [
+        "chat.direct",
+        "chat.web_search",
+        "task.mcp_tools",
+        "code.sandbox",
+        "code.host_commands",
+        "code.web_search",
+        "artifact.layout_preview",
+    ],
+)
 def test_every_absence_carries_something_to_do_about_it(row_id: str) -> None:
     """A report that says "missing" and stops is the thing this replaces."""
 
@@ -272,6 +309,92 @@ def test_every_absence_carries_something_to_do_about_it(row_id: str) -> None:
 
     assert rows[row_id]["state"] == "absent"
     assert rows[row_id]["remedy"] != ""
+
+
+# --- ADR-0109: what a coding session may reach, one row each ---------------
+
+
+def test_a_windows_console_says_which_of_the_three_reaches_it_lacks() -> None:
+    """The report this batch was written for.
+
+    A Compose stack with Code on had no sandbox, no shell and no search, and
+    the only sentence saying so was the model's own "本环境没有 shell 与网络",
+    which reads as a lazy model. Three rows, three different remedies.
+    """
+
+    rows = _report(_dependencies(serves_code=True, code_search_tools=True))
+
+    assert rows["code.sandbox"]["state"] == "absent"
+    assert "sandbox" in rows["code.sandbox"]["remedy"]
+    assert rows["code.host_commands"]["state"] == "absent"
+    assert "shell" in rows["code.host_commands"]["reason"]
+    # The native launcher is the one place this exists; a container is not.
+    assert "scripts/dev.sh" in rows["code.host_commands"]["remedy"]
+    assert rows["code.web_search"]["state"] == "absent"
+    # The policy flag is on, so the missing half is the provider -- and that
+    # half is the console's own switch.
+    assert rows["code.web_search"]["provision"] == "switch"
+    assert rows["code.web_search"]["switch"]["id"] == "research.enabled"
+
+
+def test_the_code_rows_are_about_a_session_that_exists() -> None:
+    """A flag that is on in a process with no Code is a row about nothing."""
+
+    rows = _report(
+        _dependencies(
+            serves_code=False,
+            code_sandbox=True,
+            code_host_commands=True,
+            code_web_search=True,
+            code_search_tools=True,
+        )
+    )
+
+    for row_id in ("code.sandbox", "code.host_commands", "code.web_search"):
+        assert rows[row_id]["state"] == "absent", row_id
+        assert "Code 会话" in rows[row_id]["reason"], row_id
+
+
+def test_the_native_console_reports_all_three_reaches_available() -> None:
+    rows = _report(
+        _dependencies(
+            serves_code=True,
+            code_sandbox=True,
+            code_host_commands=True,
+            code_web_search=True,
+            code_search_tools=True,
+        )
+    )
+
+    for row_id in ("code.sandbox", "code.host_commands", "code.web_search"):
+        assert rows[row_id]["state"] == "available", row_id
+        assert rows[row_id]["reason"] == "", row_id
+        assert rows[row_id]["remedy"] == "", row_id
+
+
+def test_the_policy_flag_off_is_not_offered_the_research_switch() -> None:
+    """Flipping the provider switch cannot help a session the policy forbids."""
+
+    rows = _report(_dependencies(serves_code=True, code_search_tools=False))
+
+    assert rows["code.web_search"]["state"] == "absent"
+    assert "search_tools_enabled" in rows["code.web_search"]["reason"]
+    assert rows["code.web_search"]["provision"] == "install"
+    assert rows["code.web_search"]["switch"] is None
+
+
+def test_the_layout_row_follows_the_converter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Present or absent is a fact about the host, asked the way the route asks."""
+
+    absent = _report(_dependencies())
+    assert absent["artifact.layout_preview"]["state"] == "absent"
+    assert "LibreOffice" in absent["artifact.layout_preview"]["reason"]
+    assert "stack.cmd" in absent["artifact.layout_preview"]["remedy"]
+
+    monkeypatch.setattr(system_route, "layout_converter", lambda: "/usr/bin/soffice")
+    present = _report(_dependencies())
+    assert present["artifact.layout_preview"]["state"] == "available"
+    assert present["artifact.layout_preview"]["reason"] == ""
 
 
 def test_the_rows_are_a_stable_set_with_a_tier_each() -> None:
@@ -285,6 +408,10 @@ def test_the_rows_are_a_stable_set_with_a_tier_each() -> None:
         "chat.web_search",
         "knowledge.search",
         "code.sessions",
+        "code.sandbox",
+        "code.host_commands",
+        "code.web_search",
+        "artifact.layout_preview",
         "task.submit",
         "task.worker",
         "task.external_search",
@@ -294,7 +421,7 @@ def test_the_rows_are_a_stable_set_with_a_tier_each() -> None:
         "task.triage",
     }
     assert {row["tier"] for row in rows.values()} == {"core", "optional"}
-    # The five the product claims to be, separated from the seven it can also
+    # The five the product claims to be, separated from the eleven it can also
     # be asked to do. A row moving between these two is a product decision and
     # should have to edit this list to make it.
     assert {row_id for row_id, row in rows.items() if row["tier"] == "core"} == {
@@ -327,6 +454,14 @@ def test_every_row_says_how_it_is_provided() -> None:
         "task.worker": "none",
         "chat.web_search": "switch",
         "code.sessions": "switch",
+        "code.sandbox": "install",
+        "code.host_commands": "install",
+        # `install` here because the fixture's policy flag is off, and a
+        # research switch on a row the policy flag gates would light up and
+        # change nothing. The test further down flips the flag and gets the
+        # switch.
+        "code.web_search": "install",
+        "artifact.layout_preview": "install",
         "task.external_search": "switch",
         "task.mcp_tools": "install",
         "task.sandbox": "install",

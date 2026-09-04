@@ -337,6 +337,25 @@ services:
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
+      # The one folder a coding session may write on the host (ADR-0109).
+      #
+      # A Code turn runs in this process and reads and writes the project's
+      # real files (ADR-074). Before this line the only files it could reach
+      # were the image's own: the folder picker opened at `/app`, every
+      # directory in it was choosable, and the first `project_write` failed
+      # on the read-only root with a sentence that reads like a broken tool.
+      # This is the host directory the picker opens in instead
+      # (`code.projects_root` in the profile), and the only bind mount any
+      # application service carries. It is deliberately not `$HOME`: a coding
+      # session that may edit files has a folder, not the disk.
+      #
+      # Relative to this file, so a double-clicked `stack.cmd` gets
+      # `<checkout>\var\projects` (created by the launcher; `var/` is
+      # gitignored). A person who keeps projects elsewhere sets
+      # `AGENT_WORKBENCH_PROJECTS_DIR` -- outside the `AW_` namespace on
+      # purpose, because settings reject unknown `AW_*` variables and this one
+      # is read by Compose, never by the application.
+      - "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects"
     healthcheck:
       test:
         [
