@@ -120,6 +120,10 @@ SendKeys。server 在主机上由 `scripts\computer.cmd` 起（只要 uv），AP
 守 bootstrap 边界的红过一次（`apps/encoder/main.py` 直接从 `bootstrap.settings` 取 `load_settings`），
 都按它们的本意改了代码而不是改测试。
 
+**CI 第一跑红了九条，都是原有的 osascript 测试**：`ask()` 的平台分派对 Linux 直接抛
+`ConsentUnavailableError`，而 CI 跑在 Linux 上、那些测试靠替身 `osascript` 一直是绿的。改回
+「非 Windows 照旧走 osascript 路径」；本机没有暴露它，因为本机是 macOS。
+
 静态门禁：`ruff format --check .`、`ruff check .`、pyright strict 0 错误（`win32.py` 带四条文件级抑制，
 与 `darwin.py` 同一种交易，理由写在文件头）、`uv lock --check`、`agent-config-check` 的
 `development` / `test` / `production` 三个档与 `--config config/config.compose-local.toml` 全部退出 0。
