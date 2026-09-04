@@ -814,7 +814,7 @@ package.
 | `config/` | Ten profiles |
 | `migrations/` | 32 Alembic revisions, a single head |
 | `evals/` | `chat` / `rag` / `triage` gold sets; runners in `scripts/run_*_eval.py` |
-| `docs/adr/` | 95 decision records, numbered 0012–0108 (0050 and 0053 reserved but never written) |
+| `docs/adr/` | 96 decision records, numbered 0012–0109 (0050 and 0053 reserved but never written) |
 | `docs/assets/` | The SVGs in this README; the panel inlines the same files — **one drawing, two readers** |
 | `scripts/` | `dev.sh` (the one place that knows this machine; bash), `stack.cmd` (**the only way into the whole stack on Windows**; ASCII + CRLF), `panel.cmd` (the panel's Windows entry point), `architecture_panel.py` (the panel itself; standard library only), evaluation and benchmark scripts |
 
@@ -1172,7 +1172,7 @@ Alembic head `0032_events_stream_run_sequence` (32 migrations).
 
 Scale: 82,718 lines of Python across 326 files, 101,465 lines of tests across 269
 files, 52,314 lines of frontend TypeScript across 143 files; 91 files under
-`docs/adr/`, numbered 0012–0108 — **with gaps**: 0050 and 0053 were claimed by the
+`docs/adr/`, numbered 0012–0109 — **with gaps**: 0050 and 0053 were claimed by the
 block reservation of 2026-08-13 and have never been written (the last section of
 `docs/adr/README.md` records that reservation). This line previously read
 "0012–0083 without gaps"; both halves were wrong, and the edition after that
@@ -1233,7 +1233,7 @@ the one that cannot go stale.
 | [**Windows quick start**](docs/windows-quickstart.md) | **From a bare Windows machine to the whole stack** (Chinese) — the only route there |
 | [Running locally](docs/running-locally.md) (Chinese) / [Compose deployment](docs/deployment.md) | How to run it |
 | [Frontend design baseline](docs/frontend-design.md) | Frontend structure, protocol boundary, responsive strategy (Chinese) |
-| [ADR index](docs/adr/) | 95 implementation-period decision records (0012–0108; 0050 and 0053 reserved but never written) |
+| [ADR index](docs/adr/) | 96 implementation-period decision records (0012–0109; 0050 and 0053 reserved but never written) |
 | [Full documentation map](docs/README.md) | Layered index and reading paths by role (Chinese) |
 
 ---

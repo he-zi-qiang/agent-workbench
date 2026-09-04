@@ -111,6 +111,7 @@ import {
   MAX_WORKSPACE_ENTRIES,
   planFolderUpload,
 } from "./workspaceNames";
+import { CodeReach } from "./CodeReach";
 import { ProjectChooser } from "./ProjectChooser";
 import { ProjectFileTree } from "./ProjectFileTree";
 import { RunPanel } from "../../components/RunPanel";
@@ -1502,6 +1503,7 @@ export function CodePage() {
                 <FolderIcon aria-hidden="true" size={13} />
                 换一个文件夹
               </button>
+              <CodeReach />
               {error === null ? null : <ErrorNotice message={error} />}
               {composer}
               <ModeStarterPrompts

@@ -420,6 +420,26 @@ class CodeSettings(StrictModel):
     #: this changes what a turn may call, not where it runs.
     sandbox_enabled: bool = False
 
+    #: Where the console's folder picker opens, when this process is not on
+    #: the machine whose disk it is picking from (ADR-0109).
+    #:
+    #: ``None`` -- the default and what every native profile leaves -- means
+    #: the user's home directory, which is the right answer exactly when the
+    #: process runs as that user on that machine. In a container the home is
+    #: ``/app``: the image's own read-only tree, where every folder is
+    #: pickable and none is writable, so a project chosen there fails on the
+    #: first ``project_write`` with a sentence about a read-only filesystem
+    #: that reads like a bug in the tool. This names the one directory the
+    #: topology mounts *for* projects, and the picker opens there instead.
+    #:
+    #: A leaf under ``[code]`` rather than a mount the container script guesses
+    #: at, because the picker is Code's front door and the setting that
+    #: decides where it opens belongs beside the setting that decides whether
+    #: there is a door. Defaulted, so no schema bump (docs/configuration.md §2).
+    #: An absolute path in the *server's* filesystem; the browser refuses a
+    #: relative one for the same reason the picker does.
+    projects_root: str | None = None
+
     #: Whether each ``external``-risk call stops and asks a human (ADR-058,
     #: renamed by ADR-0085).
     #:

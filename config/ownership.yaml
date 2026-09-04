@@ -125,6 +125,7 @@
         "chat.routed_relevance_threshold",
         "code.enabled",
         "code.sandbox_enabled",
+        "code.projects_root",
         "code.external_requires_approval",
         "code.max_steps",
         "code.max_tool_calls",

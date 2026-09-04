@@ -146,3 +146,17 @@ def test_the_compose_profile_leaves_the_sandbox_to_the_launcher(
     assert decided.sandbox.enabled is True
     assert decided.code.sandbox_enabled is True
     assert project_task_worker(decided).sandbox is not None
+
+
+def test_the_compose_profile_opens_the_picker_in_the_mounted_folder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/projects` is the one host folder the API container can write (ADR-0109).
+
+    The native profiles leave this unset -- there the home directory is the
+    right answer -- so copying this file from `demo-local` would lose the
+    line, and the picker would open in the image's read-only tree again.
+    """
+
+    settings = _load(monkeypatch)
+    assert settings.code.projects_root == "/projects"

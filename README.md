@@ -692,7 +692,7 @@ handler），以及执行器每 5 秒一次的心跳——**心跳不带百分�
 | `config/` | 十一个 profile |
 | `migrations/` | 32 个 Alembic 版本，单 head |
 | `evals/` | `chat` / `rag` / `triage` 金标集；runner 在 `scripts/run_*_eval.py` |
-| `docs/adr/` | 95 份决策记录，编号 0012–0108（0050 与 0053 预留未写） |
+| `docs/adr/` | 96 份决策记录，编号 0012–0109（0050 与 0053 预留未写） |
 | `docs/assets/` | 本 README 里的 SVG；面板把同样这几个文件内联进页面——**一份图，两个读者** |
 | `scripts/` | `dev.sh`（本机唯一知道环境的地方，bash）、`stack.cmd`（**Windows 上起整栈的唯一入口**，ASCII + CRLF）、`panel.cmd`（面板的 Windows 入口）、`architecture_panel.py`（面板本体，只用标准库）、评测与基准脚本 |
 
@@ -856,7 +856,7 @@ agent 间投递（mailbox）、旧 Qdrant Point 的物理清理。**agent spawn 
 | [**Windows 快速开始**](docs/windows-quickstart.md) | **Windows 上从零到全套**，中文，唯一的那条路 |
 | [本机运行手册](docs/running-locally.md) ／ [Compose 部署](docs/deployment.md) | 怎么跑起来（后者为英文） |
 | [前端设计基线](docs/frontend-design.md) | 前端结构、协议边界、响应式策略 |
-| [ADR 索引](docs/adr/) | 95 份实施期决策记录（0012–0108，0050 与 0053 预留未写） |
+| [ADR 索引](docs/adr/) | 96 份实施期决策记录（0012–0109，0050 与 0053 预留未写） |
 | [完整文档地图](docs/README.md) | 分层索引与按角色的阅读路径 |
 
 ---

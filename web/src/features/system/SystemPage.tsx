@@ -267,6 +267,11 @@ export function CapabilityReport() {
 }
 
 function CapabilityRow({ row }: { row: DeploymentCapability }) {
+  // 开关是这一行的第三列，不是文字下面的又一段。此前它排在原因和补法之后，
+  // 于是五个带开关的行各自高出一截，一屏里同一组三个按钮出现五次，读者要
+  // 用眼睛把每组按钮和它上面第几行标题配对。放到右边之后，标题、状态和
+  // 开关在同一条水平线上，往下扫一列就知道哪几行是能拨的。窄屏上三列排不下，
+  // 它回到文字下面（app.css 里那条断点）。
   return (
     <li className={`is-${row.state} is-${row.tier}`}>
       {stateIcon(row)}
@@ -286,8 +291,8 @@ function CapabilityRow({ row }: { row: DeploymentCapability }) {
         {row.reason !== "" && <span>{row.reason}</span>}
         {row.remedy !== "" && <span>要补上它：{row.remedy}</span>}
         {row.detail.length > 0 && <span>{row.detail.join(" · ")}</span>}
-        {row.switch !== null && <SwitchControl row={row} control={row.switch} />}
       </div>
+      {row.switch !== null && <SwitchControl row={row} control={row.switch} />}
     </li>
   );
 }

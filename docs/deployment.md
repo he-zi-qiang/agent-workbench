@@ -231,6 +231,7 @@ has one way in:
 
 ```bat
 scripts\stack.cmd            :: build, start, wait for healthy, open the console
+scripts\stack.cmd lite       :: the same, without LibreOffice in the image
 scripts\stack.cmd down       :: stop and remove
 scripts\stack.cmd logs       :: follow
 scripts\stack.cmd status     :: what is running
@@ -265,6 +266,27 @@ minutes of build and weight download followed by `up --wait` timing out in
 swap, which reads as "this project does not run". A 32 GB Windows at Docker
 Desktop's default (half of RAM) clears the upper floor untouched.
 `scripts\stack.cmd anyway` overrides it.
+
+**It builds the image that can lay a Word document out** (ADR-0109). The
+Dockerfile's `WITH_FIDELITY_PREVIEW` default stays `0` -- ADR-0045's account of
+why (700 MB, a download that has failed mid-build, an image that is not broken
+without it) is right for CI and for anybody typing `docker build` -- but the
+launcher passes `1`, because a console that shows a Word report as extracted
+text reads as a console that cannot preview Word, and one did. `lite` is the
+word for the lighter image.
+
+**It hands the API one host folder, and only the API** (ADR-0109). A coding
+session edits real files, and in a container the folder picker used to open
+at `/app` -- the image's read-only tree, where every directory is choosable
+and none is writable. `compose.yaml` binds `var/projects` (or
+`AGENT_WORKBENCH_PROJECTS_DIR`) at `/projects`, the profile's
+`code.projects_root` opens the picker there, and the launcher creates the
+folder before `compose up`. What the container does *not* get is a shell:
+`project_run` is the user's own machine's shell (ADR-0077), and a container
+cannot honestly offer it. The console says so -- four new rows on the System
+page (`code.sandbox`, `code.host_commands`, `code.web_search`,
+`artifact.layout_preview`) and a line on the Code start screen that strikes
+through what this deployment cannot reach.
 
 **Computer use is the one part that stays outside the containers** (ADR-0108).
 No container can reach the desktop, so `agent-computer-mcp` runs on the host

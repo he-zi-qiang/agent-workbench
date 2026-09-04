@@ -27,6 +27,76 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-04（第七十二批）：Windows 上的控制台能预览 Word、能写一个文件夹，并且说得出 Code 够不着什么
+
+一位 Windows 用户在第七十一批之后的原话：「没有浏览器和 shell，这些和 mac 版本里都不一样，
+word 预览、代码执行都做不到。」查下来是三种不同的缺，没有一处在控制台上说出来。这一批一条 ADR
+（[ADR-0109](./adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)）
+把容器这一侧能补的补上，把不该补的写成拒绝，外加一轮界面的审美修整。
+
+### 1. 版面预览：启动器传那个构建参数，Dockerfile 默认不变
+
+`GET /v1/artifacts/{id}/pdf` 在每一台 Windows 上都是 503，因为 `stack.cmd` 照 `WITH_FIDELITY_PREVIEW=0`
+构建。ADR-0045 §4.2 关默认的账（1.24 → 1.96 GB、一次几百 MB 的下载断过流）对**默认镜像**继续
+成立；`stack.cmd` 不是默认镜像——它的职责是装配起容器装配得出的全部。现在它传 `1`，
+`scripts\stack.cmd lite` 传 `0`。**证据**：`tests/deployment/test_compose.py::test_the_windows_launcher_builds_the_image_that_can_lay_a_document_out`
+（同时钉住 Dockerfile 的默认仍是 `0`）。顺带：三条老测试原本用字面量 `docker build -t agent-workbench:local .`
+匹配构建行，现在用一个允许 `--build-arg` 前缀的正则（`_IMAGE_BUILD`）——字面量匹配在第一个
+构建参数出现时就会把「没构建」当成事实。
+
+### 2. 一个能写的文件夹：只给 `api`，选择器从那里打开
+
+容器里 Code 的文件夹选择器打开在 `/app`——镜像自己的只读树，每个目录都选得中、没一个写得进。
+`compose.yaml` 的 `api`（**只有它**）把宿主 `var/projects`（或 `AGENT_WORKBENCH_PROJECTS_DIR`）
+绑在 `/projects`；`[code]` 新叶子 `projects_root`（默认 `None`，不抬 schema）；
+`FilesystemDirectoryBrowser(start=…)` 存在就从那里开始、不存在退回家目录；`stack.cmd` 在
+`compose up` 前 `mkdir`。**证据**：`test_the_api_alone_can_write_one_host_folder_and_the_picker_opens_there`
+（挂载只在 `api`、profile 指向它、启动器建它、变量名在 `AW_` 之外）、
+`tests/config/test_compose_profile.py` 一条、`tests/adapters/test_directory_browser.py` 三条。
+`config/ownership.yaml` 里新叶子归到 `code.sandbox_enabled` 那一组。
+
+### 3. 四行能力，和起始屏上的一行字
+
+`/v1/system/capabilities` 新增 `code.sandbox`、`code.host_commands`、`code.web_search`、
+`artifact.layout_preview`，每一行缺失时说是哪一种缺、补什么。`code.web_search` 只在
+`policy.search_tools_enabled` 为真时挂「联网搜索」那个开关——策略位关着时拨 provider 开关
+什么也不变；为此 `CodeConfig` 多带一片 `search_tools_enabled`（只有这一个读者）。版面那一行
+经模块属性 `layout_converter` 问 `find_soffice`，测试用 autouse fixture 钉成「没有」，否则
+这一行绿不绿取决于跑测试的机器装没装 LibreOffice。
+
+Code 起始屏在第一句指令之前画一行「这里能碰到：沙箱运行 · 宿主命令 · 联网搜索」
+（`web/src/features/code/CodeReach.tsx`），缺的划掉、原因在 title、行尾指向运行状态页；读的
+就是那份清单，读不到就不画。**证据**：`tests/api/test_system_capabilities.py` 新增 5 条、稳定
+集合与来路表各多四行；`CodePage.test.tsx` 新增 1 条。
+
+**拒绝的那一半**：`project_run` 不进容器（ADR-0109 §3.3），登记
+[F-37](./known-gaps.md#f-37-compose-栈里的编码会话没有宿主-shell也开不了这台机器上的浏览器--拒绝)。
+
+### 4. 界面的审美修整（对着真实控制台截图审的）
+
+- **眉题从强调色改回 muted 灰。** `minimal-theme.css` 把所有 `.aw-eyebrow` 涂成了动作色，
+  违反 tokens.css 自己写的「暖色只承担动作」；运行状态页一屏七处橙字没有一处能点。
+- **知识库四张统计卡只在数非零时带语义色。** 此前「0 索引失败」顶着红底、「0 正在索引」顶着黄底。
+- **运行状态页的开关移到行的第三列。** 五个带开关的行各高出一截、同一组三颗按钮出现五次；
+  现在标题、状态、开关在一条水平线上，≤720px 回到竖排。
+- **Code 转录不再被裁掉右边三分之二。** 「原始事件」那折的 `<pre>` 一行 JSON 几万像素宽，
+  它自己滚动，但固有宽度仍把整条 `<li>` 撑到 1622px（栏宽 576）——思考摘要与代码块在句中
+  断掉，看起来像不会换行。`.aw-code-raw { contain: inline-size }` 加 `.aw-code-turn { min-width: 0 }`。
+- Tasks 起始屏的「高级设置」居中（它是整栏唯一靠左的东西）；版面预览退回文字时那句话
+  多一句补法。
+
+### 5. 顺带查出、本批没修的
+
+`scripts/dev.sh up` 结束时打印 `console http://127.0.0.1:8000/ui/`，而 `demo-api` 没有带
+`--web-dir`，那个地址在原生路径上是 404（`web/dist` 也没有 `index.html`）。本机看控制台走的是
+Vite（`.claude/run-web.sh`，5173 反代 8000）。它是原生路径的口径不实，与 Windows 无关，留给下一批。
+
+**门禁**：`ruff format --check` / `ruff check` / `pyright` 全绿；`tests/deployment`、
+`tests/api/test_system_capabilities.py`、`tests/config`、`tests/architecture`、
+`tests/adapters/test_directory_browser.py` 全绿；前端 `eslint` / `tsc -b` / `vitest`（864）/
+`vite build` 全绿。**没有一条在 Windows 上跑过**，和第七十、七十一批一样。
+
+---
 ## 2026-09-03（第七十一批）：一台 32 GB 的 Windows 起得来，有沙箱，有 computer use
 
 第七十批把 Windows 那条路装配到「容器装配得出的全部」，然后在一台完全正常的 32 GB Windows
