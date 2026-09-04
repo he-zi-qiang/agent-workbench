@@ -1,7 +1,7 @@
-import { FileDown } from "lucide-react";
+import { ChevronRight, FileDown } from "lucide-react";
 import type { ArtifactRef } from "../api/types";
 import { JsonView } from "./JsonView";
-import type { StepBody, StepFact } from "./stepDetail";
+import { PROMPT_LABEL, type StepBody, type StepFact } from "./stepDetail";
 
 /**
  * 一步展开之后的正文：几行事实、几段正文、也许一个产物。
@@ -41,18 +41,36 @@ export function StepDetailBody({
           ))}
         </dl>
       )}
-      {bodies.map((body) => (
-        <figure className="aw-step-output" key={body.label}>
-          <figcaption>{body.label}</figcaption>
-          {body.value === undefined ? (
+      {bodies.map((body) => {
+        const content =
+          body.value === undefined ? (
             <pre className={`aw-step-pre is-${body.format}`}>{body.text}</pre>
           ) : (
             <div className="aw-step-json">
               <JsonView value={body.value} />
             </div>
-          )}
-        </figure>
-      ))}
+          );
+        // 提示词默认收着。它几乎总是整段系统提示词加上整个对话——实测一个
+        // `delegate_agent` 的组展开后，第一屏全是它，读者要滚过两千字才看到
+        // 参数。它仍然在这里，一次点击之后；标题上写着有多长，好让人决定点不点。
+        if (body.label === PROMPT_LABEL) {
+          return (
+            <details className="aw-step-prompt" key={body.label}>
+              <summary>
+                <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+                {body.label} · {String(body.text.length)} 字
+              </summary>
+              {content}
+            </details>
+          );
+        }
+        return (
+          <figure className="aw-step-output" key={body.label}>
+            <figcaption>{body.label}</figcaption>
+            {content}
+          </figure>
+        );
+      })}
       {artifact === null || onOpenArtifact === undefined ? null : (
         <div className="aw-step-artifact">
           <FileDown aria-hidden="true" size={15} />

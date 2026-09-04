@@ -267,6 +267,56 @@ describe("步骤组展开之后", () => {
   });
 });
 
+describe("一步上面那段推理", () => {
+  const thought =
+    "先看一下这个文件里现在有什么。\n然后决定是改一段还是整个重写：如果只是措辞问题，改一段就够了。";
+
+  it("折成第一句，展开是全文，组的正文里不再重复一遍", () => {
+    const events = [
+      event(PARENT, "ModelCompleted", 1, {
+        model_call_id: "mc_1",
+        thinking_preview: thought,
+        text: "",
+        tool_call_ids: ["call_1"],
+      }),
+      event(PARENT, "ToolProposed", 2, {
+        tool_call_id: "call_1",
+        tool_name: "project_read",
+        argument_preview: '{"path":"docs/hello.html"}',
+      }),
+      event(PARENT, "ToolCompleted", 3, { tool_call_id: "call_1" }),
+    ];
+    const { container } = draw([stage({ events })]);
+
+    const fold = container.querySelector("details.aw-activity-reasoning") as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    // 摘要是模型自己写的第一行，不是前 176 个字硬截。
+    expect(fold.querySelector("summary")?.textContent).toContain("先看一下这个文件里现在有什么。");
+    expect(fold.querySelector("summary")?.textContent).not.toContain("整个重写");
+    expect(fold.querySelector(".aw-activity-reasoning-body")?.textContent).toContain("整个重写");
+    // 此前同一段话在组展开之后的「思考摘要」正文里再出现一次。
+    const detail = container.querySelector(".aw-step-group-detail") as HTMLElement;
+    expect(within(detail).queryByText("思考摘要")).toBeNull();
+  });
+
+  it("短到只有一句的推理不套三角", () => {
+    const events = [
+      event(PARENT, "ModelCompleted", 1, {
+        model_call_id: "mc_1",
+        thinking_preview: "先读一下。",
+        text: "",
+        tool_call_ids: ["call_1"],
+      }),
+      event(PARENT, "ToolProposed", 2, { tool_call_id: "call_1", tool_name: "project_read" }),
+      event(PARENT, "ToolCompleted", 3, { tool_call_id: "call_1" }),
+    ];
+    const { container } = draw([stage({ events })]);
+
+    expect(container.querySelector("details.aw-activity-reasoning")).toBeNull();
+    expect(container.querySelector("p.aw-activity-reasoning")?.textContent).toContain("先读一下。");
+  });
+});
+
 describe("实时那一句", () => {
   it("跑着的时候有，停下来就没有", () => {
     const events = [event(PARENT, "ToolStarted", 1, { tool_name: "web_fetch" })];

@@ -194,6 +194,30 @@ describe("describeEvent：ModelCompleted 的思考摘要", () => {
   });
 });
 
+describe("StepDisclosure 里的提示词", () => {
+  it("默认收着，摘要上写着有多长；展开才是整段", () => {
+    const prompt = "[system]\n你是一个编码代理。\n\n[user]\n把这段改成两句话。";
+    const { container } = render(
+      <StepDisclosure
+        event={event("ModelStarted", {
+          model_call_id: "mc_1",
+          model_id: "deepseek-v4-flash",
+          prompt_preview: prompt,
+        })}
+        title="模型调用已开始"
+      />,
+    );
+
+    // 一个 delegate_agent 的组展开后第一屏全是系统提示词，参数要滚两千字才到。
+    const fold = container.querySelector("details.aw-step-prompt") as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    expect(fold.querySelector("summary")?.textContent).toContain(
+      `发给模型的提示词 · ${String(prompt.length)} 字`,
+    );
+    expect(fold.querySelector("pre")?.textContent).toBe(prompt);
+  });
+});
+
 describe("StepDisclosure", () => {
   it("预算落在事实区，不再只躺在原始事件 JSON 里", () => {
     const { container } = render(

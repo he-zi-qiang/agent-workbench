@@ -66,6 +66,12 @@ const FINISH_LABELS: Readonly<Record<string, string>> = {
   cancelled: "已取消",
 };
 
+/**
+ * 提示词那一段正文的标签，导出给 `StepDetailBody` 认：它是唯一默认收着的正文。
+ * 一个常量而不是两处各写一遍字符串，否则改了一处、另一处就再也折不起来。
+ */
+export const PROMPT_LABEL = "发给模型的提示词";
+
 const EFFECT_LABELS: Readonly<Record<string, string>> = {
   allow: "允许",
   deny: "拒绝",
@@ -325,7 +331,7 @@ export function describeEvent(event: EventEnvelope): StepDetail {
  */
 function promptBodies(payload: Record<string, unknown>): StepBody[] {
   const prompt = text(payload.prompt_preview);
-  return prompt === "—" ? [] : [bodyOf("发给模型的提示词", prompt)];
+  return prompt === "—" ? [] : [bodyOf(PROMPT_LABEL, prompt)];
 }
 
 /**
