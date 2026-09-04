@@ -399,6 +399,29 @@ describe("一行步骤说得出它对哪个文件动的手", () => {
     expect(result[0]?.subject).toBe("notes.md");
   });
 
+  it("模型作答那一行带上它说的第一句，剥掉 Markdown 记号", () => {
+    // 一个阶段里的三次「模型作答」折起来的时候此前长得一模一样。
+    const result = groupSteps([
+      event("ModelStarted", { model_call_id: "mc_1" }),
+      event("ModelCompleted", {
+        model_call_id: "mc_1",
+        text: "## 计划\n\n1. 先读 README。\n2. 再改 main.py。",
+      }),
+    ]);
+
+    expect(result[0]?.title).toBe("模型作答");
+    expect(result[0]?.subject).toBe("计划");
+  });
+
+  it("模型作答的第一句太长就按工具主语同一条规矩截", () => {
+    const result = groupSteps([
+      event("ModelCompleted", { model_call_id: "mc_1", text: "答".repeat(80) }),
+    ]);
+
+    expect(result[0]?.subject).toHaveLength(56);
+    expect(result[0]?.subject?.endsWith("…")).toBe(true);
+  });
+
   it("真的没有对象就还是没有，不编一个出来", () => {
     // workspace_list 的参数就是 {}。空着是对的——比填一个「工作区」强，
     // 那个词不增加任何信息，只是让一行看起来填满了。

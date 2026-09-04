@@ -317,6 +317,41 @@ describe("一步上面那段推理", () => {
   });
 });
 
+describe("模型作答那一组", () => {
+  const events = [
+    event(PARENT, "ModelStarted", 1, { model_call_id: "mc_1", model_id: "deepseek-v4-flash" }),
+    event(PARENT, "ModelCompleted", 2, {
+      model_call_id: "mc_1",
+      finish_reason: "stop",
+      text: "## 计划\n\n1. 先读 **README**。\n2. 再改 main.py。",
+      usage: { input_tokens: 10, output_tokens: 4 },
+    }),
+  ];
+
+  it("折起来的那一行带着它说的第一句", () => {
+    const { container } = draw([stage({ events })]);
+    const summary = container.querySelector("details.aw-step-group > summary");
+    expect(summary?.textContent).toContain("模型作答");
+    expect(summary?.querySelector(".aw-step-group-subject")?.textContent).toBe("计划");
+  });
+
+  it("展开先是它说的话，按 Markdown 画；模型名和 token 在后面", () => {
+    const { container } = draw([stage({ events })]);
+    const detail = container.querySelector(".aw-step-group-detail") as HTMLElement;
+
+    const said = detail.querySelector(".aw-step-said") as HTMLElement;
+    // Markdown 真的渲染了：`**README**` 是一个 <strong>，不是四个星号。
+    expect(said.querySelector("strong")?.textContent).toBe("README");
+    expect(said.textContent).not.toContain("**");
+    // 回答在事实前面。
+    const facts = detail.querySelector("dl.aw-step-facts") as HTMLElement;
+    expect(
+      said.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(facts).getByText("deepseek-v4-flash")).toBeInTheDocument();
+  });
+});
+
 describe("实时那一句", () => {
   it("跑着的时候有，停下来就没有", () => {
     const events = [event(PARENT, "ToolStarted", 1, { tool_name: "web_fetch" })];

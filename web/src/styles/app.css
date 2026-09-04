@@ -7748,6 +7748,33 @@ details.aw-activity-reasoning {
   overflow-wrap: anywhere;
 }
 
+/* 模型说的话，按 Markdown 画。字号和行距按步骤正文的档来（12.5 / 1.65），不按
+   报告的档：它是一步里的一段，不是这一页的正文。围栏代码和列表沿用 `.aw-markdown`
+   自己的规则，只把外层的字号收下来。 */
+.aw-step-said {
+  /* 和「工具返回」那块 `<pre>` 同一条规矩：封顶、自己滚。一次作答可以是两千
+     字的报告，不封顶的话一个步骤就把整条时间线推出一屏——而时间线要回答的是
+     「走到哪了」，不是「它说了什么的全文」；全文就在这里，在滚动条后面。 */
+  max-height: 420px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.aw-step-said .aw-markdown pre {
+  font-size: 11px;
+}
+
+.aw-step-said .aw-markdown h1,
+.aw-step-said .aw-markdown h2,
+.aw-step-said .aw-markdown h3 {
+  margin: 0.6em 0 0.3em;
+  font-size: 13px;
+}
+
 /* 提示词那一折。整段系统提示词加整个对话，展开一个组时第一屏全是它，所以
    默认收着；摘要上写着有多长，好让人决定点不点。 */
 .aw-step-prompt > summary {

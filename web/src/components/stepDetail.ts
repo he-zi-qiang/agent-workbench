@@ -72,6 +72,12 @@ const FINISH_LABELS: Readonly<Record<string, string>> = {
  */
 export const PROMPT_LABEL = "发给模型的提示词";
 
+/**
+ * 模型自己说的话那一段正文的标签。导出的理由和上面一样：`StepDetailBody` 认它，
+ * 把它按 Markdown 画、并且可以排到事实前面——一次「模型作答」读者要的是它说了什么。
+ */
+export const OUTPUT_LABEL = "模型输出";
+
 const EFFECT_LABELS: Readonly<Record<string, string>> = {
   allow: "允许",
   deny: "拒绝",
@@ -154,7 +160,7 @@ export function describeEvent(event: EventEnvelope): StepDetail {
       if (reasoning !== "—") detail.bodies.push(bodyOf("思考摘要", reasoning));
       // The model's own words. Absent when the turn only proposed tool calls,
       // and absent in Chat, where an unpublished candidate never reaches state.
-      if (output !== "—") detail.bodies.push(bodyOf("模型输出", output));
+      if (output !== "—") detail.bodies.push(bodyOf(OUTPUT_LABEL, output));
       detail.artifact = artifactRef(payload.output_ref);
       return detail;
     }

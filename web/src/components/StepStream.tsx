@@ -14,6 +14,7 @@ import { LiveActivity } from "./LiveActivity";
 import { StepDetailBody } from "./StepDetailBody";
 import { StepDisclosure } from "./StepDisclosure";
 import { describeGroup } from "./groupDetail";
+import { OUTPUT_LABEL } from "./stepDetail";
 import { splitThought } from "./thought";
 import { TurnUsage, type PartialTurnUsage } from "./TurnUsage";
 import { presentActivity } from "./activityPresentation";
@@ -334,10 +335,13 @@ export function StepStream({
           )}
           {command}
           <div className="aw-step-group-detail">
+            {/* 一次「模型作答」读者要的是它说了什么，所以那一段排在事实前面；
+                工具那一类相反，工具名和风险在前、返回在后。 */}
             <StepDetailBody
               artifact={detail.artifact}
               bodies={detail.bodies}
               facts={detail.facts}
+              {...(group.key.startsWith("model:") ? { lead: OUTPUT_LABEL } : {})}
               onOpenArtifact={onOpenArtifact}
             />
           </div>
