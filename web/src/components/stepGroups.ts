@@ -301,12 +301,31 @@ export function groupSteps(
       return {
         key,
         title: titleOf(group, titleFor),
-        subject: group.subject,
+        // 模型作答那一行的主语是它说的第一句。此前这一类的 subject 永远是
+        // null，于是一个阶段里的三次「模型作答」在折起来的时候长得一模一样，
+        // 读者要逐个点开才知道哪一次是计划、哪一次是结论——而工具那一类的行
+        // 早就带着文件名或查询在扫一眼就能认。
+        subject: group.subject ?? saidSubject(group.modelText),
         outcome: group.outcome,
         gate: group.gate === null ? null : phraseGate(group.gate),
         events: group.events,
       };
     });
+}
+
+/**
+ * 模型说的第一句，剥掉 Markdown 的标题记号和列表记号，按 `fit` 的规矩收进一行。
+ *
+ * 只剥行首那几个符号：`# 计划`、`- 先读文件`、`**结论**` 在一行摘要里只剩符号
+ * 本身在说话；正文里的记号不动，这里不是 Markdown 渲染器。
+ */
+function saidSubject(said: string | null): string | null {
+  if (said === null) return null;
+  const line = said
+    .split("\n")
+    .map((candidate) => candidate.replace(/^[\s#>*\-–•\d.、)]+/, "").replace(/\*\*/g, "").trim())
+    .find((candidate) => candidate !== "");
+  return line === undefined ? null : fit(line);
 }
 
 function titleOf(

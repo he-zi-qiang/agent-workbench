@@ -1376,6 +1376,17 @@ describe("CodePage", () => {
               message: "the provider rejected the request with HTTP 400",
               retryable: false,
             },
+            // A run refused before its first token: the terminal event
+            // carries a usage record of zeros, which is a real zero.
+            usage: {
+              tokens: {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+              },
+              cost_micro_usd: 0,
+            },
           },
         },
       ] as unknown as ReturnType<typeof useCodeStream>["steps"],
@@ -1388,6 +1399,62 @@ describe("CodePage", () => {
     // reader chasing a provider fault can take to the log.
     expect(note).toHaveTextContent("这一轮没有跑完");
     expect(note).toHaveTextContent("the provider rejected the request with HTTP 400");
+    // No `0 → 0` under it. The line above already says what happened; a zero
+    // footnote reads as a second, contradicting statement.
+    const turns = screen.getByRole("region", { name: "编码会话" });
+    expect(turns.querySelector(".aw-turn-usage")).toBeNull();
+  });
+
+  it("keeps the footnote on a failed turn that did spend", async () => {
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "找一下 greet" }],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-24T11:00:00Z",
+          event_type: "RunStarted",
+          sequence: 1,
+          payload: { kind: "RunStarted" },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-24T11:00:01Z",
+          event_type: "RunCompleted",
+          sequence: 2,
+          payload: {
+            kind: "RunCompleted",
+            stop_reason: "deadline",
+            usage: {
+              tokens: {
+                input_tokens: 1200,
+                output_tokens: 300,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+              },
+              cost_micro_usd: 0,
+            },
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    // A turn that hit its deadline after real model calls: the failure line
+    // and the bill both belong to it, and the bill is the part worth reading.
+    const note = await screen.findByRole("status", { name: "这一轮为什么停下" });
+    expect(note).toHaveTextContent("到时间停下了");
+    const turns = screen.getByRole("region", { name: "编码会话" });
+    expect(turns.querySelector(".aw-turn-usage")).not.toBeNull();
+    expect(turns.querySelector(".aw-turn-usage")?.textContent).toContain("1.2k");
   });
 
   it("shows a produced file as a card before the turn has finished", async () => {

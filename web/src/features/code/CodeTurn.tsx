@@ -237,8 +237,16 @@ export function CodeTurn({
       )}
 
       {/* 在答案下面、原始事件上面。和 Chat 那一处同一个位置、同一个零件：三个
-          模式对同一个数说同一句话，是这个脚注唯一要守住的东西。 */}
-      <TurnUsage usage={block.usage} />
+          模式对同一个数说同一句话，是这个脚注唯一要守住的东西。
+
+          一轮没跑完、而且什么也没花的时候不画。那时上面那一行已经把发生的事说
+          完了，底下再跟一行 `0 → 0`，读起来像第二句、而且像在和第一句唱反调
+          （「它跑了，只是没花钱」）。花了的照画：一轮撞了时限之前调过三次模型，
+          那三次的账正是读者要看的，「失败的运行也报出它花掉的 token」这条规矩
+          没有变。 */}
+      {block.stop !== null && spentNothing(block.usage) ? null : (
+        <TurnUsage usage={block.usage} />
+      )}
 
       {block.events.length === 0 ? null : (
         <details className="aw-code-raw">
@@ -483,6 +491,18 @@ function Progress({ progress }: { progress: ToolProgressView }) {
         )}
       </p>
     </div>
+  );
+}
+
+/** 一轮什么也没花：每一个计数都是零。`null` 不算——那是「问不出」，不是零。 */
+function spentNothing(usage: CodeTurnBlock["usage"]): boolean {
+  if (usage === null) return false;
+  return (
+    usage.input_tokens === 0 &&
+    usage.output_tokens === 0 &&
+    usage.cache_read_tokens === 0 &&
+    usage.cache_write_tokens === 0 &&
+    usage.cost_micro_usd === 0
   );
 }
 
