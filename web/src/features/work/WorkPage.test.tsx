@@ -1765,17 +1765,23 @@ describe("WorkPage task submission", () => {
     vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
     renderWorkPage("/work/task_run");
 
-    // Two clicks in, the same as any other step body: the stage folds the
-    // node, the step folds its detail.
+    // One click in: the stage folds the node, and the thought sits on the
+    // line above the step it caused -- not inside the step's detail, and
+    // not behind a second click. It used to be a 思考摘要 body two clicks
+    // down, with a hard-cut copy of itself on the line above.
     const stage = await screen.findByText("撰写草稿");
     await user.click(stage);
-    const step = screen.getAllByText("模型调用已完成")[0] as HTMLElement;
-    await user.click(step);
 
-    expect(await screen.findByText("思考摘要")).toBeInTheDocument();
-    expect(
-      screen.getByText("先确认日期，再读取气象数据。"),
-    ).toBeInTheDocument();
+    // The same sentence also sits in the raw event under 事件记录 (folded
+    // away, the log's copy); the one this test is about is the line.
+    const line = screen
+      .getAllByText("先确认日期，再读取气象数据。")
+      .find((node) => node.closest(".aw-activity-reasoning") !== null);
+    expect(line).toBeDefined();
+    expect(line).toBeVisible();
+    // One sentence has nothing to unfold, so it is a plain line, not a fold
+    // that opens onto nothing.
+    expect(line?.closest("details.aw-activity-reasoning")).toBeNull();
   });
 
   it("says a file is missing only when the task asked for one", async () => {

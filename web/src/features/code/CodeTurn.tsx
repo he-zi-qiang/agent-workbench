@@ -94,6 +94,7 @@ import { presentActivity } from "../../components/activityPresentation";
 import { runEventTitle } from "../../components/eventVocabulary";
 import { describeGroup } from "../../components/groupDetail";
 import type { StepGroup } from "../../components/stepGroups";
+import { splitThought } from "../../components/thought";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
 import { stopNote } from "./stopNote";
@@ -265,9 +266,6 @@ export function CodeTurn({
     </li>
   );
 }
-
-/** How long a folded thought's first line may be before it stops being a line. */
-const THOUGHT_HEAD_MAX = 120;
 
 /**
  * One step: what it thought, then what it did.
@@ -675,40 +673,5 @@ function codeLiveStatus({
     detail: "等待下一条执行记录",
     kind: "workflow",
     meta: null,
-  };
-}
-
-/**
- * Split a thought into the line that stands for it and the rest.
- *
- * A newline first, because a model writing reasoning uses its own line breaks
- * and the first line is the heading it wrote for itself. Then a Chinese
- * sentence mark. An ASCII full stop only when whitespace follows it -- bare
- * `.` would cut `notes.md` and `0.5` in half.
- */
-function splitThought(text: string): { head: string; body: string } {
-  const trimmed = text.trim();
-  const window = trimmed.slice(0, THOUGHT_HEAD_MAX);
-  let end = window.indexOf("\n");
-  if (end === -1) {
-    for (const mark of ["。", "！", "？"]) {
-      const at = window.indexOf(mark);
-      if (at !== -1 && (end === -1 || at < end)) end = at;
-    }
-    if (end !== -1) end += 1;
-  }
-  if (end === -1) {
-    const match = /\.\s/.exec(window);
-    if (match !== null) end = match.index + 1;
-  }
-  // No ellipsis when it is cut hard: the disclosure triangle already says
-  // there is more underneath.
-  if (end === -1) {
-    end =
-      trimmed.length <= THOUGHT_HEAD_MAX ? trimmed.length : THOUGHT_HEAD_MAX;
-  }
-  return {
-    head: trimmed.slice(0, end).trim(),
-    body: trimmed.slice(end).trim(),
   };
 }

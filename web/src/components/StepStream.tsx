@@ -14,6 +14,7 @@ import { LiveActivity } from "./LiveActivity";
 import { StepDetailBody } from "./StepDetailBody";
 import { StepDisclosure } from "./StepDisclosure";
 import { describeGroup } from "./groupDetail";
+import { splitThought } from "./thought";
 import { TurnUsage, type PartialTurnUsage } from "./TurnUsage";
 import { presentActivity } from "./activityPresentation";
 import { foldForeignRuns, hasForeignRun, splitByRun } from "./runSections";
@@ -135,12 +136,40 @@ function StreamMarker({ state }: { state: StreamStageState }) {
   );
 }
 
-/** One sentence on the primary timeline; the complete preview stays below. */
-function reasoningSummary(text: string): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  const sentence = /^.{1,176}?[。！？.!?](?:\s|$)/u.exec(collapsed)?.[0];
-  if (sentence !== undefined) return sentence.trim();
-  return collapsed.length <= 176 ? collapsed : `${collapsed.slice(0, 175)}…`;
+/**
+ * 一步上面那段推理，折成第一句；展开是全文。
+ *
+ * 此前是一行硬截的「思路摘要 · 前 176 个字…」，全文在组展开之后的「思考摘要」正文
+ * 里再出现一次——同一段话长短两版并存，而且短的那版丢掉的正是读者要的那一半。
+ * 现在和 Code 的 `Thought` 同一个形状（`splitThought`）：第一句是摘要，其余在一次
+ * 点击之后；短到没有正文的那一段是不可点的 `<p>`，一个点开之后是空的三角比没有
+ * 三角更糟。组的正文里不再放思考，见 `groupStep`。
+ */
+function Reasoning({ text }: { text: string }) {
+  const { head, body } = splitThought(text);
+  const label = (
+    <>
+      <Sparkles aria-hidden="true" size={13} />
+      <span className="aw-sr-only">思考摘要</span>
+    </>
+  );
+  if (body === "") {
+    return (
+      <p className="aw-activity-reasoning">
+        {label}
+        <span>{head}</span>
+      </p>
+    );
+  }
+  return (
+    <details className="aw-activity-reasoning">
+      <summary>
+        {label}
+        <span>{head}</span>
+      </summary>
+      <p className="aw-activity-reasoning-body">{body}</p>
+    </details>
+  );
 }
 
 /**
@@ -230,10 +259,7 @@ export function StepStream({
     const presentation = presentActivity(group);
     const reasoning =
       presentation.reasoning === null ? null : (
-        <p className="aw-activity-reasoning">
-          <Sparkles aria-hidden="true" size={13} />
-          <span>{`思路摘要 · ${reasoningSummary(presentation.reasoning)}`}</span>
-        </p>
+        <Reasoning text={presentation.reasoning} />
       );
     const command =
       presentation.command === null ? null : (
@@ -271,9 +297,14 @@ export function StepStream({
     // 里——此前它们是展开之后**唯一**的东西，读者要从「已提出 / 权限已完成 /
     // 已开始 / 已完成」四行里自己拼出那三句，而参数还要再点一层。
     // 命令类工具的参数和输出已经由 `CommandTrace` 画成终端的样子，这里不再要正文。
-    const detail = describeGroup(group, {
+    const merged = describeGroup(group, {
       bodies: presentation.command === null,
     });
+    // 思考不进正文：它已经是这一组上面那一行（`Reasoning`），展开就是全文。
+    const detail = {
+      ...merged,
+      bodies: merged.bodies.filter((body) => body.label !== "思考摘要"),
+    };
     return (
       <li key={group.key}>
         {reasoning}

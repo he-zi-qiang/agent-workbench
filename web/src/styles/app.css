@@ -4649,20 +4649,12 @@ pre {
 }
 
 /* 两节之间的抬头。左内边距和下面每一行的标题对齐，不和栏边对齐——它是
-   这一列的名字，不是这一栏的名字。 */
-/* 「全部会话」那一档里，一行属于哪个文件夹。
-   和时间同一行、同一号字，因为它们是同一类东西——关于这一行的附注，不是它的
-   名字。`min-width: 0` 加省略号：文件夹名可以很长，而它挤掉时间是错的方向，
-   时间是这一列本来的排序依据。 */
-.aw-code-recent-project {
-  overflow: hidden;
-  min-width: 0;
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+   这一列的名字，不是这一栏的名字。
+   这里曾经还有一条 `.aw-code-recent-project`：「全部会话」那一档里每一行上的
+   文件夹名。它的元素早就不渲染了——文件夹名搬去了组的抬头（`sessionGroups.ts`），
+   一份 40 条的列表里同一个名字此前会在每一行上各印一遍——规则却留了下来，
+   连同 minimal-theme 里五条以它为条件的 `:has()`。死的类名连着死的注释，比没有
+   注释更坏：它会让下一个读者以为那一档里每行还有第三样东西要摆。 */
 .aw-code-sessions-eyebrow {
   display: block;
   padding: 10px 12px 4px;
@@ -7713,14 +7705,72 @@ button.aw-folder-picker-row {
   min-width: 0;
 }
 
-.aw-activity-reasoning small {
+/* 折起来的那一段：summary 就是原来那一行，多一个可点的指针；正文从属于它，
+   缩到图标下面。`<p>` 和 `<details>` 共用上面那条规则的颜色、字号和边线，
+   所以两种形状在收起时一个像素都不差——是不是 <details> 只由「有没有正文」决定。
+
+   但 <details> **不能**继承那条规则里的两列网格：网格的两列是给「图标 + 一段
+   话」的，而 <details> 的两个孩子是 summary 和正文——summary 落进 `auto` 那一列
+   拿走整行的 max-content 宽度，正文落进 `minmax(0, 1fr)` 被挤成 0 宽，
+   `overflow-wrap: anywhere` 再把它一个字一行地摞下去。实测就是这样发现的：
+   整条时间线塌成一根竖条。两列网格留给 summary 自己。 */
+details.aw-activity-reasoning {
   display: block;
-  margin-bottom: 1px;
+}
+
+.aw-activity-reasoning > summary {
+  display: grid;
+  align-items: start;
+  gap: 7px;
+  grid-template-columns: auto minmax(0, 1fr);
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-activity-reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-activity-reasoning > summary > svg {
+  margin-top: 2px;
+  color: var(--aw-accent);
+}
+
+.aw-activity-reasoning > summary:hover > span {
   color: var(--aw-text-soft);
-  font-size: 9.5px;
-  font-style: normal;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+}
+
+.aw-activity-reasoning-body {
+  margin: 6px 0 0 20px;
+  padding-left: 8px;
+  border-left: 1px solid var(--aw-border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 提示词那一折。整段系统提示词加整个对话，展开一个组时第一屏全是它，所以
+   默认收着；摘要上写着有多长，好让人决定点不点。 */
+.aw-step-prompt > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-step-prompt > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-step-prompt[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-step-prompt > .aw-step-pre,
+.aw-step-prompt > .aw-step-json {
+  margin-top: 4px;
 }
 
 /* Task keeps the process above potentially multi-page output. This makes the
