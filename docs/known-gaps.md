@@ -1850,8 +1850,12 @@ runner 少了哪一样，跳过行会指名道姓，不必有人去二分。
 **仍然不跑**：离线 RAG 评测（需要 embedding extra，按分层约定 CI 不装——`quality` job
 还专门断言它**没有**被装上；**那条断言查的是 runner 自己的 venv，不是镜像**，所以
 ADR-0105 让 `Dockerfile` 装上这个 extra 与它并不冲突，两边不必互相「修」）、Compose 启动，
-以及 **[`adapters/screen/darwin.py`](../src/agent_workbench/adapters/screen/darwin.py)
-整个文件（735 行）**。
+**[`adapters/screen/darwin.py`](../src/agent_workbench/adapters/screen/darwin.py)
+整个文件（735 行）**，以及自 2026-09-03 起
+**[`adapters/screen/win32.py`](../src/agent_workbench/adapters/screen/win32.py) 碰平台的那一半**
+（`_Native`、`Win32Screen` 的每个方法；纯函数半边由 `tests/apps/test_computer_win32.py` 在
+POSIX 上测。它比 darwin.py 更差一档：那个至少在一台 mac 上跑过，这个在任何 Windows 上都
+没跑过，见 F-36）。
 
 > **最后那一项 2026-08-31 补进这份清单**，此前漏了。它是**双层跳过**：
 > `tests/apps/test_computer_darwin.py` 顶上是
@@ -2115,6 +2119,8 @@ production build 四步，**没有覆盖率那一步**。
 | F-32 | 第一轮没法收窄工具（原 F-31，2026-08-31 改号） | 已知代价 |
 | F-33 | Task 侧完全没有 SSE 端点 | 未实现 |
 | F-34 | computer 页把门禁规则手抄了一遍，无交叉校验 | 已知代价 |
+| F-35 | Windows 抓屏逐窗渲染再合成：被遮挡的已批准窗口在图里完整可见 | 已知代价 |
+| F-36 | Windows 上 `activate_application` 受前台锁限制，且碰屏幕的那一半从未在 Windows 上跑过 | 未实现（证据） |
 
 > 编号一经退休不再复用。**F-18（合成器过滤是 allowlist 形状，抓屏不是遮盖）
 > 已于 2026-08-28 关闭**，按维护规则从正文删除，落地记录在
@@ -2666,6 +2672,42 @@ epoch 之前，模型提出的上账工具都会因为拿不出栅栏而在更�
 模型提出。要把它摆到模型面前，还额外需要一条今天不存在的视觉通路。
 
 **做完的判据**：不适用。要改，先改 ADR-075。
+
+### F-35 Windows 抓屏逐窗渲染再合成：被遮挡的已批准窗口完整可见 —— 已知代价
+
+**证据**：[win32.py](../src/agent_workbench/adapters/screen/win32.py) `_render` 与
+`compose_frame`；[ADR-0108](./adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md) §3.1。
+
+**为什么**：Win32 没有 `SCContentFilter`。有的是 `PrintWindow(PW_RENDERFULLCONTENT)`——让合成器
+把**一扇窗**渲染进调用方自己的位图，被遮挡也照样。适配器只渲染 allowlist 里的窗口、按 z 序贴到
+空画布上，未批准窗口的像素从没进过这个进程的任何缓冲区——`exclude_native` 那个词许下的承诺守住了。
+代价是方向相反的：一扇被未批准窗口挡住的已批准窗口，在 macOS 上会被盖住，在这里完整出现。
+
+**为什么接受**：泄露的方向是「已批准的露得更多」，永远不是「未批准的露出一点」。要做到与 macOS
+一致得用 `Windows.Graphics.Capture`（WinRT 投影，新依赖），且独占全屏的 DirectX 表面两者都拿不到。
+
+**做完的判据**：这一条不会有「做完」的一天，除非换抓屏机制；它记的是一个读图的人要知道的差别。
+
+### F-36 Windows 上激活受前台锁限制，且碰屏幕的那一半从未在 Windows 上跑过 —— 未实现（证据）
+
+**证据**：[win32.py](../src/agent_workbench/adapters/screen/win32.py) `activate` 与
+`_ACTIVATION_TIMEOUT_SECONDS` 上「未量」的注记；[ADR-0108](./adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md) §3.3、§4。
+
+**症状**：Windows 只允许前台进程、由它启动的进程、或收到过最后一次输入的进程改变前台窗口。
+本仓库的 server 是一个普通进程，三者都不是。适配器做的是 `SetForegroundWindow` → 轮询两秒 →
+`AttachThreadInput` 再试 → 如实报「没到前面，在前面的是谁」。**它不用「敲一下 Alt」的把戏**，
+因为那是一次落进未批准窗口的按键（ADR-091 §2.3：激活不合成任何输入）。
+
+**更要紧的一句**：本 ADR 写于一台 Mac。`win32.py` 里碰 `user32` / `gdi32` / `dwmapi` / `shcore`
+的每一行——枚举显示器、逐窗渲染、`SendInput`、`VkKeyScanW`、frame host 透视、版本信息里的
+FileDescription——**一次也没在 Windows 上执行过**。CI 也不跑它（E-03）。`test_computer_win32.py`
+测的是纯函数半边：chord 解析、画布合成、JPEG 尺寸。它按仓库规矩是 **Planned 落地成了代码**，
+不是 Tested。
+
+**做完的判据**：一台 Windows 上 `scripts\computer.cmd` 起来、`computer-check` 式的探针列出八件工具、
+一次真实的 `request_access → screenshot → left_click` 走通，并把那台机器的数字（激活成功率、
+一次抓屏的毫秒数）写进 ADR-0108，替换掉「未量」。在此之前，Windows 快速开始 §7 那三条实情
+就是全部口径。
 
 ## 优先级建议
 

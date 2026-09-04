@@ -305,6 +305,10 @@ class EmbeddingConfig:
     device: str
     sparse_enabled: bool = True
     sparse_vocabulary_size: int = 250_002
+    #: Empty means "load the weights in this process"; a URL means "ask the
+    #: encoder service at that address" (ADR-0106). Defaulted so every
+    #: hand-built projection in the tests keeps meaning what it meant.
+    service_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +333,8 @@ class RerankerConfig:
     batch_size: int
     device: str
     timeout_seconds: float
+    #: Same meaning as `EmbeddingConfig.service_url` (ADR-0106).
+    service_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,6 +669,21 @@ class BlockingCallRunnerConfig:
 
     slots: int = 2
     queue_timeout_seconds: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class EncoderServiceConfig:
+    """What `agent-encoder` loads, and the pool it runs the loads on (ADR-0106).
+
+    The three sections every retrieving process already projects, without the
+    rest: no database, no Qdrant, no model provider. This process touches none
+    of them -- it turns text into vectors and scores and nothing else, which is
+    what lets it be the one place the weights live.
+    """
+
+    embedding: EmbeddingConfig
+    reranker: RerankerConfig
+    blocking_calls: BlockingCallRunnerConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -1189,6 +1210,35 @@ def _project_embedding(settings: Settings) -> EmbeddingConfig:
         device=settings.rag.embedding.device,
         sparse_enabled=settings.rag.embedding.sparse_enabled,
         sparse_vocabulary_size=settings.rag.embedding.sparse_vocabulary_size,
+        service_url=settings.rag.embedding.service_url,
+    )
+
+
+def project_encoder_service(settings: Settings) -> EncoderServiceConfig:
+    """The encoder's slice of a deployment's configuration (ADR-0106).
+
+    Read from the same `[rag.embedding]` and `[rag.reranker]` sections the
+    other three processes read, so the model the encoder loads and the model
+    they expect are one declaration -- the remote adapters check the identity
+    at connect time precisely because two files could still disagree.
+    """
+
+    return EncoderServiceConfig(
+        embedding=_project_embedding(settings),
+        reranker=RerankerConfig(
+            model_id=settings.rag.reranker.model_id,
+            revision=settings.rag.reranker.revision,
+            batch_size=settings.rag.reranker.batch_size,
+            device=settings.rag.reranker.device,
+            timeout_seconds=float(settings.rag.reranker.timeout_seconds),
+            service_url=settings.rag.reranker.service_url,
+        ),
+        blocking_calls=BlockingCallRunnerConfig(
+            slots=settings.coordination.blocking_call_slots,
+            queue_timeout_seconds=(
+                settings.coordination.blocking_call_queue_timeout_seconds
+            ),
+        ),
     )
 
 
@@ -1355,6 +1405,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             batch_size=settings.rag.reranker.batch_size,
             device=settings.rag.reranker.device,
             timeout_seconds=float(settings.rag.reranker.timeout_seconds),
+            service_url=settings.rag.reranker.service_url,
         ),
         retrieval=RetrievalConfig(
             chunk_size_tokens=settings.rag.ingestion.chunk_size_tokens,
@@ -1447,6 +1498,7 @@ __all__ = [
     "CodeConfig",
     "DatabaseConfig",
     "EmbeddingConfig",
+    "EncoderServiceConfig",
     "EventStreamConfig",
     "IngestionConfig",
     "IngestionWorkerRuntimeConfig",
@@ -1464,6 +1516,7 @@ __all__ = [
     "TriageConfig",
     "configured_mcp_tool_names",
     "project_api",
+    "project_encoder_service",
     "project_ingestion_worker",
     "project_task",
     "project_task_worker",

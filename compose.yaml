@@ -10,9 +10,12 @@ x-app-environment: &app-environment
   # servers, no triage, no Code and no delegation. Nothing had chosen that;
   # it was what happens when nobody chooses. The profile is what chose.
   AW_CONFIG_FILE: /app/config/config.compose-local.toml
-  # Every process that retrieves loads BGE-M3 dense, BGE-M3 sparse and the
-  # reranker from this directory. It is a named volume rather than a layer in
-  # the image (see `weights-init`) and it must be outside the read-only root.
+  # Where the weights are, for the one process that loads them: the encoder
+  # (ADR-0106). It is a named volume rather than a layer in the image (see
+  # `weights-init`) and it must be outside the read-only root. The variable
+  # is in the shared block because it is harmless where the volume is not
+  # mounted -- nothing in the other four ever opens the directory -- and one
+  # block is easier to keep true than two.
   HF_HOME: /var/lib/agent-workbench/hf-cache
 
 x-app-hardening: &app-hardening
@@ -114,8 +117,10 @@ services:
   # lexical head *before* it builds the model and raises when it is missing,
   # because FlagEmbedding's own behaviour is to substitute a random projection
   # and carry on -- vectors of the right width that mean nothing. So a cold
-  # cache does not make the first start slow, it makes four processes exit at
-  # once. `docker/fetch_weights.py` carries the rest of the reasoning.
+  # cache does not make the first start slow, it makes the encoder exit -- and
+  # since ADR-0106 that is the one process here that would (before it, all
+  # four retrieving processes exited at once). `docker/fetch_weights.py`
+  # carries the rest of the reasoning.
   #
   # Also not baked into the image: several gigabytes of weights in a layer make
   # every rebuild pull them again, and the build machine would have to reach
@@ -137,6 +142,99 @@ services:
     volumes:
       - hf_cache:/var/lib/agent-workbench/hf-cache
     restart: "no"
+    <<: *app-hardening
+
+  # The one process that holds the retrieval models (ADR-0106).
+  #
+  # Before it, the API, both Task Workers and the ingestion worker each loaded
+  # BGE-M3 dense, BGE-M3 sparse and the reranker -- four copies of about
+  # 6.7 GB of weights, on a machine that had to be handed 29 GB before the
+  # Windows launcher would build. Now this container loads them once and the
+  # other four ask it over HTTP; they carry no `hf_cache`, no `weights-init`
+  # dependency, and import no torch. The memory floor the launcher checks is
+  # this process's alone.
+  #
+  # `--host 0.0.0.0` on purpose, and the only service here that binds its
+  # interface directly rather than through the loopback proxy: this is not an
+  # MCP server and not a control plane -- it holds no identity, takes no
+  # tool proposal, and answers only the other processes of this stack, which
+  # is exactly what Qdrant does on the same network. No port is published.
+  #
+  # Health is 200 only once the models are loaded *and* warm, so the four
+  # `depends_on` it below wait out the load and the first forward pass rather
+  # than spending it on somebody's first request.
+  encoder:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["agent-encoder", "--host", "0.0.0.0", "--port", "8769"]
+    environment: *app-environment
+    depends_on:
+      weights-init:
+        condition: service_completed_successfully
+    volumes:
+      - hf_cache:/var/lib/agent-workbench/hf-cache
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8769/health', timeout=5)\"",
+        ]
+      interval: 10s
+      timeout: 10s
+      # Three models from a warm cache and a warm-up pass: minutes on a
+      # laptop, not seconds. `up --wait` allows 600 s for the whole stack.
+      retries: 60
+      start_period: 120s
+    <<: *app-hardening
+
+  # The sandbox broker: the one container that holds the Docker socket
+  # (ADR-0107).
+  #
+  # `sandbox_run` starts a `--network=none` container per call, which needs a
+  # daemon to ask. ADR-0105 refused to put the socket where it would have had
+  # to go then -- into the API's and the Workers' containers -- because a
+  # socket there is root on the VM for anything that gets into a process that
+  # also holds a provider key, a database and every workspace. This container
+  # holds none of those: it runs `agent-sandbox-mcp` and nothing else, and the
+  # others reach it only through a tunnel whose two ends are both loopback
+  # (`docker/loopback_proxy.py`). A compromise of *this* process buys the
+  # daemon, which is what the native path already hands the sandbox server.
+  #
+  # Root inside, because the socket is root-owned and mode 660; `cap_drop:
+  # ALL` still applies, and uid 0 without capabilities opens the socket by
+  # owning it and can do nothing else uid 0 usually can. The hardening anchor
+  # is kept whole rather than relaxed.
+  #
+  # Health is "the HTTP server answers", not "the runtime answers": the
+  # broker's own `/health` is 503 until `docker version` succeeds, and it
+  # pulls its interpreter image on first start. Treating that 503 as unhealthy
+  # would make `up --wait` fail the whole stack over a slow pull -- the shape
+  # ADR-0105 §3.3 refused. The launchers of the API and the Workers wait for
+  # the *runtime* instead (`docker/decide_sandbox.py`) and switch the sandbox
+  # off for that start when it never comes, saying so in their logs.
+  sandbox:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["sh", "/app/docker/run-sandbox-local.sh"]
+    user: "0:0"
+    environment:
+      # A name, not a value from the shared block: this process reads no
+      # configuration file and touches no database.
+      SANDBOX_PDF_IMAGE: agent-workbench-sandbox-pdf:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.error, urllib.request\ntry: urllib.request.urlopen('http://127.0.0.1:8766/health', timeout=5)\nexcept urllib.error.HTTPError: pass\"",
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 15s
     <<: *app-hardening
 
   migrate:
@@ -203,6 +301,12 @@ services:
       # reads as False. `:-false` would look equivalent and would instead pin
       # the switch off on every machine that never sets it.
       AW_RESEARCH__ENABLED: "${AW_RESEARCH__ENABLED-}"
+      # The sandbox, on the same terms as web search above: the operator's
+      # own value or nothing, and `run-api-local.sh` decides nothing by
+      # probing the broker's runtime (ADR-0107). `true` here would make a
+      # stack whose broker could not pull its image refuse to start.
+      AW_CODE__SANDBOX_ENABLED: "${AW_CODE__SANDBOX_ENABLED-}"
+      AW_SANDBOX__ENABLED: "${AW_SANDBOX__ENABLED-}"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -210,8 +314,22 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
-      weights-init:
-        condition: service_completed_successfully
+      # Loaded and warm before this process assembles retrieval over it
+      # (ADR-0106): the remote adapters refuse to build against an encoder
+      # that does not answer, and an API that started first would come up
+      # honestly reporting no retrieval.
+      encoder:
+        condition: service_healthy
+      # Answering before this process decides whether `sandbox_run` is on.
+      sandbox:
+        condition: service_healthy
+    # The computer-use server runs on the host, because no container can
+    # reach the desktop (ADR-0108). This is Docker Desktop's name for the
+    # host on Windows and macOS; the `host-gateway` mapping makes the same
+    # name resolve on a Linux engine. The API reads that server's one
+    # read-only route through a loopback tunnel to this name.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       # The only host-published port is loopback. The app itself remains
       # container-loopback-only; the local proxy exists solely for Docker NAT.
@@ -219,7 +337,6 @@ services:
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
-      - hf_cache:/var/lib/agent-workbench/hf-cache
     healthcheck:
       test:
         [
@@ -251,6 +368,7 @@ services:
       # on" has to mean the same thing in both containers. Mounting it now
       # makes that a one-flag change rather than a topology change.
       AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
+      AW_SANDBOX__ENABLED: "${AW_SANDBOX__ENABLED-}"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -258,12 +376,13 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
-      weights-init:
-        condition: service_completed_successfully
+      encoder:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
-      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
   # A second Worker, and the only reason it exists is to be a second one.
@@ -289,6 +408,7 @@ services:
       <<: *app-environment
       # Same as task-worker, and for the same reason.
       AW_KEY_FILE: /var/lib/agent-workbench/provider-key/key
+      AW_SANDBOX__ENABLED: "${AW_SANDBOX__ENABLED-}"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -296,12 +416,13 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
-      weights-init:
-        condition: service_completed_successfully
+      encoder:
+        condition: service_healthy
+      sandbox:
+        condition: service_healthy
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
       - provider_key_data:/var/lib/agent-workbench/provider-key
-      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
   ingestion-worker:
@@ -323,11 +444,10 @@ services:
         condition: service_completed_successfully
       qdrant-ready:
         condition: service_completed_successfully
-      weights-init:
-        condition: service_completed_successfully
+      encoder:
+        condition: service_healthy
     volumes:
       - artifact_data:/var/lib/agent-workbench/artifacts
-      - hf_cache:/var/lib/agent-workbench/hf-cache
     <<: *app-hardening
 
 volumes:

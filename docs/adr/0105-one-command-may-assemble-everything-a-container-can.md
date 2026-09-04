@@ -1,6 +1,13 @@
 # ADR-0105：一条命令可以装配起容器装配得出的全部
 
-- 状态：Accepted
+- 状态：Accepted。**§3.4 的前提与 §4.1 的两条「装配不出」已于同日被推翻**：
+  [ADR-0106](./0106-one-process-holds-the-weights-and-the-others-ask-it.md) 让权重只住在
+  一个进程里（四个进程各一份 → `encoder` 一份，内存线 29 / 51 → 12 / 16）；
+  [ADR-0107](./0107-the-sandbox-broker-alone-holds-the-socket.md) 是 §4.1 要求的「那笔交易
+  自己的 ADR」，socket 只挂进一个只跑沙箱 server 的容器；
+  [ADR-0108](./0108-a-screen-adapter-for-windows-composes-its-own-frame.md) 给 Windows 一个
+  屏幕适配器，server 在容器外的主机上跑。本 ADR 其余部分（profile、sidecar、`--demo` 由 key
+  决定、`weights-init`、先量内存）原样成立。
 - 日期：2026-09-03
 - 关联：ADR-044（不远程、不生产身份）、ADR-057（会话不得提供它兑现不了的工具）、
   ADR-101（控制台可以交出一把它读不回来的 key）、ADR-102（一台部署要说得出自己没装配起什么）、

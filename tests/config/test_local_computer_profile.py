@@ -19,7 +19,9 @@ regression when somebody undoes it.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -289,3 +291,62 @@ def test_the_usage_banner_documents_both_computer_commands() -> None:
     for command in ("computer-server", "computer-check"):
         assert command in documented
         assert command in banner.stdout
+
+
+# --- Windows (ADR-0108) ----------------------------------------------------------
+
+WINDOWS_COMPUTER_LAUNCHER = ROOT / "scripts" / "computer.cmd"
+
+
+def test_windows_gets_its_own_launcher_for_the_screen_server() -> None:
+    """The one part of the Windows route that cannot be a container.
+
+    A screen adapter needs the desktop, and the desktop is on the host; so the
+    server runs beside the containers, started by this file, and asks the
+    machine for uv and nothing else. Held to the two rules every `.cmd` here
+    is held to (`tests/deployment/test_compose.py` says why): ASCII, CRLF,
+    and no `rem` line that cmd.exe would execute.
+    """
+
+    assert WINDOWS_COMPUTER_LAUNCHER.is_file()
+    raw = WINDOWS_COMPUTER_LAUNCHER.read_bytes()
+    raw.decode("ascii")
+    assert b"\r\n" in raw
+    assert re.search(rb"[^\r]\n", raw) is None, "every line ending must be CRLF"
+    lines = raw.decode("ascii").splitlines()
+    talkative = [
+        line
+        for line in lines
+        if line.lstrip().lower().startswith("rem") and any(ch in line for ch in "&|<>")
+    ]
+    assert not talkative, f"cmd.exe executes these rem lines: {talkative}"
+
+    executable = [
+        line
+        for line in lines
+        if line.strip() and not line.lstrip().lower().startswith("rem")
+    ]
+    joined = "\n".join(executable)
+    assert "uv sync --frozen --extra computer-use" in joined
+    assert "agent-computer-mcp" in joined
+    # The port the API's tunnel dials (`docker/run-api-local.sh`).
+    assert "8768" in " ".join(
+        line for line in executable if line.lower().startswith("echo")
+    )
+
+
+def test_the_windows_half_of_the_extra_is_pillow_and_only_pillow() -> None:
+    """No pywin32, no pyautogui: `win32.py` reaches the platform through
+    ctypes. What it cannot do without is an image library, and the one it
+    uses already arrives transitively -- declared so "we use this" is a claim
+    the lock file backs."""
+
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        extra = tomllib.load(handle)["project"]["optional-dependencies"]["computer-use"]
+    windows = [spec for spec in extra if "win32" in spec]
+    darwin = [spec for spec in extra if "darwin" in spec]
+    assert len(windows) == 1 and windows[0].startswith("pillow")
+    assert len(darwin) == 3
+    assert all("sys_platform" in spec for spec in extra), (
+        "every entry is platform-marked"
+    )

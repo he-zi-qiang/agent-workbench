@@ -500,7 +500,8 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
                 else (
                     "启动 Word/web MCP 服务，并用声明了它们的配置档启动 API 与 Worker"
                     "（scripts/dev.sh demo-api / demo-worker）。"
-                    "Compose 栈里没有这两个服务。"
+                    "Compose 栈自 ADR-0105 起在每个 Worker 容器里以 sidecar "
+                    "起这两个服务。"
                 )
             ),
             provision="install",
@@ -518,7 +519,9 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
                 if SANDBOX_RUN_TOOL in allowed
                 else (
                     "启动 sandbox MCP 服务（它需要能创建容器），"
-                    "并在配置里打开 [sandbox]。"
+                    "并在配置里打开 [sandbox]。Compose 栈里它是 `sandbox` 容器"
+                    "（ADR-0107）：API 与 Worker 启动时探它的运行时，探到才打开；"
+                    "看 docker compose logs sandbox，然后 restart。"
                 )
             ),
             provision="install",

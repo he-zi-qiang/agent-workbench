@@ -108,18 +108,17 @@ docker build -t agent-workbench:local . && docker compose --profile demo up -d -
 |---|---|---|
 | 机器要装什么 | 只要 Docker Desktop | Python 3.12 + `uv`（`up` 自己调 uv 装） |
 | 知识库检索 | 有，真实 BGE-M3 + 重排，**默认就装** | 有，但要 `up --with-retrieval` |
-| MCP 工具 | Word 与 web 有（Worker 容器内的 loopback sidecar）；**沙箱没有** | 三台都起，且在 Worker 之前 |
+| MCP 工具 | Word 与 web 有（Worker 容器内的 loopback sidecar） | 三台都起，且在 Worker 之前 |
 | Task Worker | 有 key 就是真实图；没有 key 退回 `--demo` 合成 Worker | 真实图 |
-| 沙箱执行 | **没有**——要容器内的 Docker socket，会抵消 `cap_drop: ALL` | 有 |
-| Computer use | **没有**，且补不上——依赖是 macOS 专属 | macOS 上有 |
+| 沙箱执行 | 有——`sandbox` 容器独占 Docker socket，API 与 Worker 经回环隧道够到它（[ADR-0107](adr/0107-the-sandbox-broker-alone-holds-the-socket.md)） | 有 |
+| Computer use | 有，但**在容器外**：Windows 主机上 `scripts\computer.cmd`（[ADR-0108](adr/0108-a-screen-adapter-for-windows-composes-its-own-frame.md)） | macOS 上有 |
 | 改一行代码要多久 | 重新 `docker build`，分钟级 | 重启一个进程，秒级 |
-| 内存 | **四个进程各一份模型**，见下的 12 GB 与它的四倍 | **一个检索进程约 12 GB**，见下 |
+| 内存 | **模型只在 `encoder` 里加载一次**（[ADR-0106](adr/0106-one-process-holds-the-weights-and-the-others-ask-it.md)），见下的 12 GB | **每个检索进程约 12 GB**，`demo-api` 与 `ingest` 各一份，见下 |
 | Windows | 唯一的路（`dev.sh` 是 bash） | 走不了 |
 
-所以选哪条现在是口味加两件事：**要沙箱或 Computer use，只有原生这条路有**；
-**要一台干净的、能在别人机器上一条命令起来的演示，用 Compose**；要改一行代码看一眼，
-用原生。控制台的「运行状态」页会把当前这一台**实际装配起了什么**逐行列出来（ADR-102），
-不用靠猜。
+所以选哪条现在是口味加一件事：**要一台干净的、能在别人机器上一条命令起来的演示，用
+Compose**；要改一行代码看一眼，用原生。控制台的「运行状态」页会把当前这一台**实际装配起了
+什么**逐行列出来（ADR-102），不用靠猜。
 
 Windows 上的完整步骤（含内存下限、镜像站与排错）在
 [Windows 快速开始](windows-quickstart.md)。
@@ -370,11 +369,16 @@ bge-reranker-v2-m3，合计约 6.7 GB 权重，加上 torch 运行时与余量�
 
 这不是缺陷，是没有写下来的部署下限——现在写下来了。
 
-**Compose 那条路自 ADR-0105 起不再更轻，而它把这个下限乘了四。** 那套拓扑里 API、
-两个 Task Worker、摄取 worker **各自加载一整套模型**，所以 `scripts\stack.cmd` 在开始
-构建之前先读一次 `docker info` 的 `MemTotal`：低于约 29 GB（4 × 6.7 GB，只够放下权重）
-就停下来，低于约 51 GB（4 × 12 GB）就先说一声。**那两条线是在上面这一个实测数字上做的
-算术，不是第二次实测**，容器里那套没有量过。
+**Compose 那条路自 ADR-0106 起只有一个进程加载模型。** 那套拓扑里 `encoder` 服务加载
+三个模型一次，API、两个 Task Worker、摄取 worker 通过 HTTP 向它要向量、自己不装 torch
+（ADR-0105 落地那天它们还是各加载一整套，下限因此是四倍）。所以 `scripts\stack.cmd` 在
+开始构建之前先读一次 `docker info` 的 `MemTotal`：低于 12 GB（上面这一个实测数字）就停
+下来，低于 16 GB（同一个数字加 4 GB **留量**，留给没量过的另外三个 Python 进程、PostgreSQL、
+Qdrant 与 collector）就先说一声。**留量不是第二次实测**，容器里那套没有量过。
+
+**原生这条路这次没接上。** `demo-api` 与 `ingest` 仍各自在本进程加载，所以上面「一次只跑一个
+检索进程」的话在这里照旧。`rag.embedding.service_url` 与 `rag.reranker.service_url` 两片叶子
+对原生 profile 同样可用，缺的是 `up` 里先起 `agent-encoder` 的那一步。
 
 ## 不装 embedding extra 时的 Task Worker
 

@@ -428,7 +428,8 @@
         "rag.embedding.sparse_enabled",
         "rag.embedding.sparse_vocabulary_size",
         "rag.embedding.dense_vector_name",
-        "rag.embedding.sparse_vector_name"
+        "rag.embedding.sparse_vector_name",
+        "rag.embedding.service_url"
       ]
     },
     {
@@ -458,7 +459,8 @@
         "rag.reranker.device",
         "rag.reranker.precision",
         "rag.reranker.timeout_seconds",
-        "rag.reranker.failure_mode"
+        "rag.reranker.failure_mode",
+        "rag.reranker.service_url"
       ]
     },
     {

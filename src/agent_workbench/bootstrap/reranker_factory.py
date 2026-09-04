@@ -24,6 +24,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_workbench.adapters.concurrency.call_runner import BlockingCallRunner
+from agent_workbench.adapters.encoder import (
+    EncoderServiceUnavailableError,
+    RemoteReranker,
+)
 from agent_workbench.adapters.reranking.bge_reranker import (
     BgeReranker,
     load_cross_encoder,
@@ -58,6 +62,19 @@ def build_reranker(
     produces one number per pair whatever it is. So there is nothing it can be
     wrong about that is worth refusing to serve chat over.
     """
+
+    if config.service_url:
+        # ADR-0106. Every failure here is an absence, like the local branch
+        # below -- except an identity that names a different model than the
+        # configuration, which `RemoteReranker.connect` raises and this lets
+        # through: it is the one thing a reranker *can* disagree with the
+        # configuration about, and an evaluation report written against a
+        # process reranking with a model it did not name is the report the
+        # identity exists to prevent.
+        try:
+            return RemoteReranker.connect(config)
+        except EncoderServiceUnavailableError as unreachable:
+            return RerankerUnavailable(reason=str(unreachable))
 
     device = None if config.device == "auto" else config.device
     try:

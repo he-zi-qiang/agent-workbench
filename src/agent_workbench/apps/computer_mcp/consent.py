@@ -36,9 +36,12 @@ from __future__ import annotations
 import asyncio
 import shutil
 import subprocess
+import sys
+from collections.abc import Callable
 from typing import Final
 
 from agent_workbench.domain.computer import ApplicationIdentity, tier_for
+from agent_workbench.ports.screen import ScreenUnavailableError
 
 #: What the buttons say. The allow label is compared against the answer, so it
 #: is a constant rather than a literal spelled twice.
@@ -136,10 +139,25 @@ async def ask(
     Whole list rather than one dialog per application, because a person asked
     six times says yes six times without reading the sixth. It is one decision
     about one set, which is also what ADR-070 §2 describes.
+
+    One dialog per platform, and the platform is decided here rather than by
+    the caller: the gate knows how to ask, not what a dialog is made of. Any
+    platform without one raises rather than answering, because the only thing
+    worse than a dialog nobody saw is a grant nobody gave (ADR-0108 §3).
     """
 
     if not applications:
         return False
+    if sys.platform == "win32":
+        return await ask_win32(
+            applications, reason=reason, timeout_seconds=timeout_seconds
+        )
+    if sys.platform != "darwin":
+        raise ConsentUnavailableError(
+            f"no approval dialog is implemented for {sys.platform}, so nothing "
+            "can be approved. The screen tools stay unavailable rather than "
+            "granting themselves."
+        )
     binary = shutil.which("osascript")
     if binary is None:
         raise ConsentUnavailableError(
@@ -189,8 +207,108 @@ async def ask(
     return f"button returned:{_ALLOW}" in answer
 
 
+# --- Windows ---------------------------------------------------------------
+
+#: What `MessageBoxTimeoutW` answers with. `IDYES` and `IDNO` are the two
+#: buttons; `MB_TIMEDOUT` is its own value for a dialog nobody touched, and it
+#: is checked by name for the reason the macOS path checks `gave up:true`
+#: explicitly -- a timeout must never read as a yes.
+_IDYES: Final[int] = 6
+_IDNO: Final[int] = 7
+_MB_TIMEDOUT: Final[int] = 32_000
+
+#: Yes/No, a warning icon, **No as the default button**, and the dialog on top
+#: of everything and in front. The default matters the way it does on macOS:
+#: a person who hits Enter without reading has refused.
+_MB_YESNO: Final[int] = 0x0000_0004
+_MB_ICONWARNING: Final[int] = 0x0000_0030
+_MB_DEFBUTTON2: Final[int] = 0x0000_0100
+_MB_SETFOREGROUND: Final[int] = 0x0001_0000
+_MB_TOPMOST: Final[int] = 0x0004_0000
+_MESSAGE_BOX_STYLE: Final[int] = (
+    _MB_YESNO | _MB_ICONWARNING | _MB_DEFBUTTON2 | _MB_SETFOREGROUND | _MB_TOPMOST
+)
+
+#: How a Windows dialog is put up: ``(title, body, milliseconds) -> answer``.
+#: Injectable so the reading of every answer can be asserted on a machine that
+#: has no `user32`, and so the suite never opens a dialog on whoever runs it.
+MessageBox = Callable[[str, str, int], int]
+
+
+def _windows_message_box(title: str, body: str, milliseconds: int) -> int:
+    """`MessageBoxTimeoutW`, reached through the one module that speaks Win32.
+
+    Imported here rather than at the top so this file imports on every
+    platform; the call itself lives in `adapters/screen/win32.py`, beside the
+    rest of the platform, for the reason `darwin.py` holds every pyobjc call:
+    one module carries the FFI and its suppressions, and this one carries the
+    decision about what an answer means.
+    """
+
+    from agent_workbench.adapters.screen.win32 import message_box_with_timeout
+
+    return message_box_with_timeout(
+        title, body, style=_MESSAGE_BOX_STYLE, milliseconds=milliseconds
+    )
+
+
+def _body_win32(applications: tuple[ApplicationIdentity, ...], reason: str) -> str:
+    """The macOS body plus the one line a Yes/No box needs.
+
+    `MessageBoxW` cannot label its buttons, so the text has to say which button
+    is which; without that line "Yes" is a word, not a decision.
+    """
+
+    return _body(applications, reason) + "\n\n" + "「是」= 允许这次会话    「否」= 拒绝"
+
+
+async def ask_win32(
+    applications: tuple[ApplicationIdentity, ...],
+    *,
+    reason: str = "",
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    message_box: MessageBox | None = None,
+) -> bool:
+    """The Windows dialog, and every way of not saying yes (ADR-0108 §3).
+
+    The same three rules as the macOS asker. The text is data all the way to
+    the screen. Every unclear answer is a refusal: a timeout, a closed dialog,
+    a return value this code does not recognise, a `user32` that will not put
+    one up. The one thing that grants is the Yes button.
+    """
+
+    if not applications:
+        return False
+    # Resolved here rather than as the parameter's default, so a test (or a
+    # deployment) that replaces the module's box replaces the one that is
+    # used; a default binds at definition time.
+    box = _windows_message_box if message_box is None else message_box
+    try:
+        answer = await asyncio.to_thread(
+            box,
+            "屏幕控制批准",
+            _body_win32(applications, reason),
+            int(timeout_seconds * 1000),
+        )
+    except ConsentUnavailableError:
+        raise
+    except (ScreenUnavailableError, OSError) as unavailable:
+        # The platform module says why it could not put a box up; to the
+        # gate that is one fact, "nobody could be asked", and it is a
+        # different fact from "the person said no".
+        raise ConsentUnavailableError(
+            f"could not ask for approval: {unavailable}. The screen tools stay "
+            "unavailable rather than granting themselves."
+        ) from unavailable
+    if answer == _MB_TIMEDOUT:
+        return False
+    return answer == _IDYES
+
+
 __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "ConsentUnavailableError",
+    "MessageBox",
     "ask",
+    "ask_win32",
 ]

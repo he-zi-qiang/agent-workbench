@@ -18,6 +18,10 @@ from agent_workbench.adapters.embedding.bge_sparse import (
     BgeM3SparseEncoder,
     load_bge_m3,
 )
+from agent_workbench.adapters.encoder import (
+    EncoderServiceUnavailableError,
+    RemoteSparseEncoder,
+)
 from agent_workbench.bootstrap.projections import EmbeddingConfig
 from agent_workbench.ports.sparse import (
     SparseEncoderPort,
@@ -48,6 +52,15 @@ def build_sparse_encoder(
         return SparseEncodingUnavailable(
             reason="sparse encoding is disabled by the embedding configuration"
         )
+
+    if config.service_url:
+        # ADR-0106, on the same terms as `build_embedder`: an encoder that is
+        # not answering, or that loaded no sparse model, is an absence; a
+        # width that is not the tokenizer's is a refusal and propagates.
+        try:
+            return RemoteSparseEncoder.connect(config)
+        except EncoderServiceUnavailableError as unreachable:
+            return SparseEncodingUnavailable(reason=str(unreachable))
 
     try:
         return BgeM3SparseEncoder.load(

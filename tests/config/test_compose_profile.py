@@ -101,3 +101,48 @@ def test_the_compose_profile_leaves_qdrant_where_the_container_network_puts_it(
 
     settings = _load(monkeypatch)
     assert settings.qdrant.url == "http://qdrant:6333"
+
+
+def test_the_compose_profile_asks_the_encoder_for_its_vectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One process loads the weights; the other four name it (ADR-0106).
+
+    Both leaves, because each factory reads only its own section, and the
+    service name rather than a loopback address: unlike an MCP server the
+    encoder is its own container, reached the way Qdrant is.
+    """
+
+    settings = _load(monkeypatch)
+    assert settings.rag.embedding.service_url == "http://encoder:8769"
+    assert settings.rag.reranker.service_url == "http://encoder:8769"
+
+    worker = project_task_worker(settings)
+    assert worker.embedding is not None
+    assert worker.embedding.service_url == "http://encoder:8769"
+
+
+def test_the_compose_profile_leaves_the_sandbox_to_the_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off in the file, decided per start (ADR-0107).
+
+    The topology now has a broker, and `true` here is still the value that
+    would stop a stack whose broker is pulling its image -- so the file says
+    nothing and the launcher exports `AW_SANDBOX__ENABLED` /
+    `AW_CODE__SANDBOX_ENABLED` when the runtime answers. The endpoint the
+    export would name is the shipped loopback default, which is what each
+    container's tunnel listens on.
+    """
+
+    settings = _load(monkeypatch)
+    assert settings.code.sandbox_enabled is False
+    assert settings.sandbox.enabled is False
+    assert settings.sandbox.endpoint == "http://127.0.0.1:8766/mcp"
+
+    monkeypatch.setenv("AW_SANDBOX__ENABLED", "true")
+    monkeypatch.setenv("AW_CODE__SANDBOX_ENABLED", "true")
+    decided = load_settings(config_file=COMPOSE_CONFIG)
+    assert decided.sandbox.enabled is True
+    assert decided.code.sandbox_enabled is True
+    assert project_task_worker(decided).sandbox is not None

@@ -8,8 +8,9 @@ on a cold cache rather than filling it.**
 is absent -- because FlagEmbedding's own behaviour there is to build a fresh
 random ``Linear`` and carry on, which produces vectors of the right width that
 mean nothing. So a container that merely started with an empty cache would not
-download BGE-M3; it would exit, and the four processes that need those weights
-would exit in the same way at the same moment.
+download BGE-M3; it would exit. Since ADR-0106 that container is the encoder,
+the one process that loads the weights; before it, all four retrieving
+processes exited in the same way at the same moment.
 
 Reading the ids and revisions from the loaded settings rather than naming
 ``BAAI/bge-m3`` here is the other half. The identity of an index is the model
@@ -69,7 +70,7 @@ def main() -> int:
         # The image is built with `--extra embedding`, so this is not a
         # configuration a caller can reach by accident -- it means the image
         # was built without it, and every retrieval capability is absent.
-        # Saying so here is better than four processes each discovering it.
+        # Saying so here is better than the encoder discovering it at load.
         print(
             "fetch-weights: no huggingface_hub, so this image has no embedding "
             "extra and this stack has no retrieval. Rebuild the image.",

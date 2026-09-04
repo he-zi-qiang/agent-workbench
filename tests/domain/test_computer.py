@@ -379,3 +379,71 @@ def test_an_activation_that_did_not_take_says_what_is_in_front_instead() -> None
     assert "Notes" in message and "Terminal" in message
     assert "Nothing was clicked or typed" in message
     assert "screenshot" in message
+
+
+# --- Windows identities (ADR-0108) ---------------------------------------------
+
+
+def _exe(name: str, shown: str = "") -> ApplicationIdentity:
+    return ApplicationIdentity(bundle_id=name, name=shown)
+
+
+@pytest.mark.parametrize(
+    ("executable", "expected"),
+    [
+        ("chrome.exe", "read"),
+        ("msedge.exe", "read"),
+        ("firefox.exe", "read"),
+        ("electrum.exe", "read"),
+        ("windowsterminal.exe", "click"),
+        ("cmd.exe", "click"),
+        ("powershell.exe", "click"),
+        ("pwsh.exe", "click"),
+        ("code.exe", "click"),
+        ("devenv.exe", "click"),
+        ("idea64.exe", "click"),
+        ("notepad.exe", "full"),
+        ("winword.exe", "full"),
+    ],
+)
+def test_a_windows_executable_is_classified_by_its_file_name(
+    executable: str, expected: str
+) -> None:
+    assert tier_for(_exe(executable)) == expected
+
+
+def test_a_windows_executable_is_matched_regardless_of_case() -> None:
+    """The adapter lower-cases; a caller that did not still gets the same tier."""
+
+    assert tier_for(_exe("Chrome.EXE", "Google Chrome")) == "read"
+    assert tier_for(_exe("WindowsTerminal.exe")) == "click"
+
+
+def test_an_unknown_windows_browser_is_still_a_browser_by_name() -> None:
+    """The second, weaker signal works for a `.exe` nobody listed, as it does
+    for a bundle id nobody listed."""
+
+    assert tier_for(_exe("newbrowser.exe", "New Browser")) == "read"
+    assert tier_for(_exe("host.exe", "Windows PowerShell")) == "click"
+    assert tier_for(_exe("host.exe", "Command Prompt")) == "click"
+
+
+def test_the_two_exact_tables_never_share_a_key() -> None:
+    """A bundle id and an executable name are different identities; one string
+    that could be both would be classified by whichever table is read first."""
+
+    from agent_workbench.domain import computer as module
+
+    assert not set(module._KIND_BY_BUNDLE_ID) & set(module._KIND_BY_EXECUTABLE)
+    assert all(key == key.casefold() for key in module._KIND_BY_EXECUTABLE)
+    assert all(key.endswith(".exe") for key in module._KIND_BY_EXECUTABLE)
+
+
+def test_a_refusal_names_the_windows_routes_it_forbids_too() -> None:
+    """The third part of a refusal lists what the machine actually has, and a
+    Windows machine has PowerShell and SendKeys where a Mac has AppleScript."""
+
+    message = refusal(action="type", application=_exe("cmd.exe", "cmd"), tier="click")
+
+    assert "never use AppleScript" in message
+    assert "PowerShell" in message and "SendKeys" in message

@@ -10,7 +10,11 @@ rem      scripts\stack.cmd            build, start, wait for healthy, open the c
 rem      scripts\stack.cmd down       stop everything and remove the containers
 rem      scripts\stack.cmd logs       follow the logs
 rem      scripts\stack.cmd status     what is running
-rem      scripts\stack.cmd restart    restart the API and both Workers, nothing else
+rem      scripts\stack.cmd restart    restart the API, both Workers and the sandbox
+rem      scripts\stack.cmd sandbox-image   build the sandbox image that can draw a PDF
+rem
+rem  Computer use is not in this file: a container cannot reach the desktop,
+rem  so that server runs on this Windows itself. See scripts\computer.cmd.
 rem
 rem  Two conventions this file keeps, inherited from scripts/panel.cmd and for
 rem  the same reasons:
@@ -65,47 +69,53 @@ if /i "%~1"=="down"   goto :down
 if /i "%~1"=="logs"   goto :logs
 if /i "%~1"=="status" goto :status
 if /i "%~1"=="restart" goto :restart
+if /i "%~1"=="sandbox-image" goto :sandbox_image
 
 rem  Memory, asked before the build rather than discovered during it, and
-rem  only on the path that builds. `down`, `logs`, `status` and `restart` have
-rem  already branched away above.
+rem  only on the path that builds. `down`, `logs`, `status`, `restart` and
+rem  `sandbox-image` have already branched away above.
 rem
-rem  This stack runs four processes that each load the full retrieval model
-rem  set: the API, both Task Workers and the ingestion worker. One measured
-rem  number exists for that, and it is for ONE process on the native path --
-rem  about 12 GB of available memory, of which about 6.7 GB is the three model
-rem  files themselves (2026-07-31, docs/running-locally.md). The floors below
-rem  are arithmetic on that number rather than a second measurement:
+rem  ONE process in this stack loads the retrieval model set: the encoder
+rem  service (ADR-0106). The API, both Task Workers and the ingestion worker
+rem  ask it over HTTP and load no model at all. Before that ADR all four
+rem  loaded a full set each, and the floors here were four times what they
+rem  are now.
 rem
-rem      4 x 6.7 GB = about 29 GB   just to hold the weights. Under this the
-rem                                 stack cannot work, it can only page.
-rem      4 x 12  GB = about 51 GB   the per-process figure, four times.
+rem  One measured number exists, and it is for ONE process that holds the
+rem  models, on the native path: about 12 GB of available memory, of which
+rem  about 6.7 GB is the three model files themselves (2026-07-31,
+rem  docs/running-locally.md). The lean processes, PostgreSQL, Qdrant and the
+rem  collector have NOT been measured; the 4 GB between the two lines below
+rem  is an allowance for them, not a second measurement.
+rem
+rem      12 GB   the one measured figure. Under it the encoder itself pages,
+rem              so the stack cannot work, it can only swap.
+rem      16 GB   the same figure plus the allowance for everything else.
 rem
 rem  Under the hard floor this stops, and stopping is the kinder answer: the
 rem  alternative is tens of minutes of build followed by `up --wait` timing
 rem  out in swap, which reads as "this project does not run" rather than as
 rem  "this machine was not given enough memory". Docker Desktop hands the WSL 2
-rem  VM about half of physical RAM by default, so this is usually a setting
-rem  rather than a hardware limit.
+rem  VM about half of physical RAM by default, so a 32 GB machine meets the
+rem  second line without touching a setting; a 16 GB one is under the first.
 rem
 rem  Compared by slicing digits off the byte count, not by `set /a`: MemTotal
 rem  is bytes, and cmd's arithmetic is 32-bit signed, so anything above about
 rem  2.1 GB overflows. Dropping the last nine digits is an integer divide by
-rem  1e9 that cannot overflow -- so the numbers here and below are decimal GB,
-rem  which is why they read 29 and 51 rather than 27 and 48.
+rem  1e9 that cannot overflow -- so the numbers here and below are decimal GB.
 set "MEMGB="
 for /f "tokens=*" %%m in ('docker info --format "{{.MemTotal}}" 2^>nul') do set "MEMBYTES=%%m"
 if defined MEMBYTES set "MEMGB=%MEMBYTES:~0,-9%"
 if not defined MEMGB set "MEMGB=0"
 if "%MEMGB%"=="" set "MEMGB=0"
 
-if %MEMGB% GEQ 51 goto :memory_ok
-if %MEMGB% GEQ 29 goto :memory_tight
+if %MEMGB% GEQ 16 goto :memory_ok
+if %MEMGB% GEQ 12 goto :memory_tight
 
-echo stack: Docker has about %MEMGB% GB of memory. This stack needs about 29 GB 1>&2
-echo        just to hold the retrieval weights of its four model-loading 1>&2
-echo        processes, so it would come up and then page instead of working. 1>&2
-echo        Stopping here rather than after the build. 1>&2
+echo stack: Docker has about %MEMGB% GB of memory. The encoder service, the 1>&2
+echo        one process here that loads the retrieval models, needs about 1>&2
+echo        12 GB on its own, so this stack would come up and then page 1>&2
+echo        instead of working. Stopping here rather than after the build. 1>&2
 echo. 1>&2
 echo        Docker Desktop, Settings, Resources, Memory. On Windows that 1>&2
 echo        slider is bounded by what WSL 2 may take, set in .wslconfig in 1>&2
@@ -120,9 +130,10 @@ echo        Proceeding because you asked. 1>&2
 goto :memory_ok
 
 :memory_tight
-echo Docker has about %MEMGB% GB of memory. Four processes here each load the
-echo retrieval models, and the one measured figure is about 12 GB per process,
-echo so expect this to be slow. Ingestion is usually what suffers first.
+echo Docker has about %MEMGB% GB of memory. The encoder service needs about
+echo 12 GB of it on its own -- the one measured figure -- and PostgreSQL,
+echo Qdrant and the other processes have not been measured, so expect this to
+echo be slow. Ingestion is usually what suffers first.
 echo.
 
 :memory_ok
@@ -141,9 +152,9 @@ rem      failed to dial gRPC: ... header key "x-docker-expose-session-
 rem      sharedkey" contains value with non-printable ASCII characters
 rem
 rem  Measured 2026-09-01, Docker 29.4.0, and it needs BOTH halves: two or more
-rem  services sharing one build context (this file has four -- otel-init,
-rem  qdrant-ready, migrate and api all build `context: .` into
-rem  agent-workbench:local) AND a non-ASCII directory name. One service with a
+rem  services sharing one build context (this file has eight today, every
+rem  one of them building `context: .` into agent-workbench:local; it had
+rem  four when this was measured) AND a non-ASCII directory name. One service with a
 rem  non-ASCII name builds; four services under an ASCII name build; four under
 rem  a non-ASCII name never do. COMPOSE_BAKE=false does not avoid it.
 rem
@@ -152,9 +163,9 @@ rem  against the same directory. A Windows checkout under a path like
 rem  D:\projects\... is fine either way, and one under D:\Chinese-name\... is
 rem  the common case here, so the two-step is unconditional rather than
 rem  conditional on a check that would have to guess at the same rule.
-echo Building the image. First run pulls Node 24, Python 3.12 and the
-echo retrieval runtime, then downloads about 6.7 GB of model weights into a
-echo named volume. Expect tens of minutes, once.
+echo Building the image. First run pulls Node 24, Python 3.12, the Docker
+echo CLI and the retrieval runtime, then downloads about 6.7 GB of model
+echo weights into a named volume. Expect tens of minutes, once.
 docker build -t agent-workbench:local .
 if errorlevel 1 (
     echo stack: image build failed -- see the output above. 1>&2
@@ -189,27 +200,29 @@ echo   Stop     scripts\stack.cmd down
 echo.
 rem  Said at the one moment somebody is looking at this window.
 rem
-rem  This list used to be longer: before the image carried the embedding extra
-rem  and the Workers started their own MCP servers, the honest sentence here
-rem  was "no embedding runtime and no MCP servers". What is left is what a
-rem  Linux container topology genuinely cannot assemble, plus the one thing
-rem  nobody has typed yet -- and the second is the one that looks like neither
-rem  a bug nor an absence, because a synthetic Worker takes a Task all the way
-rem  to succeeded without ever calling a model or a tool.
+rem  This list has been getting shorter. Before the image carried the
+rem  embedding extra and the Workers started their own MCP servers, the honest
+rem  sentence here was "no embedding runtime and no MCP servers". ADR-0107
+rem  took the sandbox off it, and ADR-0108 moved computer use from "absent"
+rem  to "a second launcher on this machine". What is left is the one thing
+rem  nobody has typed yet, and it is the one that looks like neither a bug
+rem  nor an absence: a synthetic Worker takes a Task all the way to succeeded
+rem  without ever calling a model or a tool.
 rem
 rem  Kept as a pointer rather than a full account. The System page names every
 rem  absence and its remedy (ADR-102); this window only has to stop somebody
 rem  from reading silence as completeness.
 echo   Not everything is on. Without a provider key the Task Workers run
 echo   SYNTHETIC handlers: tasks reach succeeded with no model call and no tool
-echo   call. Sandbox execution and computer use are absent from any container
-echo   topology. The console's System page lists what this stack did and did
-echo   not assemble, why, and what to change. Save a key there, flip what you
-echo   want, then: scripts\stack.cmd restart
+echo   call. Save a key on the System page, flip what you want, then:
+echo   scripts\stack.cmd restart
 echo.
-rem  /ui/ rather than the bare root. The root answers 307 to the same place, so
-rem  either works today. Naming the real path means this line does not depend
-rem  on that redirect staying.
+echo   Sandbox execution runs in the sandbox container, which alone holds the
+echo   Docker socket; if its image could not be pulled the System page says
+echo   the sandbox is absent, and scripts\stack.cmd logs says why. Computer
+echo   use cannot run in a container at all: to have it, run
+echo   scripts\computer.cmd on this machine (it needs uv, nothing else).
+echo.
 start "" "http://127.0.0.1:8000/ui/"
 set "RC=0"
 goto :popped
@@ -232,11 +245,32 @@ goto :popped
 :restart
 rem  A key saved on the settings page, or a switch flipped on the System page,
 rem  is read at the next start of the processes that read configuration once:
-rem  the API and the Workers (ADR-101, ADR-103). Restart exactly those three.
-rem  PostgreSQL, Qdrant and the collector keep running, so this takes seconds,
-rem  where `down` and a fresh start would take the image build again.
-docker compose --profile demo restart api task-worker task-worker-b
+rem  the API and the Workers (ADR-101, ADR-103). The sandbox broker picks its
+rem  image at start too, so a PDF image built by `sandbox-image` is only seen
+rem  after this (ADR-0107). Restart exactly those four. PostgreSQL, Qdrant,
+rem  the collector and the encoder keep running -- the encoder in particular,
+rem  because restarting it means reloading three models -- so this takes
+rem  seconds, where `down` and a fresh start would take the image build again.
+docker compose --profile demo restart sandbox api task-worker task-worker-b
 set "RC=%errorlevel%"
+goto :popped
+
+:sandbox_image
+rem  The image that lets `sandbox_run` draw a PDF instead of only text
+rem  (docker/sandbox-pdf.Dockerfile: a digest-pinned python:3.12-slim plus
+rem  reportlab and a CJK TrueType font). The broker uses it when it exists
+rem  and says on its log which of the two images it got; it never falls back
+rem  silently. Plain `docker build` here for the reason the main build uses
+rem  it: the bake path dies on a non-ASCII directory name.
+docker build -t agent-workbench-sandbox-pdf:local -f docker\sandbox-pdf.Dockerfile docker
+if errorlevel 1 (
+    echo stack: the sandbox image did not build -- see the output above. 1>&2
+    set "RC=1"
+    goto :popped
+)
+echo Built agent-workbench-sandbox-pdf:local. The broker reads it at its next
+echo start: scripts\stack.cmd restart
+set "RC=0"
 goto :popped
 
 :popped

@@ -43,6 +43,46 @@ if [ -z "${AW_RESEARCH__ENABLED:-}" ]; then
     fi
 fi
 
+# Two inward tunnels (ADR-0107, ADR-0108), started before anything that would
+# dial them. Each puts a loopback listener in this container in front of a
+# loopback-only server that lives somewhere else, so every guard on the path
+# -- the settings validator, the MCP SDK's Host check, the servers' own
+# `--host` choice lists -- keeps seeing the loopback address it was written
+# for. `docker/loopback_proxy.py` carries the argument.
+#
+# 8766 is the sandbox broker, another container of this stack. 8768 is the
+# computer-use server, which no container can run: it needs the desktop, so
+# it runs on the host (`scripts\computer.cmd`), and `host.docker.internal` is
+# Docker Desktop's name for the host. When nothing listens there the tunnel
+# drops each connection, and `routes/computer.py` reports "not running" --
+# the same answer it gives on a machine that never started one.
+LOCAL_PROXY_LISTEN_HOST=127.0.0.1 \
+LOCAL_PROXY_PORT=8766 \
+LOCAL_PROXY_UPSTREAM_HOST="${SANDBOX_UPSTREAM_HOST:-sandbox}" \
+LOCAL_PROXY_UPSTREAM_PORT=8766 \
+    python /app/docker/loopback_proxy.py &
+sandbox_tunnel_pid=$!
+LOCAL_PROXY_LISTEN_HOST=127.0.0.1 \
+LOCAL_PROXY_PORT=8768 \
+LOCAL_PROXY_UPSTREAM_HOST="${COMPUTER_UPSTREAM_HOST:-host.docker.internal}" \
+LOCAL_PROXY_UPSTREAM_PORT=8768 \
+    python /app/docker/loopback_proxy.py &
+computer_tunnel_pid=$!
+
+# The sandbox, decided per start for the reason web search is: on without a
+# broker that answers is a startup error by design (`SandboxSlot.open`,
+# ADR-057), and the broker may be pulling its image, or the socket mount may
+# have failed, or somebody may have taken it out of the topology. An explicit
+# value for either variable is left alone; only "nobody decided" is decided.
+# The probe waits for the *runtime* behind the broker, not for its socket.
+if [ -z "${AW_CODE__SANDBOX_ENABLED:-}" ] && [ -z "${AW_SANDBOX__ENABLED:-}" ]; then
+    if python /app/docker/decide_sandbox.py; then
+        AW_CODE__SANDBOX_ENABLED=true
+        AW_SANDBOX__ENABLED=true
+        export AW_CODE__SANDBOX_ENABLED AW_SANDBOX__ENABLED
+    fi
+fi
+
 # --web-dir makes this stack a demo somebody can open rather than a set of
 # routes somebody has to know. The API refuses to start if the directory is
 # missing, so a broken image fails here rather than in a browser.
@@ -52,14 +92,18 @@ python /app/docker/loopback_proxy.py &
 proxy_pid=$!
 
 cleanup() {
-  kill -TERM "$api_pid" "$proxy_pid" 2>/dev/null || true
+  kill -TERM "$api_pid" "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" 2>/dev/null || true
   wait "$api_pid" 2>/dev/null || true
   wait "$proxy_pid" 2>/dev/null || true
+  wait "$sandbox_tunnel_pid" 2>/dev/null || true
+  wait "$computer_tunnel_pid" 2>/dev/null || true
 }
 
 trap 'cleanup; exit 0' INT TERM
 wait "$api_pid"
 status=$?
-kill -TERM "$proxy_pid" 2>/dev/null || true
+kill -TERM "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" 2>/dev/null || true
 wait "$proxy_pid" 2>/dev/null || true
+wait "$sandbox_tunnel_pid" 2>/dev/null || true
+wait "$computer_tunnel_pid" 2>/dev/null || true
 exit "$status"

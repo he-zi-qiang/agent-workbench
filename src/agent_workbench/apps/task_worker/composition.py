@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agent_workbench.adapters.artifacts import LocalArtifactStore
 from agent_workbench.adapters.concurrency import BlockingCallRunner
 from agent_workbench.adapters.delegation import EventDelegationChannel
+from agent_workbench.adapters.encoder import aclose_encoders
 from agent_workbench.adapters.events import ScopedEventSink
 from agent_workbench.adapters.langgraph import (
     LangGraphTaskWorkflow,
@@ -598,6 +599,10 @@ async def _build_real_handlers(
             if isinstance(built_sparse, SparseEncodingUnavailable)
             else built_sparse
         )
+        # Remote encoders hold a connection pool to `agent-encoder`
+        # (ADR-0106); the in-process ones have nothing to close and are
+        # skipped by the helper.
+        resources.push_async_callback(aclose_encoders, embedder, sparse_encoder)
         qdrant = AsyncQdrantClient(
             url=config.qdrant.url,
             api_key=(
