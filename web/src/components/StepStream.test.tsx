@@ -201,6 +201,72 @@ describe("步骤组", () => {
   });
 });
 
+describe("步骤组展开之后", () => {
+  it("先看到这件事本身——参数与返回——簿记事件折在下面那层里", () => {
+    const events = [
+      event(PARENT, "ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "project_read",
+        argument_preview: '{"path":"docs/hello.html"}',
+      }),
+      event(PARENT, "ToolStarted", 2, {
+        tool_call_id: "call_1",
+        tool_name: "project_read",
+      }),
+      event(PARENT, "ToolCompleted", 3, {
+        tool_call_id: "call_1",
+        duration_ms: 12,
+        output_preview: "<h1>Hello</h1>",
+      }),
+    ];
+    const { container } = draw([stage({ events })]);
+    const group = container.querySelector("details.aw-step-group") as HTMLElement;
+    // 正文那一块，不是整个组：底下事件记录里的 ToolProposed 展开之后也有一份
+    // 「调用参数」——那是单条事件自己的，两份都在 DOM 里，这里问的是合并后的那份。
+    const detail = group.querySelector(".aw-step-group-detail") as HTMLElement;
+
+    // 参数按形状画：键是键，值是值；此前这里只有四行「已提出 / 已开始 / 已完成」。
+    expect(within(detail).getByText("调用参数")).toBeInTheDocument();
+    expect(within(detail).getByText("path").tagName).toBe("DT");
+    expect(within(detail).getByText("docs/hello.html")).toBeInTheDocument();
+    expect(within(detail).getByText("工具返回")).toBeInTheDocument();
+    expect(within(detail).getByText("<h1>Hello</h1>")).toBeInTheDocument();
+    // 三条事件一条不少，只是折在「事件记录」下面。
+    const record = group.querySelector("details.aw-step-events") as HTMLDetailsElement;
+    expect(record.open).toBe(false);
+    expect(within(record).getByText("事件记录 · 3 条")).toBeInTheDocument();
+    expect(record.querySelectorAll("details.aw-step")).toHaveLength(3);
+  });
+
+  it("没成的组把原因写在展开的第一行", () => {
+    const events = [
+      event(PARENT, "ToolProposed", 1, {
+        tool_call_id: "call_1",
+        tool_name: "project_run",
+        argument_preview: '{"command":"python3 src/main.py"}',
+      }),
+      event(PARENT, "PermissionResolved", 2, {
+        tool_call_id: "call_1",
+        effect: "deny",
+        reason_code: "policy_denied",
+      }),
+      event(PARENT, "ToolFailed", 3, {
+        tool_call_id: "call_1",
+        error: {
+          code: "policy_denied",
+          message: "nobody answered within its 120s bound",
+          retryable: false,
+        },
+      }),
+    ];
+    const { container } = draw([stage({ events })]);
+
+    const failure = container.querySelector(".aw-step-failure");
+    expect(failure?.textContent).toContain("被拒绝");
+    expect(failure?.textContent).toContain("nobody answered within its 120s bound");
+  });
+});
+
 describe("实时那一句", () => {
   it("跑着的时候有，停下来就没有", () => {
     const events = [event(PARENT, "ToolStarted", 1, { tool_name: "web_fetch" })];

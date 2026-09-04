@@ -7,7 +7,8 @@
  *
  * 一是**打开时落在「本地身份」**。左下角那颗头像此前打开的就是身份编辑框，一次
  * 改版不该让一个用惯了的按钮换掉它的后果。
- * 二是**四类都换得过去**，而且换过去之后上一类的内容不再留在屏幕上。
+ * 二是**三类都换得过去**，而且换过去之后上一类的内容不再留在屏幕上；用量和运行
+ * 状态**不在**这个框里——它们是页面，装进来就是同一份报表画两遍。
  * 三是**主题即点即生效**，不需要再按一次「保存」——这个框里只有身份那一类有草稿。
  */
 
@@ -123,24 +124,29 @@ describe("换一类", () => {
     expect(dialog.getByRole("radio", { name: "浅色" })).toBeInTheDocument();
   });
 
-  it("用量那一格里是真的报表，不是一句占位", async () => {
+  it("用量和运行状态不在这个框里——它们是页面，不是设置", async () => {
     const user = userEvent.setup();
     const dialog = await open(user);
 
-    await user.click(dialog.getByRole("button", { name: /用量/ }));
-
-    expect(await dialog.findByRole("button", { name: "7 天" })).toBeInTheDocument();
+    // 第一版把这两份报表也装了进来，于是同一份东西在「更多」和「设置」里各画
+    // 一遍，而且是在一个为表单定尺寸的框里画一张六列的表。这个框只装能改的。
+    expect(dialog.queryByRole("button", { name: /用量/ })).toBeNull();
+    expect(dialog.queryByRole("button", { name: /运行状态/ })).toBeNull();
+    expect(dialog.getAllByRole("button", { name: /本地身份|模型密钥|外观/ })).toHaveLength(3);
   });
 
-  it("运行状态那一格里是真的健康检查", async () => {
+  it("三类同一个骨架：左栏的名字就是右边那一类的标题", async () => {
     const user = userEvent.setup();
     const dialog = await open(user);
 
-    await user.click(dialog.getByRole("button", { name: /运行状态/ }));
-
+    // 此前左栏写「本地身份」、右边标题写「本地身份模拟器」——同一样东西两个名字。
+    expect(dialog.getByRole("heading", { level: 3, name: "本地身份" })).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: /模型密钥/ }));
     expect(
-      await dialog.findByRole("button", { name: /重新检查/ }),
+      await dialog.findByRole("heading", { level: 3, name: "模型密钥" }),
     ).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: /外观/ }));
+    expect(dialog.getByRole("heading", { level: 3, name: "外观" })).toBeInTheDocument();
   });
 });
 

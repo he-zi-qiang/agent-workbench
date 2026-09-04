@@ -99,6 +99,21 @@ export interface TurnStep {
   group: StepGroup | null;
 }
 
+/**
+ * 这一轮为什么没有正常跑完。
+ *
+ * 从这个运行自己的终止事件读：`RunFailed` 带错误码和那句英文，`RunCancelled` 只
+ * 有取消，`RunCompleted` 的 `stop_reason` 不是 `completed` 时是撞了某个上限
+ * （deadline、max_steps、token_budget……）。正常完成的一轮是 `null`——成功靠不说话
+ * 来说，这一行只在出事的那一轮出现。
+ */
+export interface TurnStop {
+  kind: "failed" | "cancelled" | "ceiling";
+  reason: string;
+  code: string | null;
+  message: string | null;
+}
+
 export interface CodeTurnBlock {
   key: string;
   /** 1-based, counted over the transcript's user messages. */
@@ -118,6 +133,8 @@ export interface CodeTurnBlock {
    * 没有。不是零。
    */
   usage: TurnUsageView | null;
+  /** 没跑完的那一轮为什么停。正常完成是 `null`。 */
+  stop: TurnStop | null;
   /** Tool calls only, for the produced-file cards. */
   groups: StepGroup[];
   /** What happened, in order: each thought beside the action it caused. */
@@ -285,6 +302,7 @@ export function buildTurnBlocks(input: {
         instruction,
         report,
         usage,
+        stop: stopOf(run?.events ?? []),
         events: run?.events ?? [],
         live: claimsLive,
         liveCallId,
@@ -306,6 +324,7 @@ export function buildTurnBlocks(input: {
         report: null,
         // 还在跑：终局还没写下，所以这一轮的账这里问不出来。
         usage: null,
+        stop: null,
         events: live?.events ?? [],
         live: true,
         liveCallId,
@@ -355,6 +374,39 @@ function usageOf(events: readonly EventEnvelope[]): TurnUsageView | null {
 }
 
 
+/**
+ * 一个运行的终局，只在它没有正常跑完时。
+ *
+ * 和 `usageOf` 读的是同一条事件，分开写是因为答的不是同一个问题：那边问「花了
+ * 多少」，成功失败都要答；这边问「为什么没成」，成功时的答案就是没有这一行。
+ */
+function stopOf(events: readonly EventEnvelope[]): TurnStop | null {
+  for (const event of events) {
+    const payload = event.payload as {
+      stop_reason?: unknown;
+      error?: { code?: unknown; message?: unknown };
+    };
+    const reason = str(payload.stop_reason);
+    if (event.event_type === "RunFailed") {
+      return {
+        kind: "failed",
+        reason: reason ?? "error",
+        code: str(payload.error?.code),
+        message: str(payload.error?.message),
+      };
+    }
+    if (event.event_type === "RunCancelled") {
+      return { kind: "cancelled", reason: reason ?? "cancelled", code: null, message: null };
+    }
+    if (event.event_type === "RunCompleted") {
+      if (reason === null || reason === "completed") return null;
+      return { kind: "ceiling", reason, code: null, message: null };
+    }
+  }
+  return null;
+}
+
+
 function blockOf(
   base: {
     key: string;
@@ -363,6 +415,7 @@ function blockOf(
     instruction: string;
     report: string | null;
     usage: TurnUsageView | null;
+    stop: TurnStop | null;
     events: EventEnvelope[];
     live: boolean;
   } & { liveCallId: string },

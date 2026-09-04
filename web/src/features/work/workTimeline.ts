@@ -6,6 +6,7 @@ import type {
   TaskTimelineResponse,
 } from "../../api/types";
 import { checkCost } from "../../components/media";
+import { RUN_EVENT_TITLES } from "../../components/eventVocabulary";
 
 export interface TaskInputArtifact {
   schema_version: number;
@@ -47,7 +48,10 @@ export interface FinalReportMatch {
   succeededEventId: string;
 }
 
+// 运行层那一族（RunStarted、ModelCompleted、ToolProposed……）从共用的那张表展开
+// 进来：Code 的事件记录也要叫得出它们，两张表会在下一个新事件加进来那天开始不一样。
 const KNOWN_EVENT_TITLES: Readonly<Record<string, string>> = {
+  ...RUN_EVENT_TITLES,
   TaskSubmitted: "任务已提交",
   TaskClaimed: "任务已领取",
   TaskRetryScheduled: "任务已安排重试",
@@ -59,25 +63,6 @@ const KNOWN_EVENT_TITLES: Readonly<Record<string, string>> = {
   TaskFailed: "任务执行失败",
   TaskCancelled: "任务已取消",
   TaskParkedForMigration: "任务等待迁移",
-  RunStarted: "运行已开始",
-  RunPaused: "运行已暂停",
-  RunCompleted: "运行已完成",
-  RunFailed: "运行失败",
-  RunCancelled: "运行已取消",
-  ContextBuilt: "上下文已构建",
-  ModelStarted: "模型调用已开始",
-  ModelCompleted: "模型调用已完成",
-  ToolProposed: "工具调用已提出",
-  PermissionRequested: "权限检查已请求",
-  PermissionResolved: "权限检查已完成",
-  ToolApprovalDecided: "工具审批已裁定",
-  ToolStarted: "工具调用已开始",
-  ToolProgress: "工具调用有新进展",
-  ToolCompleted: "工具调用已完成",
-  ToolFailed: "工具调用失败",
-  ContextCompacted: "上下文已压缩",
-  AgentDelegated: "子代理已委派",
-  AgentCompleted: "子代理已完成",
 };
 
 export function createTimelineState(taskId: string): TimelineState {

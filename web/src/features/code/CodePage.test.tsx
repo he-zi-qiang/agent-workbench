@@ -1262,16 +1262,132 @@ describe("CodePage", () => {
     // Once now, not twice. The digest existed to tell a reader what was inside
     // a closed fold; there is no fold, so the row speaks for itself.
     expect(within(turns).getAllByText("写入工作区")).toHaveLength(1);
-    const diagnostic = within(turns).getByText("原始事件");
-    const raw = turns.querySelector(".aw-code-raw pre");
-    expect(raw).not.toBeVisible();
-    await user.click(diagnostic);
-    expect(raw).toBeVisible();
-    expect(raw).toHaveTextContent("ToolCompleted");
+    // The six events are still all there, one row each, under a quiet fold
+    // -- no longer one `JSON.stringify` of the whole turn. Each row is the
+    // same disclosure the Task timeline uses, in the same vocabulary.
+    const record = turns.querySelector(".aw-code-raw") as HTMLDetailsElement;
+    expect(record.open).toBe(false);
+    await user.click(within(turns).getByText("事件记录 · 6 条"));
+    expect(record.open).toBe(true);
+    const rows = within(record).getByRole("list", { name: "这一轮的事件" });
+    expect(within(rows).getAllByRole("listitem")).toHaveLength(6);
+    expect(within(rows).getByText("工具调用已完成")).toBeVisible();
+    expect(within(rows).getByText("模型调用已开始")).toBeVisible();
     // The file it produced is a card in the conversation, not a row in a pane
     // on the far side of the screen.
     const card = within(turns).getByRole("button", { name: /notes\.md/ });
     expect(card).toBeInTheDocument();
+  });
+
+  it("opens an action row onto what went in and what came back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolProposed",
+          sequence: 1,
+          payload: {
+            kind: "ToolProposed",
+            tool_call_id: "call_1",
+            tool_name: "project_read",
+            argument_preview: JSON.stringify({ path: "docs/hello.html" }),
+          },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-14T12:00:00Z",
+          event_type: "ToolCompleted",
+          sequence: 2,
+          payload: {
+            kind: "ToolCompleted",
+            tool_call_id: "call_1",
+            duration_ms: 12,
+            output_preview: "<!DOCTYPE html>\n<h1>Hello</h1>",
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "read hello.html");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const turns = await screen.findByRole("region", { name: "编码会话" });
+    // The row reads exactly as before -- one action, in words -- and it is
+    // now the summary of a fold. What it read and what it got back used to be
+    // reachable only through the whole turn's raw JSON.
+    const fold = turns.querySelector(".aw-code-action-fold") as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    await user.click(within(turns).getByText("读取项目目录"));
+    expect(fold.open).toBe(true);
+    const body = fold.querySelector(".aw-code-action-body") as HTMLElement;
+    // Arguments drawn by shape: the key is a key, the value is the value.
+    expect(within(body).getByText("调用参数")).toBeInTheDocument();
+    expect(within(body).getByText("path").tagName).toBe("DT");
+    expect(within(body).getByText("docs/hello.html")).toBeInTheDocument();
+    // The return with its real newline, not an escaped one.
+    expect(within(body).getByText("工具返回")).toBeInTheDocument();
+    expect(body.textContent).toContain("<!DOCTYPE html>\n<h1>Hello</h1>");
+    expect(body.textContent).not.toContain("\\n");
+  });
+
+  it("says why a settled turn failed, on the turn itself", async () => {
+    // Three turns in one real session failed on a provider 400. The page used
+    // to draw each as its instruction, a `0 → 0` footnote and nothing else --
+    // the failure was only in the terminal event, and the terminal event was
+    // only in the raw JSON.
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [{ role: "user", text: "找一下 greet" }],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: [
+        {
+          event_id: "evt_1",
+          run_id: "run_1",
+          timestamp: "2026-08-24T11:00:00Z",
+          event_type: "RunStarted",
+          sequence: 1,
+          payload: { kind: "RunStarted" },
+        },
+        {
+          event_id: "evt_2",
+          run_id: "run_1",
+          timestamp: "2026-08-24T11:00:01Z",
+          event_type: "RunFailed",
+          sequence: 2,
+          payload: {
+            kind: "RunFailed",
+            stop_reason: "error",
+            error: {
+              code: "provider_error",
+              message: "the provider rejected the request with HTTP 400",
+              retryable: false,
+            },
+          },
+        },
+      ] as unknown as ReturnType<typeof useCodeStream>["steps"],
+    });
+
+    mounted();
+
+    const note = await screen.findByRole("status", { name: "这一轮为什么停下" });
+    // The server's own sentence reaches the screen: it is the one thing a
+    // reader chasing a provider fault can take to the log.
+    expect(note).toHaveTextContent("这一轮没有跑完");
+    expect(note).toHaveTextContent("the provider rejected the request with HTTP 400");
   });
 
   it("shows a produced file as a card before the turn has finished", async () => {

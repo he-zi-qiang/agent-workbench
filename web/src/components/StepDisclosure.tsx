@@ -1,5 +1,6 @@
-import { ChevronRight, FileDown } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { ArtifactRef, EventEnvelope } from "../api/types";
+import { StepDetailBody } from "./StepDetailBody";
 import { describeEvent } from "./stepDetail";
 import { formatTime, shortId } from "./ui";
 
@@ -14,17 +15,24 @@ import { formatTime, shortId } from "./ui";
  * way to check what the curation dropped.
  */
 export function StepDisclosure({
+  bodies = true,
   event,
   title,
   onOpenArtifact,
 }: {
+  /**
+   * 带不带正文（提示词、思考摘要、参数、返回）。
+   *
+   * Code 的「事件记录」不带：那一折是审计用的原料，而它旁边的转录已经把思考画
+   * 在它促成的动作上面、把返回画在动作展开之后——同一段话在同一轮里再出现一次，
+   * 正是 ADR-064 那条「推理只渲染一次」要挡的东西。事实与原始载荷照旧。
+   */
+  bodies?: boolean;
   event: EventEnvelope;
   title: string;
   onOpenArtifact?: (artifact: ArtifactRef) => void;
 }) {
   const detail = describeEvent(event);
-  const hasDetail =
-    detail.facts.length > 0 || detail.bodies.length > 0 || detail.artifact !== null;
 
   return (
     <details className="aw-step">
@@ -37,45 +45,13 @@ export function StepDisclosure({
         <time dateTime={event.timestamp}>{formatTime(event.timestamp)}</time>
       </summary>
       <div className="aw-step-body">
-        {detail.facts.length === 0 ? null : (
-          <dl className="aw-step-facts">
-            {detail.facts.map((item) => (
-              <div className={item.wide === true ? "is-wide" : ""} key={item.label}>
-                <dt>{item.label}</dt>
-                <dd>{item.value}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {detail.bodies.map((body) => (
-          <figure className="aw-step-output" key={body.label}>
-            <figcaption>{body.label}</figcaption>
-            <pre className={`aw-step-pre is-${body.format}`}>{body.text}</pre>
-          </figure>
-        ))}
-        {detail.artifact === null || onOpenArtifact === undefined ? null : (
-          <div className="aw-step-artifact">
-            <FileDown aria-hidden="true" size={15} />
-            <span>
-              <strong>{detail.artifact.filename ?? detail.artifact.kind}</strong>
-              <small>
-                {detail.artifact.media_type} · {detail.artifact.size_bytes} 字节
-              </small>
-            </span>
-            <button
-              className="aw-button is-ghost is-small"
-              onClick={() => {
-                if (detail.artifact !== null) onOpenArtifact(detail.artifact);
-              }}
-              type="button"
-            >
-              打开产物
-            </button>
-          </div>
-        )}
-        {hasDetail ? null : (
-          <p className="aw-muted">这个事件没有额外内容，只记录它发生过。</p>
-        )}
+        <StepDetailBody
+          artifact={detail.artifact}
+          bodies={bodies ? detail.bodies : []}
+          emptyText="这个事件没有额外内容，只记录它发生过。"
+          facts={detail.facts}
+          onOpenArtifact={onOpenArtifact}
+        />
         <details className="aw-step-raw">
           <summary>原始事件</summary>
           <div className="aw-timeline-event-meta">

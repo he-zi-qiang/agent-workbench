@@ -17,6 +17,7 @@ import type {
   CreateSessionResponse,
   CreateUploadResponse,
   DeploymentCapabilitiesResponse,
+  DirectoryEntryView,
   DirectoryListingResponse,
   DocumentPreview,
   DocumentVersion,
@@ -271,6 +272,23 @@ export async function browseDirectories(
       : `?path=${encodeURIComponent(options.path)}`;
   return apiRequest(identity, `/v1/projects/directories${query}`, {
     ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+}
+
+/**
+ * 在选择器正站着的那一层里新建一个空文件夹（ADR-074「选一个文件夹，或新建」）。
+ *
+ * `parent` 是服务端上一次列表回来的绝对路径，`name` 只是一段名字：两半分开发，
+ * 服务端做那一次拼接——客户端不算路径，和 `browseDirectories` 同一条规矩
+ * （ADR-072）。回来的是一条和列表里一模一样的条目，下一次请求就用它的 `path`。
+ */
+export async function createDirectory(
+  identity: PrincipalIdentity,
+  options: { parent: string; name: string },
+): Promise<DirectoryEntryView> {
+  return apiRequest(identity, "/v1/projects/directories", {
+    method: "POST",
+    body: { parent: options.parent, name: options.name },
   });
 }
 

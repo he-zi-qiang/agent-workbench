@@ -34,12 +34,21 @@ from agent_workbench.adapters.concurrency.call_runner import (
     BlockingCallRunner,
     offload,
 )
-from agent_workbench.domain.project_files import ProjectPathError
+from agent_workbench.domain.project_files import (
+    DirectoryExistsError,
+    ProjectPathError,
+    normalize_segment,
+)
 from agent_workbench.ports.project_files import (
     MAX_BROWSE_ENTRIES,
     DirectoryEntry,
     DirectoryListing,
 )
+
+#: How long one directory name may be, in bytes of UTF-8. 255 is the ceiling
+#: on every filesystem this runs against (APFS, ext4, NTFS); refusing here
+#: turns an ``OSError: File name too long`` into a sentence the picker can show.
+MAX_DIRECTORY_NAME_BYTES = 255
 
 
 class FilesystemDirectoryBrowser:
@@ -132,5 +141,58 @@ class FilesystemDirectoryBrowser:
 
         return await offload(self._runner, work, name="project_files.browse")
 
+    async def create(self, parent: str, name: str) -> DirectoryEntry:
+        """One empty directory, and nothing under it.
 
-__all__ = ["FilesystemDirectoryBrowser"]
+        The checks are lexical first and the disk last, in the same order the
+        module docstring lists its bounds: a name that is not one segment is
+        refused before ``mkdir`` is ever called, so no path this method builds
+        can point anywhere but directly inside ``parent``. ``exist_ok=False``
+        is the create-only half -- a folder that is already there is reported
+        as its own error class so the picker can walk into it rather than say
+        "bad request" about a name that is perfectly good.
+        """
+
+        def work() -> DirectoryEntry:
+            segment = normalize_segment(name.strip())
+            if segment == "":
+                raise ProjectPathError("a folder needs a name")
+            if segment in {".", ".."}:
+                raise ProjectPathError(f"not a folder name: {segment!r}")
+            # Both separators, whatever the host: a backslash is a legal
+            # character in an ext4 name and a separator on NTFS, and the picker
+            # cannot know which disk the process is on. Refusing both keeps the
+            # rule the same on every platform this ships to (ADR-0108/0109).
+            if "/" in segment or "\\" in segment or "\0" in segment:
+                raise ProjectPathError(
+                    f"a folder name cannot contain a path separator: {segment!r}"
+                )
+            if len(segment.encode("utf-8")) > MAX_DIRECTORY_NAME_BYTES:
+                raise ProjectPathError("that folder name is too long")
+
+            raw = parent or self.home()
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                raise ProjectPathError(
+                    f"relative paths are not allowed; use an absolute path: {raw!r}"
+                )
+            resolved = candidate.resolve()
+            if not resolved.is_dir():
+                raise ProjectPathError(f"not a directory: {resolved}")
+
+            target = resolved / segment
+            try:
+                target.mkdir(exist_ok=False)
+            except FileExistsError as error:
+                raise DirectoryExistsError(f"already exists: {target}") from error
+            except PermissionError as error:
+                # The same shape as a directory that cannot be read: from the
+                # person's side nothing went wrong, they picked a place that
+                # is not theirs to write in.
+                raise ProjectPathError(f"not writable: {resolved}") from error
+            return DirectoryEntry(name=segment, path=str(target))
+
+        return await offload(self._runner, work, name="project_files.create")
+
+
+__all__ = ["MAX_DIRECTORY_NAME_BYTES", "FilesystemDirectoryBrowser"]

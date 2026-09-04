@@ -17,7 +17,7 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import { AppShell } from "./AppShell";
 import { IdentityProvider } from "./IdentityContext";
-import { THEME_STORAGE_KEY, ThemeProvider } from "./ThemeContext";
+import { ThemeProvider } from "./ThemeContext";
 import {
   useWorkspaceSidebar,
   WorkspaceSidebarPortal,
@@ -604,7 +604,7 @@ describe("AppShell quick switcher", () => {
   });
 });
 
-describe("AppShell theme control", () => {
+describe("AppShell 更多面板里没有第二个主题开关", () => {
   function mounted() {
     return render(
       <ThemeProvider>
@@ -626,77 +626,25 @@ describe("AppShell theme control", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
-  async function openThemeMenu(user: ReturnType<typeof userEvent.setup>) {
+  it("主题只在设置的「外观」里改，更多面板不再单列一行", async () => {
+    const user = userEvent.setup();
+    mounted();
+
+    // 此前这里有一颗「主题：跟随系统」循环三档的按钮，而设置面板的「外观」已经
+    // 把三档并排画出来了——同一个开关两个入口、两种形状，读成的是重复。
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
     await user.click(rail.getByRole("button", { name: "更多" }));
-    return within(screen.getByRole("dialog", { name: "更多页面" }));
-  }
+    const more = within(screen.getByRole("dialog", { name: "更多页面" }));
+    expect(more.queryByRole("button", { name: /^主题/ })).toBeNull();
 
-  it("starts on 跟随系统 and writes no data-theme for it", async () => {
-    const user = userEvent.setup();
-    mounted();
-
-    const more = await openThemeMenu(user);
-    expect(
-      more.getByRole("button", { name: "主题：跟随系统" }),
-    ).toBeInTheDocument();
-    // 跟随系统这一档的做法是**不写属性**，把决定权留给 CSS 的
-    // `color-scheme: light dark`。写一个 data-theme="system" 也能让按钮显示对，
-    // 但 tokens.css 那两条覆盖规则选的是 light/dark，属性会变成一个没人读的字符串
-    // ——而没人读的状态迟早会和真正生效的那个分叉。
-    expect(document.documentElement).not.toHaveAttribute("data-theme");
-  });
-
-  it("cycles system → light → dark → system, and the attribute follows", async () => {
-    const user = userEvent.setup();
-    mounted();
-
-    const more = await openThemeMenu(user);
-    await user.click(more.getByRole("button", { name: "主题：跟随系统" }));
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-
-    await user.click(more.getByRole("button", { name: "主题：浅色" }));
+    await user.click(more.getByRole("button", { name: "设置" }));
+    const settings = within(screen.getByRole("dialog", { name: "设置" }));
+    await user.click(settings.getByRole("button", { name: /外观/ }));
+    await user.click(settings.getByRole("radio", { name: "深色" }));
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-
-    // 回到 system 时属性要被**移除**，不是留一个旧值。留着的话，用户选回
-    // 「跟随系统」之后系统再切深浅，界面不会跟着动。
-    await user.click(more.getByRole("button", { name: "主题：深色" }));
-    expect(document.documentElement).not.toHaveAttribute("data-theme");
   });
 
-  it("survives a reload", async () => {
-    const user = userEvent.setup();
-    const first = mounted();
-
-    const firstMore = await openThemeMenu(user);
-    await user.click(firstMore.getByRole("button", { name: "主题：跟随系统" }));
-    first.unmount();
-    document.documentElement.removeAttribute("data-theme");
-
-    mounted();
-    const secondMore = await openThemeMenu(user);
-    expect(
-      secondMore.getByRole("button", { name: "主题：浅色" }),
-    ).toBeInTheDocument();
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-  });
-
-  it("ignores a stored value that is no longer one of the three", async () => {
-    const user = userEvent.setup();
-    // 手写进 localStorage 的旧值/脏值。落回第一档，而不是把它当成属性写到
-    // <html> 上——后者会得到一个 CSS 里没有对应规则的主题，界面按浅色渲染而
-    // 按钮显示着那个不存在的名字。
-    localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify("solarized"));
-    mounted();
-
-    const more = await openThemeMenu(user);
-    expect(
-      more.getByRole("button", { name: "主题：跟随系统" }),
-    ).toBeInTheDocument();
-    expect(document.documentElement).not.toHaveAttribute("data-theme");
-  });
-
-  it("reaches the theme from mobile, where the rail is hidden", async () => {
+  it("窄屏也能到主题：更多 → 设置 → 外观", async () => {
     const user = userEvent.setup();
     mounted();
 
@@ -707,15 +655,9 @@ describe("AppShell theme control", () => {
       ),
     );
     const more = within(screen.getByRole("dialog", { name: "更多页面" }));
-    await user.click(more.getByRole("button", { name: "主题：跟随系统" }));
-
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-    // 面板不关：连点三下看三档，比每点一次都要重新打开「更多」合理。
-    expect(
-      screen.getByRole("dialog", { name: "更多页面" }),
-    ).toBeInTheDocument();
-    expect(
-      more.getByRole("button", { name: "主题：浅色" }),
-    ).toBeInTheDocument();
+    await user.click(more.getByRole("button", { name: "设置" }));
+    const settings = within(screen.getByRole("dialog", { name: "设置" }));
+    await user.click(settings.getByRole("button", { name: /外观/ }));
+    expect(settings.getByRole("radio", { name: "浅色" })).toBeInTheDocument();
   });
 });

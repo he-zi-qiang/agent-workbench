@@ -567,3 +567,78 @@ describe("buildTurnBlocks", () => {
     expect(blocks[0]?.steps).toEqual([]);
   });
 });
+
+
+describe("buildTurnBlocks：没跑完的那一轮为什么停", () => {
+  it("失败的运行带着错误码和服务端那句话", () => {
+    const events = [
+      event("run_a", "RunStarted"),
+      event("run_a", "RunFailed", {
+        stop_reason: "error",
+        error: {
+          code: "provider_error",
+          message: "the provider rejected the request with HTTP 400",
+          retryable: false,
+        },
+      }),
+    ];
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events,
+      running: false,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+
+    // 此前这一轮只有指令和一行 0 → 0 的脚注，什么也没说。
+    expect(blocks[0]?.stop).toEqual({
+      kind: "failed",
+      reason: "error",
+      code: "provider_error",
+      message: "the provider rejected the request with HTTP 400",
+    });
+  });
+
+  it("撞了上限的运行是 ceiling，正常完成的是 null", () => {
+    const stopped = buildTurnBlocks({
+      messages: said("一"),
+      events: [
+        event("run_a", "RunStarted"),
+        event("run_a", "RunCompleted", { stop_reason: "deadline" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+    expect(stopped.blocks[0]?.stop).toEqual({
+      kind: "ceiling",
+      reason: "deadline",
+      code: null,
+      message: null,
+    });
+
+    const fine = buildTurnBlocks({
+      messages: said("一", "报告"),
+      events: [
+        event("run_a", "RunStarted"),
+        event("run_a", "RunCompleted", { stop_reason: "completed" }),
+      ],
+      running: false,
+      pendingInstruction: null,
+      liveCallId: "",
+    });
+    // 成功靠不说话来说。
+    expect(fine.blocks[0]?.stop).toBeNull();
+  });
+
+  it("还在跑的那一轮没有终局，也就没有这一行", () => {
+    const { blocks } = buildTurnBlocks({
+      messages: said("一"),
+      events: [event("run_a", "RunStarted")],
+      running: true,
+      pendingInstruction: "二",
+      liveCallId: "",
+    });
+    expect(blocks.map((block) => block.stop)).toEqual([null, null]);
+  });
+});

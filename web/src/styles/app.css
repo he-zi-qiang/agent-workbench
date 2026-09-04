@@ -243,6 +243,15 @@ a {
   line-height: 1.45;
 }
 
+/* 桌面端 rail 上已经有的那一行（知识库），这个面板里不再画第二遍。761 是
+   rail 出现的那条断点（`.aw-global-rail` 那一组），两边必须是同一个数：宽一
+   像素就会出现「两处都没有」的宽度。 */
+@media (min-width: 761px) {
+  .aw-mobile-more-link.is-mobile-only {
+    display: none;
+  }
+}
+
 /* --- 全局快速跳转 -------------------------------------------------------
  *
  * rail 告诉人「这里有哪些大区」，这个面板回答另一个问题：「我知道要去哪，怎样
@@ -3419,6 +3428,55 @@ pre {
   color: var(--aw-danger);
 }
 
+/* 没成的那一句，展开之后第一行。红色，因为它是读者点开这一行的理由。 */
+.aw-step-failure {
+  margin: 6px 0 2px 21px;
+  color: var(--aw-danger);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* 一步作为一件事的正文：事实、参数、返回。缩进到标题文字下面，和它底下那层
+   事件记录对齐。 */
+.aw-step-group-detail {
+  display: grid;
+  margin: 6px 0 4px 21px;
+  gap: 10px;
+}
+
+.aw-step-group-detail:empty {
+  display: none;
+}
+
+/* 簿记那五条，折在正文底下。摘要比正文再轻一档：它是给核对的人的，不是给
+   读故事的人的。 */
+.aw-step-events {
+  margin: 2px 0 4px 21px;
+}
+
+.aw-step-events > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--aw-text-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-step-events > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-step-events[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-step-events > .aw-stream-events {
+  margin-top: 4px;
+}
+
 .aw-step-group.is-running .aw-step-group-outcome {
   color: var(--aw-accent);
 }
@@ -3906,6 +3964,97 @@ pre {
    re-wrapping a structure destroys the shape that made it worth showing. */
 .aw-step-pre.is-json {
   white-space: pre;
+}
+
+/* --- JSON 按形状画（`JsonView`） --------------------------------------------
+ *
+ * 一个对象是「键 → 值」两列，键等宽、淡色、不换行；值占剩下的宽度，里头一段带
+ * 换行的字符串是一块保留换行的正文（`.aw-json-text`），不是一行 `\n`。嵌套往里
+ * 缩一层，用一条淡竖线说「这是上一层那个键的内容」。 */
+.aw-step-json {
+  max-height: 420px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--aw-panel-strong);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.aw-json {
+  display: grid;
+  margin: 0;
+  gap: 3px 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.aw-json-row {
+  display: contents;
+}
+
+.aw-json dt {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.aw-json dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 嵌套的那一层：缩进，加一条淡线。 */
+.aw-json dd > .aw-json,
+.aw-json dd > .aw-json-list {
+  margin-top: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--aw-border);
+}
+
+.aw-json-list {
+  display: grid;
+  margin: 0;
+  padding-left: 18px;
+  gap: 3px;
+}
+
+.aw-json-inline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.aw-json-string {
+  color: var(--aw-text);
+}
+
+.aw-json-scalar {
+  color: var(--aw-accent);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+.aw-json-null {
+  color: var(--aw-text-muted);
+  font-family: var(--aw-mono);
+  font-size: 11px;
+}
+
+/* 一段带换行的字符串——通常是一个文件的正文、一段脚本、一份返回。保留换行、
+   自动折行、太长就自己滚：它是这份视图里唯一真正长的东西。 */
+.aw-json-text {
+  max-height: 280px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 5px;
+  background: var(--aw-panel);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .aw-step-artifact {
@@ -4851,6 +5000,80 @@ pre {
   color: var(--aw-danger);
 }
 
+/* --- 动作行展开之后 --------------------------------------------------------
+ *
+ * 动作行现在是一个 `<details>` 的 `<summary>`：位置、字号、行高一个都没动，多
+ * 的只有行首那枚小三角。展开之后是这件事的正文——参数、返回、没成是为什么——
+ * 此前这些只在整轮的「原始事件」那份 JSON 里，读者要从几千行里找。 */
+.aw-code-action-fold > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-code-action-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-code-action-fold > summary:hover {
+  background: var(--aw-panel-soft);
+}
+
+.aw-code-action-fold[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-code-action-body {
+  display: grid;
+  margin: 2px 0 6px;
+  padding: 0 8px 0 36px;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.aw-code-action-body .aw-step-failure {
+  margin: 0;
+}
+
+/* 这一轮为什么没跑完。和报告同一个位置、同一个缩进，左边那道线换成危险色：
+   它替的是那份没写出来的报告。 */
+.aw-code-stop {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--aw-danger);
+  color: var(--aw-text-soft);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.aw-code-stop.is-ceiling,
+.aw-code-stop.is-cancelled {
+  border-left-color: var(--aw-warning);
+}
+
+/* 整轮的事件记录：一条一行、每条可展开，不再是一整份 JSON。 */
+.aw-code-raw > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.aw-code-raw > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-code-raw[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-code-raw > .aw-stream-events {
+  margin-top: 6px;
+}
+
 .aw-code-action.is-denied .aw-code-action-title,
 .aw-code-action.is-denied .aw-code-action-outcome {
   color: var(--aw-warning);
@@ -5053,22 +5276,12 @@ p.aw-code-step-thought {
 .aw-code-raw {
   margin-top: 8px;
   padding-left: 8px;
-  /* 这一折里的 <pre> 是一轮的原始事件，一行 JSON 可以有几万像素宽。它自己
-   * `overflow: auto`，但滚动容器的固有宽度仍然是最长那一行——于是它把整条
-   * `<li>` 撑到实测 1622px（栏宽 576），转录右边三分之二被裁掉，思考摘要和
-   * 代码块都在句子中间断掉，看起来像是它们不会换行。`contain: inline-size`
+  /* 这一折里每条事件底下仍有一个原始载荷的 <pre>，一行 JSON 可以有几万像素宽。
+   * 它自己 `overflow: auto`，但滚动容器的固有宽度仍然是最长那一行——于是它把
+   * 整条 `<li>` 撑到实测 1622px（栏宽 576），转录右边三分之二被裁掉，思考摘要
+   * 和代码块都在句子中间断掉，看起来像是它们不会换行。`contain: inline-size`
    * 让这一折的固有宽度不由内容决定，它拿到栏宽，滚动条回到 <pre> 上。 */
   contain: inline-size;
-}
-
-.aw-code-raw pre {
-  max-height: 320px;
-  margin: 6px 0 0;
-  padding: 10px 12px;
-  overflow: auto;
-  border-radius: 9px;
-  background: var(--aw-panel-soft);
-  font-size: 11px;
 }
 
 /* --- 待批准 --- */
@@ -7176,6 +7389,109 @@ button.aw-folder-picker-row {
 .aw-folder-picker-hint {
   margin-right: auto;
   color: var(--aw-text-muted);
+  font-size: 11.5px;
+}
+
+/* 页脚左端那颗「新建文件夹」。和「取消」同一档边框，但带图标、字重略高：它是
+   这一栏里唯一会**造出东西**的按钮，不该和「什么也不做」长得一模一样。 */
+.aw-folder-picker-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+}
+
+.aw-folder-picker-add:disabled {
+  opacity: 0.55;
+}
+
+/* 新建那一行长在列表顶上，和条目行同一个高度、同一个内边距：它建的东西下一
+   秒就会出现在这份列表里，所以它现在就该看起来像列表里的一行。 */
+.aw-folder-picker-new {
+  display: flex;
+  align-items: center;
+  margin: 2px 4px 4px;
+  padding: 4px 6px 4px 10px;
+  gap: 8px;
+  border: 1px solid var(--aw-accent);
+  border-radius: var(--aw-radius-sm);
+  background: var(--aw-panel);
+  color: var(--aw-text-soft);
+}
+
+.aw-folder-picker-new input {
+  min-width: 0;
+  flex: 1;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.aw-folder-picker-new input:focus {
+  outline: none;
+}
+
+.aw-folder-picker-create {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--aw-accent);
+  border-radius: var(--aw-radius-sm);
+  background: var(--aw-accent);
+  color: var(--aw-accent-on);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.aw-folder-picker-create:disabled {
+  border-color: var(--aw-border);
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-folder-picker-new-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-text-muted);
+}
+
+.aw-folder-picker-new-close:hover:not(:disabled) {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+/* 列表末尾那行「还有 N 个隐藏文件夹 · 显示」。和条目行同一个左内边距，字更小
+   更淡：它是列表的附注，不是一个条目。 */
+.aw-folder-picker-hidden {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--aw-radius-sm);
+  background: transparent;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.aw-folder-picker-hidden:hover {
+  background: var(--aw-panel-soft);
+  color: var(--aw-text);
+}
+
+/* 名字不对或建不成时的那一句，贴在输入行下面、列表上面。 */
+.aw-folder-picker-problem {
+  margin: 0 4px 6px;
+  padding: 0 10px;
+  color: var(--aw-danger);
   font-size: 11.5px;
 }
 
@@ -9292,13 +9608,16 @@ p.aw-code-step-thought {
 
 /* 设置 ---------------------------------------------------------------- */
 
-/* 比别的对话框宽得多，因为它里头要装下用量那张六列的表。780px 是那张表不换行
-   的最小宽度（实测），`min(..., 100%)` 让它在窄屏上退成整宽。高度按视口收，
-   内容自己滚：一个 1200px 高的对话框在 900px 的屏幕上会把「关闭」顶出去。 */
+/* 宽度按最宽的那一类定——密钥那一类的三行「标签在左、值在右」加上一条路径。
+   此前是 880px，为的是装下用量那张六列的表；那张表回到了它自己的页面上，
+   框也就不必再为它撑着。高度**固定**而不是 `max-height`：三类的内容高度不一
+   样，按内容定高的话每换一类整个框都会跳一下，而读者正盯着左栏那一列。 */
 .aw-settings {
   display: flex;
-  width: min(880px, 100%);
-  max-height: min(680px, 88vh);
+  width: min(760px, 100%);
+  /* 600 是密钥那一类不滚动的高度（实测：两段引子、三行状态、一个输入框、
+     一排按钮，加上下内边距）。三类里它最高，框按它定，另外两类留白。 */
+  height: min(600px, 88vh);
   padding: 0;
   flex-direction: column;
   overflow: hidden;
@@ -9492,18 +9811,6 @@ p.aw-code-step-thought {
   color: var(--aw-text-soft);
   font-size: 12.5px;
   text-align: right;
-}
-
-/* 用量和运行状态这两块面本来是整页的，进到对话框里要把它们的外边距收掉——
-   页面上那圈留白是页面的，不是它们的。 */
-.aw-settings-pane .aw-usage-page,
-.aw-settings-pane .aw-page-header {
-  padding: 0;
-}
-
-.aw-settings-pane .aw-usage-header,
-.aw-settings-pane .aw-page-header {
-  margin-bottom: 14px;
 }
 
 @media (max-width: 720px) {

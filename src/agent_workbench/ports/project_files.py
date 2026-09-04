@@ -367,6 +367,22 @@ class DirectoryBrowser(Protocol):
 
         ...
 
+    async def create(self, parent: str, name: str) -> DirectoryEntry:
+        """Make one empty directory called ``name`` inside ``parent``.
+
+        The one write this port does, and it is the write the picker's own
+        contract needs: ADR-074 says the start screen is "choose a folder, or
+        make one", and starting in a fresh empty folder is the ordinary way to
+        begin a piece of work. Everything the module docstring refuses still
+        holds -- no file is read, no file is listed, nothing is created *under*
+        the new directory. ``name`` is one path segment: a slash, ``.`` or
+        ``..`` is refused as ``ProjectPathError`` before anything touches the
+        disk, and a name already taken raises ``DirectoryExistsError`` so the
+        route can answer 409 rather than 400.
+        """
+
+        ...
+
 
 __all__ = [
     "ALWAYS_SKIPPED_DIRECTORIES",

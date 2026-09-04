@@ -720,10 +720,16 @@ describe("WorkPage task submission", () => {
     const folded = matches[matches.length - 1] as HTMLElement;
     expect(folded).toBeVisible();
 
-    // And the events are still underneath it, one click further in. The fold
-    // decides what the line says; it never decides what may be seen.
+    // And the events are still underneath it, two clicks further in. Opening
+    // the step shows the *thing it did* -- arguments, return, why it failed --
+    // and the five lifecycle events it emitted doing it sit under one more
+    // fold, 事件记录. The fold decides what the line says; it never decides
+    // what may be seen.
     expect(step).not.toBeVisible();
     await user.click(folded);
+    expect(step).not.toBeVisible();
+    const group = folded.closest("details.aw-step-group") as HTMLElement;
+    await user.click(within(group).getByText(/^事件记录 · \d+ 条$/));
     expect(step).toBeVisible();
 
     // The file is in the rail, named for what it is, without hunting for the

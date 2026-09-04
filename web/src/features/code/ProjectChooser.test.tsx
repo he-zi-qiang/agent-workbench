@@ -3,7 +3,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiError,
   browseDirectories,
+  createDirectory,
   createProjectAtDirectory,
   listProjects,
 } from "../../api/client";
@@ -13,7 +15,17 @@ import { ProjectChooser } from "./ProjectChooser";
 vi.mock("../../api/client", () => ({
   listProjects: vi.fn(),
   browseDirectories: vi.fn(),
+  createDirectory: vi.fn(),
   createProjectAtDirectory: vi.fn(),
+  // `FolderPicker` 用 instanceof 认 409，所以这个类得是真的，不能是 `vi.fn()`。
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
 }));
 
 function project(overrides: Record<string, unknown> = {}) {
@@ -176,6 +188,96 @@ describe("ProjectChooser", () => {
     await user.click(await screen.findByRole("button", { name: "取消" }));
 
     expect(await screen.findByText("demo")).toBeInTheDocument();
+  });
+
+  it("can make a new folder and lands inside it, with 就用这一层 focused", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(createDirectory).mockResolvedValue({
+      name: "fresh",
+      path: "/Users/alice/fresh",
+    });
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+    await user.click(await screen.findByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByLabelText("新文件夹的名字"), "fresh{Enter}");
+
+    await waitFor(() => {
+      // 两半分开发：`parent` 是服务端刚回来的那一层，`name` 只是名字。客户端
+      // 不拼路径（ADR-072）。
+      expect(vi.mocked(createDirectory).mock.calls[0]?.[1]).toEqual({
+        parent: "/Users/alice",
+        name: "fresh",
+      });
+    });
+    // 建好走进去，而不是直接选中：选中仍然只有一种发生方式。
+    await waitFor(() => {
+      expect(vi.mocked(browseDirectories).mock.calls.at(-1)?.[1]).toMatchObject({
+        path: "/Users/alice/fresh",
+      });
+    });
+    expect(vi.mocked(createProjectAtDirectory)).not.toHaveBeenCalled();
+    // 下一步九成是「就用它」，所以回车就够。
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "就用这一层" })).toHaveFocus();
+    });
+  });
+
+  it("refuses a name with a slash before asking the server", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+    await user.click(await screen.findByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByLabelText("新文件夹的名字"), "a/b{Enter}");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("斜杠");
+    expect(vi.mocked(createDirectory)).not.toHaveBeenCalled();
+  });
+
+  it("says a taken name is already there rather than calling it a bad request", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(createDirectory).mockRejectedValue(
+      new ApiError(409, "already exists: /Users/alice/demo"),
+    );
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+    await user.click(await screen.findByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByLabelText("新文件夹的名字"), "demo{Enter}");
+
+    // 409 不是「名字不对」，是「已经有了」——而已经有的那个就在列表里。
+    expect(await screen.findByText(/同名的文件夹/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^demo/ })).toBeInTheDocument();
+  });
+
+  it("hides dot-folders by default and counts them on one line", async () => {
+    const user = userEvent.setup();
+    vi.mocked(listProjects).mockResolvedValue({ projects: [] });
+    vi.mocked(browseDirectories).mockResolvedValue({
+      path: "/Users/alice",
+      parent: "/Users",
+      entries: [
+        { name: ".cache", path: "/Users/alice/.cache" },
+        { name: ".config", path: "/Users/alice/.config" },
+        { name: "demo", path: "/Users/alice/demo" },
+      ],
+      truncated: false,
+    });
+
+    mount();
+    await user.click(await screen.findByRole("button", { name: /选择一个文件夹/ }));
+
+    // 家目录里点开头的排在最前面，一屏都是它们；Finder 的选择框就是藏的。
+    expect(await screen.findByRole("button", { name: /^demo/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^\.cache/ })).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: /还有 2 个以 \. 开头的隐藏文件夹/ }),
+    );
+    expect(screen.getByRole("button", { name: /^\.cache/ })).toBeInTheDocument();
   });
 
   it("reports a refused folder instead of pretending it opened", async () => {

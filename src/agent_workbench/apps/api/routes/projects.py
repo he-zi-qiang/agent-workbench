@@ -23,8 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_workbench.apps.api.downloads import content_disposition
 from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.identifiers import Identifier
-from agent_workbench.domain.project_files import ProjectPathError
+from agent_workbench.domain.project_files import (
+    DirectoryExistsError,
+    ProjectPathError,
+)
 from agent_workbench.ports.project_files import (
+    DirectoryEntry,
     DirectoryListing,
     ProjectEntryKind,
     ProjectFileContent,
@@ -122,6 +126,26 @@ class DirectoryListingResponse(BaseModel):
     truncated: bool
 
 
+class CreateDirectoryRequest(BaseModel):
+    """One new, empty folder inside a folder the picker is already showing.
+
+    ``parent`` is the absolute path the listing came back with -- the client
+    never joins paths itself (ADR-072), so it sends the two halves separately
+    and the server does the one join. ``name`` is a single segment; the
+    browser refuses anything else before touching the disk.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent: str = Field(min_length=1, max_length=2048)
+    #: 255 *characters* here, which is only a coarse gate: the ceiling that
+    #: matters is 255 UTF-8 *bytes*, and the browser measures that one (a name
+    #: of 255 CJK characters passes this field and is refused there with the
+    #: same 400). This bound exists so a pathological request is rejected
+    #: before it reaches the thread pool, not to be the rule.
+    name: str = Field(min_length=1, max_length=255)
+
+
 class WriteProjectFileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -195,6 +219,41 @@ async def browse_directories(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
         ) from error
     return _directory_view(listing)
+
+
+@router.post(
+    "/directories",
+    response_model=DirectoryEntryView,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_directory(
+    body: CreateDirectoryRequest, request: Request
+) -> DirectoryEntryView:
+    """Make an empty folder, so the picker can offer what ADR-074 promised.
+
+    Two refusals with two codes, decided by type rather than by reading the
+    message: a name that is not one segment (or a parent that is not a
+    directory) is 400 and the person fixes the request; a name already taken
+    is 409, and the honest next step is to walk into that folder, which the
+    picker can only offer if it can tell the two apart.
+    """
+
+    dependencies = dependencies_of(request)
+    try:
+        entry = await dependencies.projects.create_directory(
+            dependencies.principals.resolve(request),
+            parent=body.parent,
+            name=body.name,
+        )
+    except DirectoryExistsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(error)
+        ) from error
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    return _entry_view(entry)
 
 
 @router.get("/{project_id}", response_model=ProjectView)
@@ -531,6 +590,10 @@ def _view(record: ProjectRecord) -> ProjectView:
         archived_at=record.archived_at,
         root_path=record.root_path,
     )
+
+
+def _entry_view(entry: DirectoryEntry) -> DirectoryEntryView:
+    return DirectoryEntryView(name=entry.name, path=entry.path)
 
 
 def _directory_view(listing: DirectoryListing) -> DirectoryListingResponse:
