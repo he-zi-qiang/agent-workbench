@@ -8,7 +8,7 @@ import logging
 import signal
 import sys
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from agent_workbench.apps.ingestion_worker.composition import (
     IngestionBackendUnavailableError,
@@ -53,7 +53,10 @@ async def serve(*, demo: bool) -> None:
     )
     try:
         await dependencies.startup()
-        await runner.run_forever(stop)
+        # Same readout the Task Worker writes (ADR-0110); same fail-soft rule.
+        presence = dependencies.presence
+        async with presence if presence is not None else nullcontext():
+            await runner.run_forever(stop)
     finally:
         await dependencies.dispose()
 

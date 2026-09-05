@@ -35,12 +35,14 @@ from agent_workbench.adapters.memory import (
     InMemoryConversationStore,
     InMemoryEventLog,
     InMemoryProjectStore,
+    InMemoryWorkerPresenceStore,
 )
 from agent_workbench.adapters.persistence import (
     PostgresChatReleaseCoordinator,
     PostgresConversationStore,
     PostgresEventLog,
     PostgresProjectStore,
+    PostgresWorkerPresenceStore,
     create_query_engine,
 )
 from agent_workbench.ports.artifact_store import ArtifactStore
@@ -641,3 +643,35 @@ def projects(request: pytest.FixtureRequest) -> StoreHarness:
     if dsn is None:
         pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
     return StoreHarness(name="postgres", factory=_postgres_projects(dsn))
+
+
+@asynccontextmanager
+async def _memory_worker_presence() -> AsyncIterator[Any]:
+    yield InMemoryWorkerPresenceStore()
+
+
+def _postgres_worker_presence(dsn: str) -> Callable[[], Any]:
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[Any]:
+        engine = create_query_engine(dsn, application_name="agent-workbench-tests")
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(text("TRUNCATE worker_presence"))
+            yield PostgresWorkerPresenceStore(engine)
+        finally:
+            await engine.dispose()
+
+    return factory
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def worker_presence(request: pytest.FixtureRequest) -> StoreHarness:
+    """One presence contract, both stores (ADR-0110)."""
+
+    if request.param == "memory":
+        return StoreHarness(name="memory", factory=_memory_worker_presence)
+
+    dsn = _test_dsn()
+    if dsn is None:
+        pytest.skip(f"{TEST_DSN_ENV_VAR} is not set")
+    return StoreHarness(name="postgres", factory=_postgres_worker_presence(dsn))

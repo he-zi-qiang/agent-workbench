@@ -1,4 +1,4 @@
-import { AlertTriangle, LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, ChevronRight, LoaderCircle, Plus } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import type { ApprovalStatus, TaskStatus } from "../api/types";
 
@@ -196,6 +196,39 @@ export function SidebarAction({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * 第三层：工程说明。ADR、协议字段、门禁规则和设计理由折在这里。
+ *
+ * 2026-09-04 的评审把「产品操作与工程原理处于同一阅读层」列为最高优先级之一：
+ * Computer 页首屏讲四道门禁，System 页首屏解释 API 能证明什么。这些内容有工程
+ * 价值——面试时要主动讲——但第一次打开的人先要知道现在什么状态、下一步按哪里。
+ * 于是每页分三层：第一层状态与动作，第二层证据与详情，第三层就是这个 `<details>`。
+ *
+ * 原生 `<details>` 而不是自己管一份 state：折起来的内容仍在 DOM 里，按文字断言
+ * 的测试照旧能找到它，浏览器的页内查找也能搜到它——折叠是「先别看」，不是「没有」。
+ */
+export function EngineeringNotes({
+  summary,
+  hint,
+  open,
+  children,
+}: PropsWithChildren<{
+  summary: string;
+  hint?: string;
+  open?: boolean;
+}>) {
+  return (
+    <details className="aw-engineering-notes" open={open}>
+      <summary>
+        <ChevronRight aria-hidden="true" className="aw-step-caret" size={14} />
+        <strong>{summary}</strong>
+        {hint === undefined ? null : <small>{hint}</small>}
+      </summary>
+      <div className="aw-engineering-notes-body">{children}</div>
+    </details>
   );
 }
 

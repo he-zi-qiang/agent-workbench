@@ -207,6 +207,21 @@ export interface MessageView {
   role: string;
   text: string;
   usage?: TurnUsageView | null;
+  /**
+   * 这条助手消息属于哪一轮。有它，历史里的引用才点得开——那条路是
+   * `turns/{turn_id}/citations/{chunk_id}`，每次重新授权（ADR-067）。
+   * 用户那一条、早于回合台账的旧行是 `null`。
+   *
+   * 三个字段都是可选的：同一个形状也给 Code 会话的 `/messages` 用，那条路上
+   * 没有回合台账，从不发这三个键。缺席和 `null` 在读的这一侧是同一件事。
+   */
+  turn_id?: Identifier | null;
+  /** 那一轮发布时的引用；只有 committed 的回合才有。 */
+  citations?: Citation[];
+  /**
+   * `null` 是「这里答不出」，`false` 才是「没查资料就答了」——前者不贴警告。
+   */
+  grounded?: boolean | null;
 }
 
 export interface HistoryResponse {
@@ -552,6 +567,35 @@ export interface DeploymentCapabilitiesResponse {
   capabilities: DeploymentCapability[];
 }
 
+/**
+ * 一个 Worker 进程最近一次关于自己的话（ADR-0110）。
+ *
+ * `fresh` 与 `seconds_since_heartbeat` 都是服务端按**它的**时钟算好的：浏览器的
+ * 时钟是第三个钟，控制台不拿它减。
+ */
+export interface WorkerPresenceView {
+  worker_id: string;
+  kind: "task" | "ingestion";
+  deployment: string;
+  /** 进程在装配时报上来的能力快照，按数据读，不据此决定任何事。 */
+  capabilities: Record<string, unknown>;
+  started_at: string;
+  heartbeat_at: string;
+  expires_at: string;
+  fresh: boolean;
+  seconds_since_heartbeat: number;
+}
+
+/**
+ * `available: false` 是「这个 API 看不见 Worker」（没有登记表的旧 API），不是
+ * 「没有 Worker」——两种在页面上必须长得不一样。
+ */
+export interface WorkersResponse {
+  available: boolean;
+  observed_at: string | null;
+  workers: WorkerPresenceView[];
+}
+
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface ApprovalView {
@@ -564,14 +608,19 @@ export interface ApprovalView {
 }
 
 /**
- * `GET /v1/approvals` has no client any more.
+ * One page of `GET /v1/approvals`.
  *
- * The endpoint is still served and still tested -- ADR-048 removed the console's
- * cross-task inbox, not the ability to answer -- but the answer now happens in
- * the Task that is waiting, and `getApproval` / `decideApproval` are what that
- * needs. A typed wrapper for a list nothing renders would be a wrapper that
- * drifts from the endpoint without anybody noticing.
+ * This client went away with ADR-048 (the cross-task inbox page was removed;
+ * the *decision* happens in the Task that is waiting) and is back for a
+ * narrower job: the rail's 待处理 entry, which only says *where to go*. It
+ * never decides -- `getApproval` / `decideApproval` on the Task page still do
+ * that -- so ADR-048's reason for deleting the page ("a queue that decides
+ * without the draft in view") does not apply to a list of links.
  */
+export interface ApprovalListResponse {
+  approvals: ApprovalView[];
+  cursor: string | null;
+}
 
 export interface TokenUsage {
   input_tokens?: number;
@@ -858,7 +907,18 @@ export interface ComputerSessionResponse {
   session: ComputerSession | null;
   /** 读不到的理由，读得到时是空串。 */
   detail: string;
+  /**
+   * **API 进程**跑在哪个平台上，粗分四档。
+   *
+   * 「怎么把屏幕控制服务器起来」这句提示按它分支，而不是按浏览器所在的系统：
+   * macOS 原生是 `scripts/dev.sh computer-server`，Windows 是 `scripts\computer.cmd`
+   * （ADR-0108），Compose 栈里 API 是个 Linux 容器、服务器却得在宿主机上起——
+   * 一个在 Mac 上看 Windows 那套栈的人，浏览器的系统是错的那个答案。
+   */
+  host_platform: HostPlatform;
 }
+
+export type HostPlatform = "darwin" | "win32" | "linux" | "other";
 
 export interface ComputerSession {
   service: string;

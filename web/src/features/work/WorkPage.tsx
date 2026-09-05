@@ -151,14 +151,17 @@ const WORK_STARTERS = [
   {
     title: "梳理资料并给出结论",
     prompt: "整理所选资料，提炼关键结论、待确认事项和下一步建议。",
+    outcome: "输入：所选知识库 → 产出：结论、待确认事项与下一步，附执行记录",
   },
   {
     title: "比较方案并生成报告",
     prompt: "比较几个可行方案的收益、成本和风险，并生成一份推荐报告。",
+    outcome: "输入：几个方案 → 产出：一份可下载的推荐报告，导出前会先问你",
   },
   {
     title: "拆解并执行复杂任务",
     prompt: "把这个目标拆成可执行步骤，逐步完成并保留过程与最终产物。",
+    outcome: "输入：一个目标 → 产出：分步执行记录与最终产物",
   },
 ] as const;
 /**
@@ -203,7 +206,34 @@ interface CreateTaskIntent {
   graph?: TaskGraphChoice;
   intent?: TaskIntent;
   idempotencyKey: string;
+  /**
+   * 这次提交是哪个失败任务的「按原输入重新提交」。
+   *
+   * 只在浏览器这一侧记着（`aw.work.retry-of.v1`），不进请求：服务端的 Task 没有
+   * 「上一次」这个字段，而重试本来就是一个新任务——它有新的 id、新的账、新的
+   * 事件流。这条链接存在的理由是 2026-09-04 评审第 4 条：重试之后页面看起来像
+   * 原地续跑，读者分不清自己在看哪一个。所以新任务头上写「由任务 X 重新提交
+   * 而来」，旧任务头上写「已重新提交为 Y」，两边都是链接。
+   */
+  retryOf?: string;
 }
+
+/** The fields the API takes, picked by name so `retryOf` and the key stay out. */
+function taskInputOf(intent: CreateTaskIntent) {
+  return {
+    objective: intent.objective,
+    maxRevisions: intent.maxRevisions,
+    wantsReport: intent.wantsReport,
+    ...(intent.knowledgeBaseId === undefined
+      ? {}
+      : { knowledgeBaseId: intent.knowledgeBaseId }),
+    ...(intent.graph === undefined ? {} : { graph: intent.graph }),
+    ...(intent.intent === undefined ? {} : { intent: intent.intent }),
+  };
+}
+
+/** 停止表单里预填的原因；后端要一句非空的理由记进任务记录，读者可以改。 */
+const DEFAULT_STOP_REASON = "在控制台手动停止";
 
 /**
  * The explicit overrides, living in 高级设置 (ADR-036).
@@ -548,6 +578,7 @@ export function WorkPage() {
       maxRevisions: input.max_revisions,
       wantsReport: input.wants_report,
       idempotencyKey: newIdempotencyKey("task"),
+      ...(selectedTaskId === undefined ? {} : { retryOf: selectedTaskId }),
       ...(input.knowledge_base_id === null
         ? {}
         : { knowledgeBaseId: input.knowledge_base_id }),
@@ -605,9 +636,9 @@ export function WorkPage() {
   }, [selectedTaskId]);
 
   const createMutation = useMutation({
-    mutationFn: ({ idempotencyKey, ...input }: CreateTaskIntent) =>
-      createTask(identity, input, idempotencyKey),
-    onSuccess: (task) => {
+    mutationFn: (intent: CreateTaskIntent) =>
+      createTask(identity, taskInputOf(intent), intent.idempotencyKey),
+    onSuccess: (task, intent) => {
       setObjective("");
       attachments.clear();
       setMaxRevisions("2");
@@ -622,6 +653,15 @@ export function WorkPage() {
       // for a task; it does not ask to be moved off whatever was opened while
       // the request was out. The new task is at the top of the list either
       // way, so nothing is lost by leaving them where they are.
+      const retriedFrom = intent.retryOf;
+      if (retriedFrom !== undefined) {
+        // A retry is a new Task, and the reader asked for it from the old
+        // one's page -- so go to the new one and say where it came from.
+        // Staying put is what made a retry look like the old run resuming.
+        setRetryLinks((held) => ({ ...held, [task.task_id]: retriedFrom }));
+        void navigate(`/work/${encodeURIComponent(task.task_id)}`);
+        return;
+      }
       if (shownTask.current === undefined) {
         void navigate(`/work/${encodeURIComponent(task.task_id)}`);
       }
@@ -635,6 +675,14 @@ export function WorkPage() {
   };
 
   const [cancelDraft, setCancelDraft] = useState({ taskId: "", reason: "" });
+  // 哪个任务的停止表单正开着。停止不再藏在「任务详情」折叠里的一个必填框后面
+  // （2026-09-04 评审第 4 条）：行动区里一颗「停止任务」，点了才出现这一行，
+  // 原因预填、可改。
+  const [stopFormFor, setStopFormFor] = useState<string | null>(null);
+  const [retryLinks, setRetryLinks] = useStoredState<Record<string, string>>(
+    "aw.work.retry-of.v1",
+    {},
+  );
   const cancelReason =
     cancelDraft.taskId === selectedTaskId ? cancelDraft.reason : "";
   const cancelMutation = useMutation({
@@ -642,6 +690,7 @@ export function WorkPage() {
       cancelTask(identity, taskId, reason),
     onSuccess: (task) => {
       setCancelDraft({ taskId: task.task_id, reason: "" });
+      setStopFormFor(null);
       // Keyed off the response, not off `taskQueryKey`. A pending mutation
       // takes the *latest* render's options -- `MutationObserver.setOptions`
       // pushes them in, and `Mutation.execute` reads `onSuccess` only after
@@ -957,6 +1006,90 @@ export function WorkPage() {
   const selectedTask = taskQuery.data;
   const canCancel =
     selectedTask !== undefined && CANCELLABLE_STATUSES.has(selectedTask.status);
+  // 过程折起来的两种情况：任务已经落定，或停在批准前——两种都不再有新事件。
+  const processFolded =
+    selectedTask !== undefined &&
+    (isSettledStatus(selectedTask.status) ||
+      selectedTask.status === "waiting_approval");
+  // 和 `RunFailure` 同一条规则：只有服务端说原因可重试的失败才给重新提交。
+  const retryable =
+    selectedTask !== undefined &&
+    isSettledStatus(selectedTask.status) &&
+    selectedTask.status !== "succeeded" &&
+    explainFailure(selectedTask.status_detail)?.retryable === true;
+  const retryOf =
+    selectedTask === undefined ? undefined : retryLinks[selectedTask.task_id];
+  const retriedAs =
+    selectedTask === undefined
+      ? undefined
+      : Object.keys(retryLinks).find(
+          (taskId) => retryLinks[taskId] === selectedTask.task_id,
+        );
+  const resultBlock =
+    selectedTask === undefined ? null : (
+      <TaskResult
+        // 永远是这次任务自己的产物。从文件栏点开的那个现在长在
+        // 右侧抽屉里，不再顶掉这一栏。
+        artifact={deliverable}
+        draftText={draftText}
+        identity={identity}
+        onDownload={(artifact) => downloadMutation.mutate(artifact)}
+        onRetry={
+          retryInput === null ? undefined : () => resubmit(retryInput)
+        }
+        status={selectedTask.status}
+        wantsReport={taskInputQuery.data?.wants_report ?? null}
+        {...(selectedTask.status_detail === null
+          ? {}
+          : { statusDetail: selectedTask.status_detail })}
+      />
+    );
+  const approvalBlock =
+    selectedTask === undefined ? null : (
+      <>
+        {approvalId !== null ? (
+          <ApprovalSection
+            approval={approvalQuery.data}
+            error={approvalQuery.error}
+            loading={approvalQuery.isPending}
+            notice={
+              approvalNotice?.approvalId === approvalId
+                ? approvalNotice.message
+                : null
+            }
+            onDecide={(decision) => {
+              const approval = approvalQuery.data;
+              if (approval === undefined) return;
+              setApprovalNotice(null);
+              approvalMutation.mutate({
+                approvalId,
+                decision,
+                decisionVersion: approval.decision_version,
+              });
+            }}
+            pending={
+              approvalMutation.isPending &&
+              approvalMutation.variables?.approvalId === approvalId
+            }
+            taskId={selectedTask.task_id}
+            taskStatus={selectedTask.status}
+          />
+        ) : null}
+        {approvalMutation.isError &&
+        approvalMutation.variables?.approvalId === approvalId &&
+        !(
+          approvalMutation.error instanceof ApiError &&
+          approvalMutation.error.status === 409
+        ) ? (
+          <ErrorNotice
+            message={errorMessage(
+              approvalMutation.error,
+              "提交审批决定失败",
+            )}
+          />
+        ) : null}
+      </>
+    );
   const createBusy = createMutation.isPending || triaging;
   const createTaskForm = (
     <form
@@ -978,7 +1111,7 @@ export function WorkPage() {
               <PanelLeft aria-hidden="true" size={18} />
             </IconButton>
           }
-          description="描述结果，Agent 会选择合适的执行方式并持续保存进度。"
+          description="说清要什么，你会得到文件和一份完整的执行记录；关键动作前它会停下来等你批准，中途关掉页面也能接着看。"
           title="想完成什么？"
         />
       </div>
@@ -1009,6 +1142,7 @@ export function WorkPage() {
           items={attachments.items}
           onRemove={attachments.remove}
           onRetry={attachments.retry}
+          targetName={attachments.targetName}
         />
         <div className="aw-create-task-bar">
           <AttachmentButton
@@ -1360,124 +1494,194 @@ export function WorkPage() {
               任务{formatStatus(selectedTask.status)}
             </p>
 
-            {/* The live process comes first while the task is unfolding. A
-                large document preview used to push the only explanation of
-                what the agent did several screens below the fold. */}
+            {/* 行动区：按状态回答「第一眼看见什么、主动作是什么」（2026-09-04
+                评审第 4 条那张表）。排队/运行中给停止，等待批准给去批准，失败
+                给按原输入重新提交和复制诊断，完成给下载。位置固定在标题下面，
+                不随下面哪一块先渲染而移动。 */}
+            <TaskActionBar
+              onCopyDiagnostics={() =>
+                copyDiagnostics(selectedTask, timeline.error)
+              }
+              onRetry={
+                retryable && retryInput !== null
+                  ? () => resubmit(retryInput)
+                  : undefined
+              }
+              onStop={
+                canCancel
+                  ? () => {
+                      setCancelDraft({
+                        taskId: selectedTask.task_id,
+                        reason: DEFAULT_STOP_REASON,
+                      });
+                      setStopFormFor(selectedTask.task_id);
+                    }
+                  : undefined
+              }
+              retriedAs={retriedAs}
+              retryOf={retryOf}
+              status={selectedTask.status}
+              stopOpen={stopFormFor === selectedTask.task_id}
+            />
+            {stopFormFor === selectedTask.task_id && canCancel ? (
+              <div aria-label="停止这个任务" className="aw-work-stop" role="group">
+                <label htmlFor="work-cancel-reason">
+                  停止原因（会记进任务记录，可以改）
+                </label>
+                <div className="aw-inline-form">
+                  <input
+                    id="work-cancel-reason"
+                    maxLength={1024}
+                    onChange={(event) =>
+                      setCancelDraft({
+                        taskId: selectedTask.task_id,
+                        reason: event.target.value,
+                      })
+                    }
+                    type="text"
+                    value={cancelReason}
+                  />
+                  <button
+                    className="aw-button is-danger"
+                    disabled={
+                      cancelMutation.isPending || cancelReason.trim() === ""
+                    }
+                    onClick={() =>
+                      cancelMutation.mutate({
+                        taskId: selectedTask.task_id,
+                        reason: cancelReason.trim(),
+                      })
+                    }
+                    type="button"
+                  >
+                    {cancelMutation.isPending ? "正在停止…" : "确认停止"}
+                  </button>
+                  <button
+                    className="aw-button is-ghost"
+                    onClick={() => setStopFormFor(null)}
+                    type="button"
+                  >
+                    不停了
+                  </button>
+                </div>
+                {cancelMutation.isError ? (
+                  <ErrorNotice
+                    message={errorMessage(cancelMutation.error, "停止任务失败")}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* 顺序按状态定，不再永远「过程 → 结果 → 审批」：
+                等待批准时决定在最前面，它下面是要决定的内容；已完成或失败时
+                结果在最前面，执行过程折成一行按需展开；只有还在跑的时候过程
+                才在最前面并持续同步——那时它就是最新的结果。
+                （2026-09-04 评审第 4 条：完成后突出结果、过程折为摘要。） */}
             <div className={`aw-work-body ${panelShown ? "has-output" : ""}`}>
               <div className="aw-work-run">
-                <div
-                  className={`aw-work-process${
-                    isSettledStatus(selectedTask.status) ? "" : " is-live"
-                  }`}
-                >
-                  <header className="aw-work-process-header">
-                    <div>
-                      <span aria-hidden="true" className="aw-work-process-pulse" />
+                {selectedTask.status === "waiting_approval" ? approvalBlock : null}
+                {processFolded ? resultBlock : null}
+                {processFolded ? (
+                  <details className="aw-work-fold aw-work-process-fold">
+                    <summary>
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="aw-step-caret"
+                        size={14}
+                      />
                       <strong>执行过程</strong>
+                      <small>
+                        {selectedTask.status === "waiting_approval"
+                          ? "停在批准前的记录"
+                          : "完整记录，按需展开"}
+                      </small>
+                    </summary>
+                    <div className="aw-work-process">
+                      <TaskStepStream
+                        lifecycle={lifecycle}
+                        loading={timeline.loading && timeline.events.length === 0}
+                        // Previewable files open in the reading column, same as a rail
+                        // click; only the kinds no viewer exists for still download.
+                        // "打开产物" that saved a file it could have shown was the bug.
+                        // No gate. The rail dropped its own version of this check and
+                        // wrote down why ("栏位不再预判"): sending an unpreviewable file
+                        // straight to a download was zero feedback for a click, and the
+                        // reading column already says what it cannot show. The step
+                        // stream kept the old behaviour, so the same .zip answered a
+                        // sentence in one place and a silent save in the other.
+                        onOpenArtifact={(artifact) => {
+                          if (selectedTaskId === undefined) return;
+                          setOpened({ taskId: selectedTaskId, artifact });
+                        }}
+                        delegations={delegations}
+                        onSelectRun={setSelectedRunId}
+                        agentsOpen={agentsOpen}
+                        onOpenAgents={() => {
+                          setAgentsOpen(true);
+                        }}
+                        runTree={runTree}
+                        streamIncomplete={timeline.skippedSequences.length > 0}
+                        selectedRunId={selectedRunId}
+                        stageEvents={stageEvents}
+                        status={selectedTask.status}
+                        taskEvents={taskEvents}
+                      />
+                      <TimelineGapNotice gaps={timelineGaps} />
+                      {timeline.error !== null ? (
+                        <ErrorNotice
+                          message={errorMessage(timeline.error, "读取执行过程失败")}
+                        />
+                      ) : null}
                     </div>
-                    <small>
-                      {isSettledStatus(selectedTask.status)
-                        ? "完整记录"
-                        : "按任务事件持续同步"}
-                    </small>
-                  </header>
-                  <TaskStepStream
-                    lifecycle={lifecycle}
-                    loading={timeline.loading && timeline.events.length === 0}
-                    // Previewable files open in the reading column, same as a rail
-                    // click; only the kinds no viewer exists for still download.
-                    // "打开产物" that saved a file it could have shown was the bug.
-                    // No gate. The rail dropped its own version of this check and
-                    // wrote down why ("栏位不再预判"): sending an unpreviewable file
-                    // straight to a download was zero feedback for a click, and the
-                    // reading column already says what it cannot show. The step
-                    // stream kept the old behaviour, so the same .zip answered a
-                    // sentence in one place and a silent save in the other.
-                    onOpenArtifact={(artifact) => {
-                      if (selectedTaskId === undefined) return;
-                      setOpened({ taskId: selectedTaskId, artifact });
-                    }}
-                    delegations={delegations}
-                    onSelectRun={setSelectedRunId}
-                    agentsOpen={agentsOpen}
-                    onOpenAgents={() => {
-                      setAgentsOpen(true);
-                    }}
-                    runTree={runTree}
-                    streamIncomplete={timeline.skippedSequences.length > 0}
-                    selectedRunId={selectedRunId}
-                    stageEvents={stageEvents}
-                    status={selectedTask.status}
-                    taskEvents={taskEvents}
-                  />
-                  <TimelineGapNotice gaps={timelineGaps} />
-                  {timeline.error !== null ? (
-                    <ErrorNotice
-                      message={errorMessage(timeline.error, "读取执行过程失败")}
+                  </details>
+                ) : (
+                  <div className="aw-work-process is-live">
+                    <header className="aw-work-process-header">
+                      <div>
+                        <span aria-hidden="true" className="aw-work-process-pulse" />
+                        <strong>执行过程</strong>
+                      </div>
+                      <small>按任务事件持续同步</small>
+                    </header>
+                    <TaskStepStream
+                      lifecycle={lifecycle}
+                      loading={timeline.loading && timeline.events.length === 0}
+                      // Previewable files open in the reading column, same as a rail
+                      // click; only the kinds no viewer exists for still download.
+                      // "打开产物" that saved a file it could have shown was the bug.
+                      // No gate. The rail dropped its own version of this check and
+                      // wrote down why ("栏位不再预判"): sending an unpreviewable file
+                      // straight to a download was zero feedback for a click, and the
+                      // reading column already says what it cannot show. The step
+                      // stream kept the old behaviour, so the same .zip answered a
+                      // sentence in one place and a silent save in the other.
+                      onOpenArtifact={(artifact) => {
+                        if (selectedTaskId === undefined) return;
+                        setOpened({ taskId: selectedTaskId, artifact });
+                      }}
+                      delegations={delegations}
+                      onSelectRun={setSelectedRunId}
+                      agentsOpen={agentsOpen}
+                      onOpenAgents={() => {
+                        setAgentsOpen(true);
+                      }}
+                      runTree={runTree}
+                      streamIncomplete={timeline.skippedSequences.length > 0}
+                      selectedRunId={selectedRunId}
+                      stageEvents={stageEvents}
+                      status={selectedTask.status}
+                      taskEvents={taskEvents}
                     />
-                  ) : null}
-                </div>
-
-                <TaskResult
-                  // 永远是这次任务自己的产物。从文件栏点开的那个现在长在
-                  // 右侧抽屉里，不再顶掉这一栏。
-                  artifact={deliverable}
-                  draftText={draftText}
-                  identity={identity}
-                  onDownload={(artifact) => downloadMutation.mutate(artifact)}
-                  onRetry={
-                    retryInput === null ? undefined : () => resubmit(retryInput)
-                  }
-                  status={selectedTask.status}
-                  wantsReport={taskInputQuery.data?.wants_report ?? null}
-                  {...(selectedTask.status_detail === null
-                    ? {}
-                    : { statusDetail: selectedTask.status_detail })}
-                />
-
-                {/* The decision, after the answer it is a decision about. */}
-                {approvalId !== null ? (
-                  <ApprovalSection
-                    approval={approvalQuery.data}
-                    error={approvalQuery.error}
-                    loading={approvalQuery.isPending}
-                    notice={
-                      approvalNotice?.approvalId === approvalId
-                        ? approvalNotice.message
-                        : null
-                    }
-                    onDecide={(decision) => {
-                      const approval = approvalQuery.data;
-                      if (approval === undefined) return;
-                      setApprovalNotice(null);
-                      approvalMutation.mutate({
-                        approvalId,
-                        decision,
-                        decisionVersion: approval.decision_version,
-                      });
-                    }}
-                    pending={
-                      approvalMutation.isPending &&
-                      approvalMutation.variables?.approvalId === approvalId
-                    }
-                    taskId={selectedTask.task_id}
-                    taskStatus={selectedTask.status}
-                  />
-                ) : null}
-                {approvalMutation.isError &&
-                approvalMutation.variables?.approvalId === approvalId &&
-                !(
-                  approvalMutation.error instanceof ApiError &&
-                  approvalMutation.error.status === 409
-                ) ? (
-                  <ErrorNotice
-                    message={errorMessage(
-                      approvalMutation.error,
-                      "提交审批决定失败",
-                    )}
-                  />
-                ) : null}
-
+                    <TimelineGapNotice gaps={timelineGaps} />
+                    {timeline.error !== null ? (
+                      <ErrorNotice
+                        message={errorMessage(timeline.error, "读取执行过程失败")}
+                      />
+                    ) : null}
+                  </div>
+                )}
+                {processFolded ? null : resultBlock}
+                {selectedTask.status === "waiting_approval" ? null : approvalBlock}
                 <details className="aw-work-fold">
                   <summary>
                     <ChevronRight
@@ -1551,52 +1755,6 @@ export function WorkPage() {
                         value={formatDateTime(selectedTask.updated_at)}
                       />
                     </div>
-                    {canCancel ? (
-                      <div className="aw-work-cancel">
-                        <label htmlFor="work-cancel-reason">取消这个任务</label>
-                        <div className="aw-inline-form">
-                          <input
-                            id="work-cancel-reason"
-                            maxLength={1024}
-                            onChange={(event) =>
-                              setCancelDraft({
-                                taskId: selectedTask.task_id,
-                                reason: event.target.value,
-                              })
-                            }
-                            placeholder="说明为什么取消"
-                            type="text"
-                            value={cancelReason}
-                          />
-                          <button
-                            className="aw-button is-danger"
-                            disabled={
-                              cancelMutation.isPending ||
-                              cancelReason.trim() === ""
-                            }
-                            onClick={() =>
-                              cancelMutation.mutate({
-                                taskId: selectedTask.task_id,
-                                reason: cancelReason.trim(),
-                              })
-                            }
-                            type="button"
-                          >
-                            {cancelMutation.isPending
-                              ? "正在取消…"
-                              : "取消任务"}
-                          </button>
-                        </div>
-                        {cancelMutation.isError ? (
-                          <ErrorNotice
-                            message={errorMessage(
-                              cancelMutation.error,
-                              "取消任务失败",
-                            )}
-                          />
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 </details>
               </div>
@@ -2466,19 +2624,154 @@ function RunFailure({
           {failure === null ? null : <small>{failure.text}</small>}
         </span>
       </div>
-      {failure?.retryable === true && onRetry !== undefined ? (
-        <div className="aw-result-retry">
-          <button
-            className="aw-button is-primary"
-            onClick={onRetry}
-            type="button"
-          >
-            用同样的目标再试一次
-          </button>
-        </div>
-      ) : null}
+      {/* 重试按钮此前长在这里。它搬去了标题下面的行动区（`TaskActionBar`）——
+          同一个动作两个入口，读者读成的是两个不同的动作。`onRetry` 留在签名上
+          只为让调用方不用改；这里不再消费它。 */}
+      {onRetry === undefined ? null : null}
     </>
   );
+}
+
+/**
+ * 标题下面那一行：这个任务此刻处在哪一步，以及主动作是什么。
+ *
+ * 2026-09-04 评审第 4 条那张表逐状态列了「第一眼看见什么」和「主动作」，这
+ * 个组件就是那张表。位置固定在标题下面：此前停止藏在「任务详情」折叠里、重试
+ * 在结果区底部、批准在过程之后——同样是被 Agent 打断，读者要到三个不同的地方
+ * 找动作。
+ *
+ * 「去批准」不滚动、只聚焦：`scrollIntoView` 在 jsdom 里不存在，而聚焦一个
+ * 屏幕外的按钮浏览器本来就会把它滚进来。
+ */
+function TaskActionBar({
+  onCopyDiagnostics,
+  onRetry,
+  onStop,
+  retriedAs,
+  retryOf,
+  status,
+  stopOpen,
+}: {
+  onCopyDiagnostics: () => Promise<void>;
+  onRetry: (() => void) | undefined;
+  onStop: (() => void) | undefined;
+  retriedAs: string | undefined;
+  retryOf: string | undefined;
+  status: TaskStatus;
+  stopOpen: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const failed = isSettledStatus(status) && status !== "succeeded";
+  return (
+    <div aria-label="任务操作" className="aw-work-actions" role="group">
+      <p className="aw-work-actions-lead">{actionLead(status)}</p>
+      <div className="aw-work-actions-buttons">
+        {onStop === undefined ? null : (
+          <button
+            className="aw-button is-danger is-ghost"
+            disabled={stopOpen}
+            onClick={onStop}
+            type="button"
+          >
+            停止任务
+          </button>
+        )}
+        {status === "waiting_approval" ? (
+          <button
+            className="aw-button is-primary"
+            onClick={() => {
+              document
+                .querySelector<HTMLElement>(".aw-approve-actions .is-primary")
+                ?.focus();
+            }}
+            type="button"
+          >
+            去批准
+          </button>
+        ) : null}
+        {onRetry === undefined ? null : (
+          <button className="aw-button is-primary" onClick={onRetry} type="button">
+            按原输入重新提交
+          </button>
+        )}
+        {/* 完成态不画「下载结果」：结果区就在这一行正下方，它自己带着那颗
+            下载键，而两颗同名的按钮读成的是两件事（同一条规矩见 `RunFailure`
+            上的注释）。行动区在完成态只说一句「结果在最前面」。 */}
+        {failed ? (
+          <button
+            className="aw-button is-ghost"
+            onClick={() => {
+              void onCopyDiagnostics().then(() => {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+            type="button"
+          >
+            {copied ? "已复制" : "复制诊断"}
+          </button>
+        ) : null}
+      </div>
+      {retryOf === undefined ? null : (
+        <p className="aw-work-actions-note">
+          由任务 <Link to={`/work/${encodeURIComponent(retryOf)}`}>{shortId(retryOf, 18)}</Link> 按原输入重新提交而来。这是一个新任务，不是原来那个继续跑。
+        </p>
+      )}
+      {retriedAs === undefined ? null : (
+        <p className="aw-work-actions-note">
+          已按原输入重新提交为任务 <Link to={`/work/${encodeURIComponent(retriedAs)}`}>{shortId(retriedAs, 18)}</Link>。
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** 每个状态第一眼该看见的那一句。 */
+function actionLead(status: TaskStatus): string {
+  switch (status) {
+    case "queued":
+      return "排队中，等 Worker 领取；领取后这里会变成运行中。";
+    case "running":
+      return "正在执行。下面的执行过程持续同步，产出一有就出现在结果里。";
+    case "waiting_approval":
+      return "停在这里等你决定。要批准的内容就在下面，先看过再决定。";
+    case "waiting_migration":
+      return "停住了：这套部署跑不了它提交时的执行版本，等待与重提都不会让它动。";
+    case "succeeded":
+      return "已完成。结果在最前面，执行过程折在它下面。";
+    case "failed":
+      return "失败了。已保留的内容在下面；原因可以复制成诊断。";
+    case "cancelled":
+      return "已取消。已保留的内容在下面。";
+    case "dead_letter":
+      return "已放弃重试。已保留的内容在下面；原因可以复制成诊断。";
+  }
+}
+
+/**
+ * 把「这个任务怎么了」凑成一段能贴给别人的文字。
+ *
+ * 只有任务 id、状态、服务端那句 detail、时间和时间线的读取错误——都是屏幕上
+ * 本来就有的东西，只是此前要从三个地方分别选中复制。
+ */
+async function copyDiagnostics(
+  task: TaskView,
+  timelineError: unknown,
+): Promise<void> {
+  const lines = [
+    `任务 ${task.task_id}`,
+    `状态：${formatStatus(task.status)}（${task.status}）`,
+    ...(task.status_detail === null ? [] : [`说明：${task.status_detail}`]),
+    `更新时间：${task.updated_at}`,
+    ...(timelineError === null || timelineError === undefined
+      ? []
+      : [`时间线：${errorMessage(timelineError, "读取失败")}`]),
+  ];
+  // jsdom 没有 clipboard；真浏览器里没有权限时 writeText 会 reject，两种都
+  // 不该把页面弄红——按钮只是不会变成「已复制」。
+  const clipboard = navigator.clipboard as Clipboard | undefined;
+  if (clipboard === undefined) return;
+  await clipboard.writeText(lines.join("\n"));
 }
 
 /**

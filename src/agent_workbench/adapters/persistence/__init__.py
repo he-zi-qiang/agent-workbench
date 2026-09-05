@@ -40,6 +40,9 @@ from agent_workbench.adapters.persistence.task_registry import PostgresTaskRegis
 from agent_workbench.adapters.persistence.tool_executions import (
     PostgresToolExecutionLedger,
 )
+from agent_workbench.adapters.persistence.worker_presence import (
+    PostgresWorkerPresenceStore,
+)
 
 __all__ = [
     "TASK_READY_CHANNEL",
@@ -57,6 +60,7 @@ __all__ = [
     "PostgresProjectStore",
     "PostgresTaskRegistry",
     "PostgresToolExecutionLedger",
+    "PostgresWorkerPresenceStore",
     "create_query_engine",
     "metadata",
     "notify_task_ready",

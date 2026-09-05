@@ -1,4 +1,6 @@
 import type {
+  ApprovalListResponse,
+  ApprovalStatus,
   ApprovalDecision,
   ApprovalView,
   ArtifactDownloadTarget,
@@ -53,6 +55,7 @@ import type {
   UsageResponse,
   UsageWindow,
   WorkspaceResponse,
+  WorkersResponse,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -776,6 +779,13 @@ export async function getDeploymentCapabilities(
   return apiRequest(identity, "/v1/system/capabilities");
 }
 
+/** 谁在替这套部署跑任务、索引文档（ADR-0110）。 */
+export async function getSystemWorkers(
+  identity: PrincipalIdentity,
+): Promise<WorkersResponse> {
+  return apiRequest(identity, "/v1/system/workers");
+}
+
 /**
  * 拨一个零件的开关（ADR-103）：`true`/`false` 记下选择，`null` 收回它。
  *
@@ -900,6 +910,25 @@ export async function getTaskTimeline(
     identity,
     `/v1/tasks/${encodeURIComponent(taskId)}/timeline?${params.toString()}`,
   );
+}
+
+/**
+ * The caller's own approvals, filtered by status.
+ *
+ * `status` is repeated per value because the route declares it as a list
+ * query parameter; the filter is *not* the server's default (a queue that
+ * silently hid decided approvals would make "I already answered that"
+ * indistinguishable from "it is gone"), so the console asks for exactly the
+ * pending ones.
+ */
+export async function listApprovals(
+  identity: PrincipalIdentity,
+  options: { statuses: ApprovalStatus[]; limit?: number },
+): Promise<ApprovalListResponse> {
+  const params = new URLSearchParams();
+  for (const status of options.statuses) params.append("status", status);
+  params.set("limit", String(options.limit ?? 50));
+  return apiRequest(identity, `/v1/approvals?${params.toString()}`);
 }
 
 export async function getApproval(

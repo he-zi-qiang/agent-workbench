@@ -6,6 +6,8 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
+      // 截图脚本是 .mjs，不在 tsconfig 项目里；typed-linting 会在它上面直接报错。
+      "scripts/**",
       "dist",
       "coverage",
       "playwright-report",

@@ -94,14 +94,17 @@ const STARTER_PROMPTS = [
   {
     title: "梳理项目资料",
     prompt: "请梳理所选项目资料，提炼关键结论、主要分歧和下一步建议。",
+    outcome: "输入：所选知识库 → 产出：带引用的结论摘要，引用可点开核对",
   },
   {
     title: "拆解复杂问题",
     prompt: "请先把这个问题拆成几个关键部分，再说明每一部分应该如何分析。",
+    outcome: "产出：问题拆解与分析路径，不依赖资料",
   },
   {
     title: "准备一份方案",
     prompt: "请帮我比较几个可行方案，列出各自的收益、风险与推荐选择。",
+    outcome: "产出：方案对比与推荐；要成文件请改用任务",
   },
 ] as const;
 
@@ -872,6 +875,7 @@ export function ChatPage() {
               items={attachments.items}
               onRemove={attachments.remove}
               onRetry={attachments.retry}
+              targetName={attachments.targetName}
             />
             <textarea
               aria-label="问题"
@@ -978,7 +982,7 @@ function ChatWelcome({
             <PanelLeft aria-hidden="true" size={18} />
           </IconButton>
         }
-        description="直接提问，或选择知识库获得带引用的回答。"
+        description="直接提问，或选一个知识库：回答会带上来源，点开引用能核对原文。"
         title="有什么可以帮你？"
       />
     </div>
@@ -1168,15 +1172,16 @@ function ChatTurn({
             这一轮只留下了你的问题，没有留下回答。
           </p>
         ) : null}
-        {turn.historical && turn.answer !== undefined ? (
-          // The history endpoint returns role and text and nothing else, so a
-          // reloaded answer carries no citations and no grounded flag. Running
-          // the live verdict here would tell the reader "服务端没有为这段答案发布引用"
-          // about answers that did publish citations, and would quietly drop the
-          // ungrounded warning off answers that earned one.
+        {turn.historical && turn.answer !== undefined && turn.turnId === undefined ? (
+          // A reloaded answer with no turn behind it: a row written before the
+          // history projection carried turn ids (2026-09-05, review item A).
+          // Nothing honest can be said about its evidence -- running the live
+          // verdict would tell the reader "服务端没有为这段答案发布引用" about an
+          // answer that may well have cited plenty. Reloaded answers *with* a
+          // turn go through `Citations` below like a live one.
           <p className="aw-chat-no-citations">
             <CircleDot aria-hidden="true" size={13} />
-            历史记录只保存对话文本，不含引用与证据标记
+            这条回答早于回合记录，历史里没有它的引用与证据标记
           </p>
         ) : null}
         {turn.phase === "failed" ? (
@@ -1194,7 +1199,10 @@ function ChatTurn({
             )}
           </div>
         ) : null}
-        {!turn.historical &&
+        {/* 历史里的回合只要带着 turn id 就和实时的一样画引用：投影现在带着
+            发布时的引用和 grounded（评审 A 项）；点开原文仍然走每次重新授权的
+            那条路，所以资料被撤回之后这里的引用会正确地打不开，而不是回放旧文。 */}
+        {(!turn.historical || turn.turnId !== undefined) &&
         (turn.phase === "committed" || turn.phase === "withheld") ? (
           <>
             <Citations

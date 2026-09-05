@@ -27,6 +27,7 @@ from agent_workbench.adapters.persistence.models import (
     events,
 )
 from agent_workbench.adapters.persistence.models import messages as messages_table
+from agent_workbench.domain.context import Citation
 from agent_workbench.domain.errors import NotFoundError
 from agent_workbench.domain.identifiers import (
     Identifier,
@@ -52,6 +53,32 @@ from agent_workbench.ports.conversation_store import (
     StoredMessage,
     WorkspacePointerConflictError,
 )
+
+
+def _evidence_of(
+    turn_status: object, turn_result: object
+) -> tuple[tuple[Citation, ...], bool | None]:
+    """一轮发布时的引用与 grounded，从它存下来的 `ChatTurnResult` 里取。
+
+    只认 `committed`：`withheld` 的结果已经被擦成空壳（`validate_release_candidate`
+    保证），`release_pending` 还没发布，失败的没有 result。这三种都答 `((), None)`
+    ——不是 `False`，`False` 是「没查资料」这个要贴警告的事实。
+
+    `grounded` 缺席时按 `True` 读，和 `ChatTurnResult.grounded` 的默认值同一个
+    理由：早于这个字段的每一行都来自一条一定检索过的路。
+    """
+
+    if turn_status != "committed" or not isinstance(turn_result, dict):
+        return (), None
+    held = cast("dict[str, object]", turn_result)
+    raw = held.get("citations")
+    citations = (
+        tuple(Citation.model_validate(item) for item in cast("list[object]", raw))
+        if isinstance(raw, list)
+        else ()
+    )
+    grounded = held.get("grounded", True)
+    return citations, (grounded if isinstance(grounded, bool) else True)
 
 
 def _usage_of(turn_result: object) -> BudgetUsage | None:
@@ -183,11 +210,11 @@ class PostgresConversationStore:
                 principal_id,
                 mode=mode,
             )
-            # `with_usage` 只在这条公开路径上打开。`_history_before` 每一轮都
-            # 走一遍，而它构造的是模型上下文——那边不读这个字段，多一次 join 是
+            # `with_turn` 只在这条公开路径上打开。`_history_before` 每一轮都
+            # 走一遍，而它构造的是模型上下文——那边不读这些字段，多一次 join 是
             # 白付的。
             return await self._history(
-                connection, session_id=session_id, limit=limit, with_usage=True
+                connection, session_id=session_id, limit=limit, with_turn=True
             )
 
     async def session(
@@ -942,7 +969,7 @@ class PostgresConversationStore:
         session_id: str,
         limit: int | None = None,
         before_sequence: int | None = None,
-        with_usage: bool = False,
+        with_turn: bool = False,
     ) -> tuple[StoredMessage, ...]:
         columns: list[Any] = [
             messages_table.c.message_id,
@@ -950,11 +977,20 @@ class PostgresConversationStore:
             messages_table.c.payload,
         ]
         source: Any = messages_table
-        if with_usage:
+        if with_turn:
             # LEFT JOIN，不是 JOIN：用户那一条消息不属于任何一轮的产出，而一轮
             # 还没落定时 `result` 是 NULL。内连接会把这两种消息从历史里删掉，
             # 那是把「读不到花销」变成「这句话没说过」。
-            columns.append(chat_turns.c.result.label("turn_result"))
+            #
+            # 这个 join 曾经只为花销；现在同一次 join 也带回 turn_id、状态和
+            # result 里的引用——历史投影要能重建「点开引用」（评审 A 项）。
+            columns.extend(
+                (
+                    chat_turns.c.turn_id.label("turn_id"),
+                    chat_turns.c.status.label("turn_status"),
+                    chat_turns.c.result.label("turn_result"),
+                )
+            )
             source = messages_table.outerjoin(
                 chat_turns,
                 chat_turns.c.assistant_message_id == messages_table.c.message_id,
@@ -970,16 +1006,26 @@ class PostgresConversationStore:
         if limit is not None:
             query = query.limit(limit)
         rows = (await connection.execute(query)).all()
-        return tuple(
-            StoredMessage(
-                message_id=cast(str, row.message_id),
-                session_id=session_id,
-                sequence=cast(int, row.sequence),
-                message=Message.model_validate(row.payload),
-                usage=_usage_of(getattr(row, "turn_result", None)),
+        stored: list[StoredMessage] = []
+        for row in rows:
+            turn_result = getattr(row, "turn_result", None)
+            citations, grounded = _evidence_of(
+                getattr(row, "turn_status", None), turn_result
             )
-            for row in rows
-        )
+            turn_id = getattr(row, "turn_id", None)
+            stored.append(
+                StoredMessage(
+                    message_id=cast(str, row.message_id),
+                    session_id=session_id,
+                    sequence=cast(int, row.sequence),
+                    message=Message.model_validate(row.payload),
+                    usage=_usage_of(turn_result),
+                    turn_id=None if turn_id is None else cast(str, turn_id),
+                    citations=citations,
+                    grounded=grounded,
+                )
+            )
+        return tuple(stored)
 
     async def _history_before(
         self,

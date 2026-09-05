@@ -36,6 +36,7 @@ import type {
 import { useIdentity } from "../../app/IdentityContext";
 import {
   useWorkspaceSidebar,
+  WorkspaceSidebarActions,
   WorkspaceSidebarPortal,
 } from "../../app/WorkspaceSidebar";
 import {
@@ -47,6 +48,7 @@ import {
   ErrorNotice,
   IconButton,
   LoadingLine,
+  NewSessionAction,
   formatDateTime,
   shortId,
 } from "../../components/ui";
@@ -102,35 +104,31 @@ export function KnowledgePage() {
 
   return (
     <div className="aw-knowledge-page">
+      {/* 刷新和新建长在壳层那一行「全部知识库」的右端，和另外三个工作区的
+          搜索、新建同一个位置。此前这一栏自己画了一行「全部知识库」标题，
+          壳层给列表区加上标题之后，同一个名字会在同一栏里出现两次。 */}
+      <WorkspaceSidebarActions>
+        <button
+          aria-label="刷新知识库"
+          className="aw-side-action"
+          disabled={knowledgeBases.isFetching}
+          onClick={() => void knowledgeBases.refetch()}
+          title="刷新知识库"
+          type="button"
+        >
+          <RefreshCw aria-hidden="true" size={15} />
+        </button>
+        <NewSessionAction label="新建知识库" onClick={openCreate} />
+      </WorkspaceSidebarActions>
       <WorkspaceSidebarPortal>
         <aside className="aw-knowledge-list aw-knowledge-sidebar" aria-label="知识库列表">
-          <header className="aw-knowledge-sidebar-header">
-            <strong>全部知识库</strong>
-            <div>
-              <IconButton
-                label="刷新知识库"
-                disabled={knowledgeBases.isFetching}
-                onClick={() => void knowledgeBases.refetch()}
-              >
-                <RefreshCw aria-hidden="true" size={15} />
-              </IconButton>
-              <IconButton
-                className="aw-knowledge-sessions-close"
-                label="关闭知识库列表"
-                onClick={workspaceSidebar.close}
-              >
-                <X aria-hidden="true" size={17} />
-              </IconButton>
-            </div>
-          </header>
-          <button
-            className="aw-new-session"
-            onClick={openCreate}
-            type="button"
+          <IconButton
+            className="aw-knowledge-sessions-close"
+            label="关闭知识库列表"
+            onClick={workspaceSidebar.close}
           >
-            <Plus aria-hidden="true" size={15} />
-            <span>新建知识库</span>
-          </button>
+            <X aria-hidden="true" size={17} />
+          </IconButton>
           <div className="aw-knowledge-sidebar-list">
             {knowledgeBases.data?.knowledge_bases.map((knowledgeBase) => (
               <KnowledgeBaseRow

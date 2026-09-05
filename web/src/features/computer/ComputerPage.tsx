@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getComputerSession } from "../../api/client";
 import { useIdentity } from "../../app/IdentityContext";
+import { EngineeringNotes } from "../../components/ui";
 import { ScreenSessionPanel } from "./ScreenSessionPanel";
 
 /**
@@ -195,15 +196,30 @@ export function ComputerPage() {
         </div>
       </header>
 
-      {/* 面板在最上面，规则在它下面。这一页此前的顺序是反的，因为那时它只有规则。 */}
+      {/* 面板在最上面，规则在它下面。这一页此前的顺序是反的，因为那时它只有规则。
+
+          规则现在折在「工程说明」里（2026-09-04 评审第 2 条：产品操作与工程原理
+          不该在同一阅读层）。第一次打开这一页的人要先知道三件事——现在是什么
+          状态、在这台部署上怎么把服务器起来、起了之后按哪里——而四道门禁、tier
+          和 ADR 是面试时主动展开讲的东西。折叠不是删除：全部内容都还在 DOM 里，
+          下面的测试照旧按文字断言。 */}
       <section aria-labelledby="aw-screen-heading">
         <div className="aw-section-head">
           <h2 id="aw-screen-heading">这台机器此刻</h2>
           <span>每 4 秒问一次那个进程</span>
         </div>
-        <ScreenSessionPanel data={session.data} loading={session.isLoading} />
+        <ScreenSessionPanel
+          checking={session.isFetching}
+          data={session.data}
+          loading={session.isLoading}
+          onRecheck={() => void session.refetch()}
+        />
       </section>
 
+      <EngineeringNotes
+        hint="门禁四道检查、换到另一个应用、tier 怎么定、拒绝文案与截图上限"
+        summary="工程说明"
+      >
       <div className="aw-notice is-info">
         <ScanEye aria-hidden="true" size={16} />
         <div>
@@ -375,6 +391,7 @@ export function ComputerPage() {
           </p>
         </section>
       </div>
+      </EngineeringNotes>
     </main>
   );
 }

@@ -176,6 +176,15 @@ class MessageView(BaseModel):
     #: 只有助手消息、且那一轮已经落定时才有。用户那一条永远没有——一句提问没有
     #: 自己的花销，给它一个零会让每一轮在屏幕上多出一行说谎的脚注。
     usage: TurnUsageView | None = None
+    #: 这条助手消息属于哪一轮。控制台重建历史时用它拼出
+    #: `turns/{turn_id}/citations/{chunk_id}`——点开一条历史引用仍然是一次
+    #: **重新授权**的读取（ADR-067），不是回放存下来的原文。
+    turn_id: Identifier | None = None
+    #: 那一轮发布时的引用；只有 committed 的回合才有。
+    citations: tuple[Citation, ...] = ()
+    #: `None` 是「这里答不出」（用户消息、早于回合台账的行），`False` 才是
+    #: 「没查资料就答了」——前者不贴警告，后者贴。
+    grounded: bool | None = None
 
 
 class HistoryResponse(BaseModel):
@@ -361,6 +370,9 @@ async def history(session_id: str, request: Request) -> HistoryResponse:
                     if block.kind == "text"
                 ),
                 usage=_usage_view(record.usage),
+                turn_id=record.turn_id,
+                citations=record.citations,
+                grounded=record.grounded,
             )
             for record in messages
         )

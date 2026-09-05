@@ -5,8 +5,9 @@
  * （`UsagePage.test.tsx` 管用量怎么读，`SystemPage.test.tsx` 管健康检查怎么说）。
  * 这里管的是**这个框把它们摆在了一起**之后不能走样的部分：
  *
- * 一是**打开时落在「本地身份」**。左下角那颗头像此前打开的就是身份编辑框，一次
- * 改版不该让一个用惯了的按钮换掉它的后果。
+ * 一是**打开时落在「模型密钥」**。它此前落在「本地身份」（那颗头像原本打开的就是
+ * 身份编辑框），2026-09-04 的评审把三个请求头字段当首屏列为「工程原理压过产品
+ * 操作」的例子；身份那一类还在，排到最后并标成「开发与权限演示」。
  * 二是**三类都换得过去**，而且换过去之后上一类的内容不再留在屏幕上；用量和运行
  * 状态**不在**这个框里——它们是页面，装进来就是同一份报表画两遍。
  * 三是**主题即点即生效**，不需要再按一次「保存」——这个框里只有身份那一类有草稿。
@@ -102,14 +103,18 @@ beforeEach(() => {
 });
 
 describe("打开时落在哪一类", () => {
-  it("本地身份——那颗头像此前打开的就是它", async () => {
+  it("模型密钥——第一次打开设置的人要找的是它，不是三个请求头字段", async () => {
     const user = userEvent.setup();
     const dialog = await open(user);
 
     expect(
-      dialog.getByRole("button", { name: /本地身份/ }),
+      dialog.getByRole("button", { name: /模型密钥/ }),
     ).toHaveAttribute("aria-current", "true");
-    expect(dialog.getByLabelText("Tenant")).toBeInTheDocument();
+    expect(dialog.queryByLabelText("Tenant")).not.toBeInTheDocument();
+    // 身份模拟还在，只是排到最后、并且说明它是给开发与权限演示用的。
+    expect(
+      dialog.getByRole("button", { name: /本地身份.*开发与权限演示/ }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -140,13 +145,18 @@ describe("换一类", () => {
     const dialog = await open(user);
 
     // 此前左栏写「本地身份」、右边标题写「本地身份模拟器」——同一样东西两个名字。
-    expect(dialog.getByRole("heading", { level: 3, name: "本地身份" })).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: /模型密钥/ }));
     expect(
       await dialog.findByRole("heading", { level: 3, name: "模型密钥" }),
     ).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: /外观/ }));
-    expect(dialog.getByRole("heading", { level: 3, name: "外观" })).toBeInTheDocument();
+    expect(
+      await dialog.findByRole("heading", { level: 3, name: "外观" }),
+    ).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: /本地身份/ }));
+    expect(
+      await dialog.findByRole("heading", { level: 3, name: "本地身份" }),
+    ).toBeInTheDocument();
+    expect(dialog.queryByRole("heading", { level: 3, name: "外观" })).toBeNull();
   });
 });
 

@@ -621,9 +621,42 @@ describe("Chat identity boundary", () => {
     renderChatRoute("/chat/ses_answered");
 
     expect(
-      await screen.findByText("历史记录只保存对话文本，不含引用与证据标记"),
+      await screen.findByText("这条回答早于回合记录，历史里没有它的引用与证据标记"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/服务端没有为这段答案发布引用/)).not.toBeInTheDocument();
+  });
+
+  it("draws a reloaded answer's citations when the history names its turn", async () => {
+    // 2026-09-04 评审 A 项：刷新之后引用消失。历史投影现在带着 turn id、引用
+    // 和 grounded，所以带 turn 的历史回合和实时回合走同一条画引用的路；只有
+    // 早于回合台账的旧行才退回那句「没有引用与证据标记」。
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+    const state = stateWithUngroundedTurn("rag");
+    const replayed: ChatTurnState = {
+      ...state.turns.turn_local,
+      historical: true,
+      turnId: "turn_replayed",
+      grounded: true,
+      citations: [
+        {
+          chunk_id: "chunk_0001",
+          document_id: "doc_0001",
+          document_version: "1",
+          locator: { page: 2 },
+        },
+      ],
+    };
+    vi.mocked(useChatRuntime).mockReturnValue({
+      runtime: fakeRuntime(vi.fn(), vi.fn()),
+      state: { ...state, turns: { turn_local: replayed } },
+    });
+
+    renderChatRoute("/chat/ses_answered");
+
+    expect(await screen.findByText(/已核对来源 · 1 条引用/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/早于回合记录/),
+    ).not.toBeInTheDocument();
   });
 
   it("falls back to a direct Ask when a linked knowledge base no longer exists", async () => {

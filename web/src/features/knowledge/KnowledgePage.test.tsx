@@ -149,10 +149,14 @@ describe("KnowledgePage 新建知识库对话框", () => {
     const user = userEvent.setup();
     const sidebarHost = globalThis.document.createElement("div");
     globalThis.document.body.append(sidebarHost);
+    // 壳层给列表一个宿主的同时也给标题行一个动作位；「新建知识库」现在长在
+    // 那个动作位上，所以这个替身也得有它，否则按钮就没有地方可以 portal 到。
+    const actionsHost = globalThis.document.createElement("div");
+    globalThis.document.body.append(actionsHost);
     const closeSidebar = vi.fn();
     const sidebar: WorkspaceSidebarContextValue = {
       managed: true,
-      actionsHost: null,
+      actionsHost,
       host: sidebarHost,
       drawerOpen: true,
       open: vi.fn(),
@@ -184,6 +188,7 @@ describe("KnowledgePage 新建知识库对话框", () => {
 
     view.unmount();
     sidebarHost.remove();
+    actionsHost.remove();
   });
 
   it("在第一个和最后一个可聚焦控件之间循环 Tab", async () => {

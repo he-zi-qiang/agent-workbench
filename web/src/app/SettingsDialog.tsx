@@ -36,8 +36,12 @@ import { THEME_LABEL, THEME_MODES, useTheme } from "./ThemeContext";
  * 「本地身份模拟器」，左栏却写着「本地身份」——同一样东西两个名字，一眼就读成
  * 两样东西。框的高度也固定下来：换一类不该让整个框跳一下。
  *
- * **打开时落在「本地身份」。** 左下角那颗头像此前打开的就是身份编辑框，而一次
- * 改版不该让一个用惯了的按钮换掉它的后果。其余两类就在旁边。
+ * **打开时落在「模型密钥」，不再是「本地身份」。** 上一版落在身份，理由是左下角
+ * 那颗头像此前打开的就是身份编辑框。2026-09-04 的评审把这件事列进「产品操作与
+ * 工程原理处于同一阅读层」：一个第一次打开设置的人看到的是 Tenant / Principal /
+ * Scopes 三个请求头字段，而他要找的多半是「这台部署用哪把 key」。身份模拟仍然
+ * 在，左栏里标成「开发与权限演示」——它是给演示对象级授权用的，不是设置里最常
+ * 用的那一类。
  */
 
 interface Section {
@@ -48,9 +52,9 @@ interface Section {
 }
 
 const SECTIONS: readonly Section[] = [
-  { id: "identity", label: "本地身份", icon: BadgeCheck, hint: "这台环境用哪个身份发请求" },
   { id: "provider", label: "模型密钥", icon: KeyRound, hint: "这台部署用哪把 key 调模型" },
   { id: "appearance", label: "外观", icon: Palette, hint: "浅色、深色，还是跟着系统" },
+  { id: "identity", label: "本地身份", icon: BadgeCheck, hint: "开发与权限演示：模拟请求头里的身份" },
 ];
 
 export function SettingsDialog() {
@@ -80,7 +84,7 @@ function SettingsDialogContent({
   onClose: () => void;
   onSave: (identity: PrincipalIdentity) => void;
 }) {
-  const [section, setSection] = useState("identity");
+  const [section, setSection] = useState("provider");
   const [draft, setDraft] = useState(identity);
   const dialogRef = useRef<HTMLElement>(null);
   const returnFocus = useRef<HTMLElement | null>(
@@ -201,7 +205,7 @@ function IdentitySection({
           字段是什么性质**，不是这一类叫什么。 */}
       <h3>本地身份</h3>
       <p className="aw-settings-lede">
-        这里模拟的是请求头里的身份，只用于 loopback 开发环境，不是生产登录。切换身份后，服务端会重新执行对象级授权，本地列表也会按身份隔离（ADR-044）。
+        开发与权限演示用。这里模拟的是请求头里的身份，只用于 loopback 开发环境，不是生产登录。切换身份后，服务端会重新执行对象级授权，本地列表也会按身份隔离（ADR-044）。
       </p>
       <div className="aw-form-stack">
         <label>

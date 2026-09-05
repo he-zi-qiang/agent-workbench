@@ -2,6 +2,25 @@
 
 中文 | [English](README.en.md)
 
+**一个能依据资料回答、执行长任务、在关键动作前等待批准，并留下可核验结果的 Agent 工作台。**
+Code 与受限的计算机控制是它的能力延伸。
+
+![控制台：对话起始页，左侧是固定的三个工作区与当前模式的最近记录](docs/assets/console/chat-start.png)
+
+它能做三件事，每一件都留得下证据：
+
+- **资料问答**：回答带来源，每条引用可以点开核对原文；刷新之后引用还在，资料被撤回后引用会正确地打不开。
+- **可恢复的任务**：长任务分步执行，导出前停下来等人批准；Worker 重启后从 checkpoint 接着跑，不是重来。
+- **编码交付**：在指定文件夹里修改真实文件，跑命令前先问你，每一次写入都记在回合里。
+
+三条演示怎么走、讲哪一句技术：[docs/demo-scripts.md](docs/demo-scripts.md)。开始之前先看运行状态页顶上的
+「演示前自检」——它说「可以开始演示」再开始。
+
+启动：macOS / Linux 用 `scripts/dev.sh up --with-retrieval`；Windows 只要 Docker Desktop，`scripts\stack.cmd`
+一条命令起全套（[Windows 快速开始](docs/windows-quickstart.md)）。
+
+---
+
 一个 clean-room 实现的通用 Agent 平台，提供两种产品形态：**Chat**（带权限校验的
 知识库问答）与 **Task**（可恢复、可审批的自动化工作流）。
 
@@ -10,6 +29,7 @@ LlamaIndex、MCP 一律经 Port/Adapter 接入，负责各自那一段，不接�
 
 | 你是谁 | 从哪读 |
 |---|---|
+| 想先看它长什么样、怎么演示 | [三条演示](docs/demo-scripts.md)，以及上面那张图 |
 | 想在十分钟内看清整个项目 | [**本地架构面板**](#零先把整个项目看一遍)——一条命令，离线页面，数字全部现算 |
 | 想看成色与证据 | [**十分钟版本**](docs/HIGHLIGHTS.md)——真实运行的事件流、门禁数字、四个技术判断 |
 | 想读懂 Agent 本身怎么跑的 | [Agent Harness](#二agent-harness一次运行被谁裹着) → [Agent Runtime](#三agent-runtime唯一的那条工具循环) → [Tool Gateway](#四tool-gateway一次工具调用要穿过的门) |

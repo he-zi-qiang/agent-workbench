@@ -506,8 +506,11 @@ class InMemoryConversationStore:
                 # 这一份在写下这条消息的时候就知道那一轮的账，所以直接挂上去。
                 # PostgreSQL 那一份要在读的时候 LEFT JOIN 回 `chat_turns` 才拿得到
                 # 同一个数——两条路不同，契约是同一条：`history()` 返回的助手消息
-                # 带着它那一轮的花销。
+                # 带着它那一轮的花销、它属于哪一轮、以及发布时的引用与 grounded。
                 usage=result.outcome.usage,
+                turn_id=turn_id,
+                citations=() if result.withheld else result.citations,
+                grounded=None if result.withheld else result.grounded,
             )
             released = self._updated_turn(
                 turn,

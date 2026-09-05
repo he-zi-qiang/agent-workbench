@@ -8,7 +8,7 @@ import logging
 import signal
 import sys
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from agent_workbench.adapters.persistence.notifications import (
     TASK_READY_CHANNEL,
@@ -82,7 +82,13 @@ async def serve(*, demo: bool) -> None:
             wakeup=None if listener is None else listener.woken,
         )
         await dependencies.startup()
-        await runner.run_forever(stop)
+        # Say "I am here" before claiming anything, and keep saying it while
+        # running (ADR-0110). The beacon was assembled with everything else and
+        # is fail-soft by construction: a store that cannot be written costs a
+        # warning, never the Worker. `nullcontext` for a container built by hand.
+        presence = dependencies.presence
+        async with presence if presence is not None else nullcontext():
+            await runner.run_forever(stop)
     finally:
         if listener is not None:
             await listener.aclose()

@@ -23,12 +23,13 @@ here because the next row somebody adds is where it gets broken.
 
 **Three states, and the third is not a rounding of the other two.**
 ``unknown`` is what this process must answer about anything living in another
-process. The API cannot see whether a Task Worker is running, and it certainly
-cannot see whether that Worker was started with ``--demo`` -- there is no
-Worker-to-control-plane reporting channel in this system (docs/known-gaps.md,
-E-09). Reporting that absence as ``absent`` would be a claim; reporting it as
-``available`` because the API can accept a submission would be worse. It is
-unknown, and the row says which command answers it.
+process. The capability report describes what *this* process assembled, and a
+Task Worker is another process, so its row stays ``unknown`` here. Since
+ADR-0110 the other process reports in on its own: ``GET /workers`` below reads
+the rows each Worker writes about itself, and the console draws that beside
+this report. The row's remedy points there rather than at ``docker compose
+ps``. Reporting the absence as ``absent`` would be a claim; reporting it as
+``available`` because the API can accept a submission would be worse.
 
 **The envelope, not a guess.** The Task rows are read off
 ``config.task.default_authorization_envelope`` -- the exact tuple that will be
@@ -57,6 +58,7 @@ keep.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Final, Literal
 
 from fastapi import APIRouter, Request, status
@@ -224,6 +226,36 @@ class SwitchRequest(BaseModel):
     enabled: bool
 
 
+class WorkerPresenceView(BaseModel):
+    """One Worker's last word about itself, judged against the store's clock."""
+
+    worker_id: str
+    kind: str
+    deployment: str
+    capabilities: dict[str, object]
+    started_at: datetime
+    heartbeat_at: datetime
+    expires_at: datetime
+    #: ``expires_at`` is still ahead of the clock the row was read against.
+    fresh: bool
+    #: How long ago the last beat landed, on that same clock. The console prints
+    #: this rather than subtracting on the browser's clock, which is a third one.
+    seconds_since_heartbeat: float
+
+
+class WorkersResponse(BaseModel):
+    """Every Worker that has announced itself (ADR-0110).
+
+    ``available`` is false when this API was assembled without a presence store
+    -- a test container, or a checkout older than the table -- and the console
+    then says "unknown" exactly as it did before, rather than "no Workers".
+    """
+
+    available: bool
+    observed_at: datetime | None = None
+    workers: tuple[WorkerPresenceView, ...] = ()
+
+
 @router.get("/capabilities", response_model=DeploymentCapabilitiesResponse)
 async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
     """Everything this process knows about what it can and cannot do."""
@@ -235,6 +267,46 @@ async def capabilities(request: Request) -> DeploymentCapabilitiesResponse:
     # be the one route in the API a caller could reach without one.
     dependencies.principals.resolve(request)
     return _capabilities(dependencies)
+
+
+@router.get("/workers", response_model=WorkersResponse)
+async def workers(request: Request) -> WorkersResponse:
+    """Who is running Tasks and indexing documents for this deployment, if anyone.
+
+    Until ADR-0110 the honest answer here was "unknown, go and check the
+    process" -- `_capabilities` still says so about the *Task Worker* row,
+    because a capability report describes what this process assembled and a
+    Worker is another process. This route is the other process reporting in.
+    Read-only, and read from the same PostgreSQL the leases live in; nothing in
+    the run path consults it.
+    """
+
+    dependencies = dependencies_of(request)
+    dependencies.principals.resolve(request)
+    store = dependencies.worker_presence
+    if store is None:
+        return WorkersResponse(available=False)
+    report = await store.report()
+    return WorkersResponse(
+        available=True,
+        observed_at=report.observed_at,
+        workers=tuple(
+            WorkerPresenceView(
+                worker_id=row.worker_id,
+                kind=row.kind,
+                deployment=row.deployment,
+                capabilities=dict(row.capabilities),
+                started_at=row.started_at,
+                heartbeat_at=row.heartbeat_at,
+                expires_at=row.expires_at,
+                fresh=report.fresh(row),
+                seconds_since_heartbeat=max(
+                    0.0, (report.observed_at - row.heartbeat_at).total_seconds()
+                ),
+            )
+            for row in report.workers
+        ),
+    )
 
 
 @router.put("/switches/{switch_id}", response_model=DeploymentCapabilitiesResponse)
@@ -412,12 +484,13 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
             # exactly like one that is real from here.
             state="unknown",
             reason=(
-                "本部署没有 Worker 上报通道：从 API 看不出有没有 Worker 在跑，"
-                "也看不出它是真实 Worker 还是 --demo 合成 Worker。"
+                "这份清单只答得出这个 API 进程装配了什么；Worker 在另一个进程里，"
+                "它自己登记的在线与否、是不是 --demo 合成 Worker，在运行状态页"
+                "顶上那两格（GET /v1/system/workers，ADR-0110）。"
             ),
             remedy=(
-                "docker compose --profile demo ps 看进程，"
-                "docker compose logs task-worker 看它启动时注册了哪些图与工具。"
+                "看运行状态页「任务 Worker 进程」那一格；没有登记时起它："
+                "scripts/dev.sh demo-worker，Windows 容器栈由 stack.cmd 一起带起。"
             ),
         ),
         Capability(

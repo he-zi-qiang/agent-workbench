@@ -19,6 +19,9 @@ from agent_workbench.adapters.memory.conversation_store import (
 )
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.memory.projects import InMemoryProjectStore
+from agent_workbench.adapters.memory.worker_presence import (
+    InMemoryWorkerPresenceStore,
+)
 
 __all__ = [
     "InMemoryArtifactStore",
@@ -27,4 +30,5 @@ __all__ = [
     "InMemoryConversationStore",
     "InMemoryEventLog",
     "InMemoryProjectStore",
+    "InMemoryWorkerPresenceStore",
 ]

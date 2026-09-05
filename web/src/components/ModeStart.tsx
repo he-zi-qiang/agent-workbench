@@ -3,6 +3,14 @@ import type { KeyboardEvent, ReactNode } from "react";
 export interface ModeStarter {
   prompt: string;
   title: string;
+  /**
+   * 点下去会得到什么（「产出：一份带来源的结论摘要」）。
+   *
+   * 2026-09-04 评审第 3 条：三个起始页长得一样、示例问题也相近，读者面对
+   * 「分析资料并交付报告」仍要先判断该用哪个模式。示例卡把预期产物写出来，
+   * 三个模式的差别才在起始页上看得见。
+   */
+  outcome?: string;
 }
 
 export function submitTextareaOnEnter(
@@ -62,12 +70,16 @@ export function ModeStarterPrompts({
       {items.map((starter) => (
         <button
           aria-label={starter.title}
+          className={starter.outcome === undefined ? undefined : "has-outcome"}
           disabled={disabled}
           key={starter.title}
           onClick={() => onChoose(starter.prompt)}
           type="button"
         >
           <span>{starter.title}</span>
+          {starter.outcome === undefined ? null : (
+            <small>{starter.outcome}</small>
+          )}
         </button>
       ))}
     </div>

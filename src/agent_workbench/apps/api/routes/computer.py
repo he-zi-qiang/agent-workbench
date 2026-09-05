@@ -39,7 +39,8 @@ apart will read one as the other.
 
 from __future__ import annotations
 
-from typing import Any, Final
+import sys
+from typing import Any, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Request
@@ -55,6 +56,33 @@ COMPUTER_PREFIX: Final[str] = "/v1/computer"
 FORWARD_TIMEOUT_SECONDS: Final[float] = 2.0
 
 router = APIRouter(prefix=COMPUTER_PREFIX, tags=["computer"])
+
+HostPlatform = Literal["darwin", "win32", "linux", "other"]
+
+
+def host_platform() -> HostPlatform:
+    """Which platform *this API process* runs on, coarsened to four names.
+
+    Reported so the console can say how to start the screen server on *this*
+    deployment instead of hard-coding one launcher. The two native launchers
+    differ (`scripts/dev.sh computer-server` on macOS, `scripts\\computer.cmd`
+    on Windows, ADR-0108), and in the Compose stack the API is a Linux
+    container while the server has to run on the host outside it -- so the
+    browser's own OS is the wrong thing to branch on: the person reading the
+    console on a Mac may be looking at a Windows host's stack. The 2026-09-04
+    review found the page telling Windows users to run a macOS-only command.
+
+    Coarsened rather than raw ``sys.platform``: the console branches on four
+    cases and a raw string would invite it to grow a fifth by accident.
+    """
+
+    if sys.platform.startswith("darwin"):
+        return "darwin"
+    if sys.platform.startswith("win"):
+        return "win32"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return "other"
 
 
 class ComputerSessionResponse(BaseModel):
@@ -76,6 +104,10 @@ class ComputerSessionResponse(BaseModel):
     session: dict[str, Any] | None = None
     #: Why not, in the console's own terms. Empty when it did arrive.
     detail: str = ""
+    #: Where this API process runs, so the console can name the right launcher
+    #: for the screen server -- see :func:`host_platform`. Present in every
+    #: answer, because the hint is needed exactly when ``reachable`` is false.
+    host_platform: HostPlatform
 
 
 @router.get("/session", response_model=ComputerSessionResponse)
@@ -100,14 +132,18 @@ async def session(request: Request) -> ComputerSessionResponse:
         return ComputerSessionResponse(
             reachable=False,
             detail="屏幕控制服务器没有在这台机器上应答。",
+            host_platform=host_platform(),
         )
 
     if answered.status_code != 200:
         return ComputerSessionResponse(
             reachable=False,
             detail=f"屏幕控制服务器答了 {answered.status_code}。",
+            host_platform=host_platform(),
         )
-    return ComputerSessionResponse(reachable=True, session=answered.json())
+    return ComputerSessionResponse(
+        reachable=True, session=answered.json(), host_platform=host_platform()
+    )
 
 
 __all__ = ["COMPUTER_PREFIX", "ComputerSessionResponse", "router"]

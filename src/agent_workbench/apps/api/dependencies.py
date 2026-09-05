@@ -56,6 +56,7 @@ from agent_workbench.adapters.persistence import (
     PostgresKnowledgeBaseStore,
     PostgresProjectStore,
     PostgresTaskRegistry,
+    PostgresWorkerPresenceStore,
     create_query_engine,
 )
 from agent_workbench.adapters.persistence.usage import PostgresUsageReader
@@ -185,6 +186,7 @@ from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
 from agent_workbench.ports.telemetry import Telemetry
 from agent_workbench.ports.tools import ToolBinding, ToolRegistry
 from agent_workbench.ports.usage import UsageReader
+from agent_workbench.ports.worker_presence import WorkerPresenceStore
 from agent_workbench.runtime import (
     ClaudeLikeAgentRuntime,
     ToolExecutor,
@@ -414,6 +416,11 @@ class ApiDependencies:
     #: Where the console's switches live (ADR-103). Always present for the
     #: reason the key store is: the page that flips a switch has to exist on
     #: the deployment that has none flipped.
+    #: Who has said they are here (ADR-0110). ``None`` only in tests that build
+    #: this container by hand; the assembly always passes the PostgreSQL store,
+    #: and the route answers ``available: false`` for ``None`` rather than
+    #: inventing an empty fleet.
+    worker_presence: WorkerPresenceStore | None = None
     switches: SwitchStore = field(
         default_factory=lambda: SwitchStore(path=None, checkout_root=None)
     )
@@ -843,6 +850,7 @@ def build_dependencies(
             reports_root=Path(config.evaluation.reports_root),
             runs_enabled=config.evaluation.runs_enabled,
         ),
+        worker_presence=PostgresWorkerPresenceStore(engine),
         switches=SwitchStore(
             path=(
                 Path(config.switches_file) if config.switches_file is not None else None

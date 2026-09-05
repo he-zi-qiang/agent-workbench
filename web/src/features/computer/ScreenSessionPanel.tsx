@@ -1,8 +1,9 @@
-import { CircleSlash, MonitorDot, ShieldCheck } from "lucide-react";
+import { CircleSlash, MonitorDot, RefreshCw, ShieldCheck } from "lucide-react";
 
 import type {
   ComputerAction,
   ComputerSessionResponse,
+  HostPlatform,
 } from "../../api/types";
 
 /**
@@ -25,9 +26,15 @@ import type {
 export function ScreenSessionPanel({
   data,
   loading,
+  checking = false,
+  onRecheck,
 }: {
   data: ComputerSessionResponse | undefined;
   loading: boolean;
+  /** 一次「重新检查」正在路上。按钮在那期间不可按，免得排队。 */
+  checking?: boolean;
+  /** 「重新检查」按的是它。没给就不画那颗按钮（feature 单测里没有 query 可以重跑）。 */
+  onRecheck?: () => void;
 }) {
   if (data === undefined) {
     return (
@@ -39,16 +46,25 @@ export function ScreenSessionPanel({
 
   if (!data.reachable) {
     // 不是错误状态，所以不用警告色。这台服务器默认不启动，绝大多数时候它就该是这样。
+    // 首屏只回答三件事：现在什么状态、在这台部署上怎么起、起了之后按哪里重新看。
     return (
       <div className="aw-screen-panel is-quiet">
         <p>
           <strong>屏幕控制服务器没有在跑。</strong>
           {data.detail === "" ? null : ` ${data.detail}`}
         </p>
-        <p className="aw-screen-hint">
-          它不由任何一条常规启动路径带起来——要它在，得单独起：
-          <code>scripts/dev.sh computer-server</code>。没有它，下面这些规则照样成立，只是这台机器上没有任何会话可看。
-        </p>
+        <StartHint platform={data.host_platform} />
+        {onRecheck === undefined ? null : (
+          <button
+            className="aw-button is-ghost aw-screen-recheck"
+            disabled={checking}
+            onClick={onRecheck}
+            type="button"
+          >
+            <RefreshCw aria-hidden="true" size={14} />
+            {checking ? "正在重新检查…" : "重新检查"}
+          </button>
+        )}
       </div>
     );
   }
@@ -139,6 +155,37 @@ export function ScreenSessionPanel({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * 在**这台部署**上把屏幕控制服务器起来的那条命令。
+ *
+ * 按 API 进程所在的平台分支，不按浏览器的：这句话此前对所有人都写
+ * `scripts/dev.sh computer-server`，而那条子命令只在 macOS 上存在——一个照着
+ * 它做的 Windows 用户会得到一句 bash 找不到的报错（2026-09-04 评审）。Compose
+ * 栈里 API 是 Linux 容器，服务器只能在宿主机上起（ADR-0108），所以第三档给的
+ * 是两条宿主机命令，而不是猜宿主机是哪种。
+ */
+function StartHint({ platform }: { platform: HostPlatform }) {
+  if (platform === "darwin") {
+    return (
+      <p className="aw-screen-hint">
+        它不由任何一条常规启动路径带起来——要它在，得在这台 Mac 上单独起：<code>scripts/dev.sh computer-server</code>。没有它，下面这些规则照样成立，只是这台机器上没有任何会话可看。
+      </p>
+    );
+  }
+  if (platform === "win32") {
+    return (
+      <p className="aw-screen-hint">
+        它不由任何一条常规启动路径带起来——要它在，得在这台 Windows 上单独起：<code>scripts\computer.cmd</code>。没有它，下面这些规则照样成立，只是这台机器上没有任何会话可看。
+      </p>
+    );
+  }
+  return (
+    <p className="aw-screen-hint">
+      这个 API 进程跑在 Linux 上——多半是容器栈。屏幕控制服务器不进容器，只能在宿主机上起（ADR-0108）：Windows 宿主用 <code>scripts\computer.cmd</code>，macOS 宿主用 <code>scripts/dev.sh computer-server</code>。起来之后按「重新检查」。
+    </p>
   );
 }
 

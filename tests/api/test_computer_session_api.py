@@ -12,6 +12,7 @@ a mock would let a route that never made the request pass.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -173,6 +174,36 @@ def test_a_screen_server_that_is_not_running_is_said_so_and_not_faked() -> None:
     assert body["reachable"] is False
     assert body["session"] is None
     assert body["detail"] != ""
+    # The hint the console draws in exactly this state needs to know where
+    # *this process* runs, not where the browser runs.
+    assert body["host_platform"] == computer_route.host_platform()
+
+
+def test_the_answer_names_the_platform_this_api_runs_on(upstream: str) -> None:
+    """So the console can name the right launcher (ADR-0108, review 2026-09-04).
+
+    `scripts/dev.sh computer-server` only exists on macOS; on Windows the
+    server starts from `scripts\\computer.cmd`, and inside the Compose stack the
+    API is a Linux container while the server must run on the host. The page
+    used to hard-code the macOS command for everyone. Present on every answer,
+    reachable or not, and coarsened to four names so the console has exactly
+    four cases to draw.
+    """
+
+    body = _get(upstream).json()
+
+    assert body["host_platform"] in {"darwin", "win32", "linux", "other"}
+    assert body["host_platform"] == computer_route.host_platform()
+    expected = (
+        "darwin"
+        if sys.platform.startswith("darwin")
+        else "win32"
+        if sys.platform.startswith("win")
+        else "linux"
+        if sys.platform.startswith("linux")
+        else "other"
+    )
+    assert body["host_platform"] == expected
 
 
 def test_an_upstream_that_answers_badly_is_also_not_reachable() -> None:

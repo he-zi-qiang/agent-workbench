@@ -6,6 +6,7 @@ import {
   ApiError,
   checkHealth,
   getDeploymentCapabilities,
+  getSystemWorkers,
   setDeploymentSwitch,
 } from "../../api/client";
 import type { DeploymentCapability, DeploymentSwitch } from "../../api/types";
@@ -18,6 +19,7 @@ vi.mock("../../api/client", async () => {
     ...actual,
     checkHealth: vi.fn(),
     getDeploymentCapabilities: vi.fn(),
+    getSystemWorkers: vi.fn(),
     setDeploymentSwitch: vi.fn(),
   };
 });
@@ -109,6 +111,13 @@ describe("SystemPage", () => {
     vi.mocked(getDeploymentCapabilities).mockResolvedValue({
       capabilities: CAPABILITIES,
     });
+    // 默认是一个还没有登记表的 API：Worker 那一格照旧「状态未知」。
+    vi.mocked(getSystemWorkers).mockReset();
+    vi.mocked(getSystemWorkers).mockResolvedValue({
+      available: false,
+      observed_at: null,
+      workers: [],
+    });
     vi.mocked(checkHealth).mockImplementation((path) =>
       Promise.resolve(
         path === "/health/live"
@@ -142,6 +151,77 @@ describe("SystemPage", () => {
     expect(
       screen.getByRole("button", { name: "编辑本地身份" }),
     ).toBeInTheDocument();
+  });
+
+  it("Worker 按自己的登记显示：在线的说合成与否，失联的说最近一次心跳（ADR-0110）", async () => {
+    vi.mocked(getSystemWorkers).mockResolvedValue({
+      available: true,
+      observed_at: "2026-09-05T02:00:00Z",
+      workers: [
+        {
+          worker_id: "worker_task_1",
+          kind: "task",
+          deployment: "demo-local",
+          capabilities: { demo: true, tools: [] },
+          started_at: "2026-09-05T01:50:00Z",
+          heartbeat_at: "2026-09-05T02:00:00Z",
+          expires_at: "2026-09-05T02:01:00Z",
+          fresh: true,
+          seconds_since_heartbeat: 0,
+        },
+        {
+          worker_id: "worker_ingest_1",
+          kind: "ingestion",
+          deployment: "demo-local",
+          capabilities: { demo: false },
+          started_at: "2026-09-05T01:00:00Z",
+          heartbeat_at: "2026-09-05T01:58:00Z",
+          expires_at: "2026-09-05T01:59:00Z",
+          fresh: false,
+          seconds_since_heartbeat: 120,
+        },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText("在线 · 合成演示")).toBeInTheDocument();
+    expect(screen.getByText("失联")).toBeInTheDocument();
+    expect(
+      screen.getByText(/最近一次心跳在 120 秒前/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("状态未知")).toBeNull();
+    // 自检：必须项都在，但任务 Worker 是 --demo 起的，结论要把这一点说出来；
+    // 文档 Worker 失联只降级资料问答那条，不拦。
+    expect(
+      screen.getByRole("heading", {
+        name: "可以开始演示，但任务由合成 Worker 执行，不调用真实模型",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/文档 Worker 在线、知识库问答可用没就绪/)).toBeInTheDocument();
+  });
+
+  it("没有任务 Worker 时自检说还不能开始，并给出起它的命令", async () => {
+    vi.mocked(getSystemWorkers).mockResolvedValue({
+      available: true,
+      observed_at: "2026-09-05T02:00:00Z",
+      workers: [],
+    });
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "还不能开始演示：1 项要先处理" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/scripts\/dev\.sh demo-worker/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("没有登记")).toHaveLength(2);
+  });
+
+  it("API 没有登记表时自检不下结论，而不是宣布没有 Worker", async () => {
+    renderPage();
+
+    expect(
+      await screen.findByRole("heading", { name: "还不能下结论：有一项答不出" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("状态未知")).toBeInTheDocument();
   });
 
   it("每一处缺失都带着它的原因和补法，而不是一个红点", async () => {
