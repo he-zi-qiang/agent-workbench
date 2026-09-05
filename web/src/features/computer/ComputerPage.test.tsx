@@ -39,6 +39,7 @@ vi.mock("../../api/client", async () => {
 /** The shape the route answers with when that server is not running. */
 const UNREACHABLE = {
   reachable: false as const,
+  host_platform: "darwin" as const,
   session: null,
   detail: "屏幕控制服务器没有在这台机器上应答。",
 };
@@ -150,6 +151,58 @@ describe("ComputerPage", () => {
     expect(screen.getByText(/scripts\/dev\.sh computer-server/)).toBeInTheDocument();
   });
 
+  it("names the Windows launcher when the API itself runs on Windows", async () => {
+    // The page used to tell everyone to run `scripts/dev.sh computer-server`,
+    // which exists only on macOS. The launcher is chosen by where the API
+    // process runs, never by the browser's OS (2026-09-04 review).
+    vi.mocked(getComputerSession).mockResolvedValue({
+      ...UNREACHABLE,
+      host_platform: "win32",
+    });
+    draw();
+
+    expect(await screen.findByText(/scripts\\computer\.cmd/)).toBeInTheDocument();
+    expect(screen.queryByText(/scripts\/dev\.sh computer-server/)).toBeNull();
+  });
+
+  it("sends a containerised API's reader to the host, with both launchers", async () => {
+    // A Linux API is the Compose stack: the server cannot run inside it
+    // (ADR-0108), and which host is outside is not something this process
+    // can see -- so it names both host commands rather than guessing one.
+    vi.mocked(getComputerSession).mockResolvedValue({
+      ...UNREACHABLE,
+      host_platform: "linux",
+    });
+    const { container } = draw();
+
+    await screen.findByText(/屏幕控制服务器没有在跑/);
+    const prose = container.textContent ?? "";
+    expect(prose).toContain("宿主机");
+    expect(prose).toContain("scripts\\computer.cmd");
+    expect(prose).toContain("scripts/dev.sh computer-server");
+  });
+
+  it("offers a recheck right where the not-running answer is", async () => {
+    // 「未启动 → 对应系统的启动方式 → 重新检查」是首屏要回答的三件事；第三件
+    // 此前只有页面顶上一颗按钮都没有——只能等 4 秒轮询。
+    draw();
+
+    expect(
+      await screen.findByRole("button", { name: "重新检查" }),
+    ).toBeInTheDocument();
+  });
+
+  it("folds the rules under 工程说明 so the first screen is the machine's state", async () => {
+    draw();
+
+    await screen.findByText(/屏幕控制服务器没有在跑/);
+    const fold = screen.getByText("工程说明").closest("details");
+    expect(fold).not.toBeNull();
+    expect(fold).not.toHaveAttribute("open");
+    // Folded, not removed: the four checks are still on the page.
+    expect(fold?.textContent).toContain("门禁四道检查");
+  });
+
   it("tells an empty allowlist apart from a server that is not answering", async () => {
     // The distinction this whole page has been careful about since it was
     // written. Before ADR-095 it could not be drawn at all, so the page drew
@@ -158,6 +211,7 @@ describe("ComputerPage", () => {
     vi.mocked(getComputerSession).mockResolvedValue({
       reachable: true,
       detail: "",
+      host_platform: "darwin",
       session: {
         service: "agent-workbench-computer",
         scope: "process",
@@ -179,6 +233,7 @@ describe("ComputerPage", () => {
     vi.mocked(getComputerSession).mockResolvedValue({
       reachable: true,
       detail: "",
+      host_platform: "darwin",
       session: {
         service: "agent-workbench-computer",
         scope: "process",
@@ -219,6 +274,7 @@ describe("ComputerPage", () => {
     vi.mocked(getComputerSession).mockResolvedValue({
       reachable: true,
       detail: "",
+      host_platform: "darwin",
       session: {
         service: "agent-workbench-computer",
         scope: "process",

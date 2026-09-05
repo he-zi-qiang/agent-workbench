@@ -122,18 +122,20 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
     await expect(sessions).toBeHidden();
   }
 
-  await activeNavigation.getByRole("link", { name: "Tasks" }).click();
+  await activeNavigation.getByRole("link", { name: "任务" }).click();
 
   await expect(page).toHaveURL(/#\/work$/);
-  // 桌面侧栏里，当前那一项不是链接：它已经在自己的页面上了，所以那一行的
-  // 工作是「这一组展开不展开」，渲染成一个 disclosure 按钮。移动端那条栏没有
-  // 折叠，五项一直都是链接。
+  // 两种布局里当前那一项都是链接，只多一个 aria-current。桌面侧栏上一版把它
+  // 渲染成 disclosure 按钮，2026-09-04 的评审把「同一行两种点击含义」列为第一
+  // 条要改的；折叠现在是列表区自己头上那颗箭头。
   await expect(
-    activeNavigation.getByRole(isMobile ? "link" : "button", {
-      name: "Tasks",
-      exact: true,
-    }),
+    activeNavigation.getByRole("link", { name: "任务", exact: true }),
   ).toHaveAttribute("aria-current", "page");
+  if (!isMobile) {
+    await expect(
+      activeNavigation.getByRole("button", { name: "收起最近任务" }),
+    ).toHaveAttribute("aria-expanded", "true");
+  }
   await expect(page.getByRole("heading", { name: "想完成什么？" })).toBeVisible();
   // 「新任务」是侧栏里的一行，和 Chat 的「新对话」同一个位置——桌面上一直在，
   // 手机上要先拉开抽屉。断言入口而不是只断言表单，是因为表单一旦默认收起，
@@ -169,7 +171,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // The other primary flow, and the one that is still its own rail entry.
   // Asserted by name and by the empty state rather than by a count: a count
   // would pass for a rail with two of the wrong things on it.
-  await activeNavigation.getByRole("link", { name: "Code", exact: true }).click();
+  await activeNavigation.getByRole("link", { name: "编码", exact: true }).click();
 
   await expect(page).toHaveURL(/#\/code$/);
   // 门先来（ADR-074）：没选文件夹就没有起始屏。这一步不是可跳过的设置，是
@@ -192,7 +194,7 @@ test("对话、任务与 Code 在桌面和移动布局中均可使用", async ({
   // A tab strip added above a `100dvh` grid pushes it out by exactly its own
   // height, and `toBeVisible()` reports an element that has been pushed off the
   // bottom as visible -- so this is the assertion that catches a botched row.
-  await activeNavigation.getByRole("link", { name: "Chat" }).click();
+  await activeNavigation.getByRole("link", { name: "对话" }).click();
   await expect(page.getByLabel("问题", { exact: true })).toBeInViewport();
 });
 

@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import {
   Link,
@@ -14,7 +15,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShell } from "./AppShell";
 import { IdentityProvider } from "./IdentityContext";
 import { ThemeProvider } from "./ThemeContext";
@@ -23,7 +24,27 @@ import {
   WorkspaceSidebarPortal,
 } from "./WorkspaceSidebar";
 
+// 设置面板默认落在「模型密钥」（2026-09-04 评审），那一类用 react-query 读
+// key 的状态，所以每一处渲染都得有 QueryClient——它此前落在「本地身份」时不用。
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+
+vi.mock("../api/client", () => ({
+  getProviderKey: vi.fn().mockResolvedValue({
+    active: false,
+    stored: false,
+    fingerprint: null,
+    path: "~/.config/agent-workbench/key",
+    restart_required: false,
+    restart_hint: "",
+  }),
+  storeProviderKey: vi.fn(),
+  clearProviderKey: vi.fn(),
+}));
+
 beforeEach(() => {
+  queryClient.clear();
   localStorage.removeItem("aw.identity.v5");
   localStorage.removeItem("agent-workbench:workspace-sidebar-collapsed-v2");
 });
@@ -79,6 +100,7 @@ describe("AppShell mobile navigation", () => {
   it("makes every auxiliary project page reachable from More", async () => {
     const user = userEvent.setup();
     render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={["/chat"]}>
@@ -90,7 +112,8 @@ describe("AppShell mobile navigation", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
 
     await user.click(
@@ -129,6 +152,7 @@ describe("AppShell mobile navigation", () => {
   it("keeps focus inside More and restores it on close", async () => {
     const user = userEvent.setup();
     render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={["/chat"]}>
@@ -139,7 +163,8 @@ describe("AppShell mobile navigation", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
 
     const railElement = screen.getByRole("navigation", { name: "主导航" });
@@ -165,7 +190,11 @@ describe("AppShell mobile navigation", () => {
       ),
     );
     const settings = within(screen.getByRole("dialog", { name: "设置" }));
-    expect(settings.getByLabelText("Tenant")).toHaveFocus();
+    // 焦点落在打开时那一类的第一个输入框上——现在是「模型密钥」的 key 框，
+    // 不再是身份那一类的 Tenant。
+    await waitFor(() =>
+      expect(settings.getByLabelText("新的 API key")).toHaveFocus(),
+    );
     // 关闭走那颗 X（和 Escape），不走一颗页脚的「取消」。分类式的设置面板里，
     // 页脚那个位置看起来在为**整个面板**负责，而它只能取消当前这一类里的草稿
     // ——另外三类根本没有待保存的东西。
@@ -177,6 +206,7 @@ describe("AppShell mobile navigation", () => {
 describe("AppShell rail", () => {
   function mounted(at: string) {
     return render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={[at]}>
@@ -224,7 +254,8 @@ describe("AppShell rail", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
   }
 
@@ -232,17 +263,49 @@ describe("AppShell rail", () => {
     mounted("/work");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    // 当前那一项不是链接：它已经在自己的页面上了，所以那一行的工作是「这一组
-    // 展开不展开」，渲染成一个 disclosure 按钮。其余几项仍然是链接。
-    const here = rail.getByRole("button", { name: "Tasks" });
+    // 当前那一项仍然是链接，只多一个 aria-current。上一版把它渲染成一个
+    // disclosure 按钮（「这一组展开不展开」），同一行两种点击含义——2026-09-04
+    // 的评审把它列为第一条要改的。折叠现在是列表区自己头上那颗箭头。
+    const here = rail.getByRole("link", { name: "任务" });
     expect(here).toHaveAttribute("aria-current", "page");
-    expect(here).toHaveAttribute("aria-expanded", "true");
-    expect(rail.getByRole("link", { name: "Chat" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "对话" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(rail.getByRole("link", { name: "Code" })).not.toHaveAttribute(
+    expect(rail.getByRole("link", { name: "编码" })).not.toHaveAttribute(
       "aria-current",
     );
+    const fold = rail.getByRole("button", { name: "收起最近任务" });
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    expect(fold).toHaveAttribute("aria-controls", "workspace-sidebar-context");
+  });
+
+  it("主导航在八个页面上是同一组链接，顺序和位置不随内容变", () => {
+    const { unmount } = mounted("/chat");
+    const order = () =>
+      within(screen.getByRole("navigation", { name: "主导航" }))
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("aria-label"))
+        .filter((name) => name !== "Agent Workbench");
+    const onChat = order();
+    expect(onChat).toEqual(["对话", "任务", "编码", "知识库"]);
+    // Chat 的会话列表长在这四个链接**后面**，不夹在它们中间。
+    const rail = screen.getByRole("navigation", { name: "主导航" });
+    const slot = rail.querySelector("#workspace-sidebar-context");
+    expect(slot).not.toBeNull();
+    const lastLink = within(rail).getByRole("link", { name: "知识库" });
+    expect(
+      lastLink.compareDocumentPosition(slot as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    unmount();
+
+    // 辅助页没有列表可挂，四个链接照旧，只是不再有列表区——也不再收窄。
+    mounted("/system");
+    expect(order()).toEqual(onChat);
+    expect(
+      document.querySelector("#workspace-sidebar-context"),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /最近/ })).toBeNull();
   });
 
   it("将低频工具收进更多，保持主导航安静", async () => {
@@ -264,23 +327,28 @@ describe("AppShell rail", () => {
     expect(more.getByRole("link", { name: "运行状态" })).toBeInTheDocument();
   });
 
-  it("offers Chat, Tasks and Code as three top-level flows", () => {
+  it("offers 对话、任务、编码 as three top-level flows", () => {
     mounted("/chat");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    // 挂载在 /chat，所以 Chat 是那个 disclosure 按钮，另外两项是链接。
-    expect(rail.getByRole("button", { name: "Chat" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "Tasks" })).toBeInTheDocument();
-    expect(rail.getByRole("link", { name: "Code" })).toBeInTheDocument();
-    // 三个工作区一起改成英文，所以旧的中文名不该还留在栏里：一栏两套名字，
-    // 读屏念一套、搜索命中另一套。
-    expect(rail.queryByRole("link", { name: "对话" })).not.toBeInTheDocument();
-    expect(rail.queryByRole("link", { name: "编码" })).not.toBeInTheDocument();
+    // 三项都是链接，挂载在 /chat 所以 Chat 带 aria-current。
+    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(rail.getByRole("link", { name: "任务" })).toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "编码" })).toBeInTheDocument();
+    // 无障碍名只有中文。英文名画在旁边，但不进名字——一栏两套名字，读屏念
+    // 一套、搜索命中另一套。
+    expect(rail.queryByRole("link", { name: "Chat" })).not.toBeInTheDocument();
+    expect(rail.queryByRole("link", { name: "Code" })).not.toBeInTheDocument();
+    expect(rail.getByRole("link", { name: "对话" })).toHaveTextContent("Chat");
   });
 
   it("nests the active feature's real work items in the one shell sidebar", async () => {
     const user = userEvent.setup();
     render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={["/chat"]}>
@@ -291,7 +359,8 @@ describe("AppShell rail", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
 
     const railElement = screen.getByRole("navigation", { name: "主导航" });
@@ -323,6 +392,7 @@ describe("AppShell rail", () => {
   it("keeps a collapsed workspace context mounted for the mobile drawer", async () => {
     const user = userEvent.setup();
     render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={["/chat"]}>
@@ -333,12 +403,23 @@ describe("AppShell rail", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
 
-    const disclosure = screen.getByRole("button", { name: "Chat" });
-    await user.click(disclosure);
-    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    // 折叠是列表区头上那颗箭头，不是导航项。收起之后名字跟着换，读屏念到的
+    // 就是下一次点击会发生的事。
+    const fold = screen.getByRole("button", { name: "收起最近对话" });
+    await user.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    expect(fold).toHaveAccessibleName("展开最近对话");
+    // 限定在主导航里：底部那条移动端栏也有一个叫 Chat 的链接。
+    expect(
+      within(screen.getByRole("navigation", { name: "主导航" })).getByRole(
+        "link",
+        { name: "对话" },
+      ),
+    ).toHaveAttribute("aria-current", "page");
 
     const host = document.getElementById("workspace-sidebar-context");
     expect(host).not.toBeNull();
@@ -346,9 +427,9 @@ describe("AppShell rail", () => {
   });
 
   it.each([
-    ["/chat/session-42", "Tasks", "Chat"],
-    ["/work/task-42", "Code", "Tasks"],
-    ["/code/session-42", "Chat", "Code"],
+    ["/chat/session-42", "任务", "对话"],
+    ["/work/task-42", "编码", "任务"],
+    ["/code/session-42", "对话", "编码"],
   ])("returns from %s to the last open item", async (start, away, back) => {
     const user = userEvent.setup();
     mounted(start);
@@ -367,8 +448,8 @@ describe("AppShell rail", () => {
   });
 
   it.each([
-    ["/workflow", "Tasks", "/work"],
-    ["/code-review", "Code", "/code"],
+    ["/workflow", "任务", "/work"],
+    ["/code-review", "编码", "/code"],
   ])("does not treat the lookalike path %s as a flow", (start, label, root) => {
     mounted(start);
 
@@ -391,6 +472,7 @@ describe("AppShell rail", () => {
       const dialog = within(
         screen.getByRole("dialog", { name: "设置" }),
       );
+      await user.click(dialog.getByRole("button", { name: /本地身份/ }));
       const principalField = dialog.getByLabelText("Principal");
       await user.clear(principalField);
       await user.type(principalField, principal);
@@ -440,6 +522,7 @@ describe("AppShell rail", () => {
     const dialog = within(
       screen.getByRole("dialog", { name: "设置" }),
     );
+    await user.click(dialog.getByRole("button", { name: /本地身份/ }));
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
     await user.type(principalField, "user_b");
@@ -454,8 +537,8 @@ describe("AppShell rail", () => {
     // Chat 此刻是当前工作区，那一行是折叠开关而不是链接，所以记忆改从「离开
     // 再回来」这个方向验：切到 Tasks 之后 Chat 重新变成链接，它的 href 就是
     // 这份记忆本身——要是旧身份的 session-a 还留在里面，这里会看得见。
-    await user.click(rail.getByRole("link", { name: "Tasks" }));
-    expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
+    await user.click(rail.getByRole("link", { name: "任务" }));
+    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
       "href",
       "/chat",
     );
@@ -466,7 +549,7 @@ describe("AppShell rail", () => {
     mounted("/chat/session-a");
 
     const rail = within(screen.getByRole("navigation", { name: "主导航" }));
-    await user.click(rail.getByRole("link", { name: "Tasks" }));
+    await user.click(rail.getByRole("link", { name: "任务" }));
     await user.click(screen.getByRole("link", { name: "打开 A 任务" }));
     expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
       "/work/task-a",
@@ -476,6 +559,7 @@ describe("AppShell rail", () => {
     const dialog = within(
       screen.getByRole("dialog", { name: "设置" }),
     );
+    await user.click(dialog.getByRole("button", { name: /本地身份/ }));
     const principalField = dialog.getByLabelText("Principal");
     await user.clear(principalField);
     await user.type(principalField, "user_b");
@@ -499,8 +583,8 @@ describe("AppShell rail", () => {
       ).toHaveTextContent("/chat"),
     );
     // 同上：当前那一行是折叠开关，记忆从「离开再回来」这个方向验。
-    await user.click(rail.getByRole("link", { name: "Tasks" }));
-    expect(rail.getByRole("link", { name: "Chat" })).toHaveAttribute(
+    await user.click(rail.getByRole("link", { name: "任务" }));
+    expect(rail.getByRole("link", { name: "对话" })).toHaveAttribute(
       "href",
       "/chat",
     );
@@ -510,6 +594,7 @@ describe("AppShell rail", () => {
 describe("AppShell quick switcher", () => {
   function mounted(at = "/chat") {
     return render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={[at]}>
@@ -522,7 +607,8 @@ describe("AppShell quick switcher", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
   }
 
@@ -534,11 +620,11 @@ describe("AppShell quick switcher", () => {
     const dialog = screen.getByRole("dialog", { name: "快速跳转" });
     const search = within(dialog).getByRole("combobox", { name: "搜索页面" });
 
-    // 输入中文仍然要能找到它：label 现在是 Tasks，中文靠 keywords 里的别名兜。
+    // 中文是 label 本身；英文名靠 keywords 兜——输入 tasks 也要能到同一处。
     await user.type(search, "任务");
     expect(within(dialog).getAllByRole("option")).toHaveLength(1);
     expect(
-      within(dialog).getByRole("option", { name: /Tasks/ }),
+      within(dialog).getByRole("option", { name: /任务/ }),
     ).toBeInTheDocument();
 
     await user.keyboard("{Enter}");
@@ -607,6 +693,7 @@ describe("AppShell quick switcher", () => {
 describe("AppShell 更多面板里没有第二个主题开关", () => {
   function mounted() {
     return render(
+      <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <IdentityProvider>
           <MemoryRouter initialEntries={["/chat"]}>
@@ -617,7 +704,8 @@ describe("AppShell 更多面板里没有第二个主题开关", () => {
             </Routes>
           </MemoryRouter>
         </IdentityProvider>
-      </ThemeProvider>,
+      </ThemeProvider>
+      </QueryClientProvider>,
     );
   }
 

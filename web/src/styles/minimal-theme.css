@@ -977,9 +977,11 @@ select {
   grid-template-columns: var(--aw-nav-width-collapsed) minmax(0, 1fr);
 }
 
-.aw-app-shell.is-context-free:not(.is-rail-collapsed) {
-  --aw-nav-width: 188px;
-}
+/* 这里曾经有一条 `.is-context-free:not(.is-rail-collapsed) { --aw-nav-width: 188px }`
+   ——没有列表可挂的辅助页把侧栏收窄 84px。2026-09-04 的评审量到的代价：品牌名
+   在 188px 里折行，同一组导航在两种宽度之间跳，位置记忆建立不起来。宽度现在
+   只随窗口断点和用户主动收起变，页面自己不改它。`is-context-free` 这个 class
+   留着，它现在只负责把底部那组钉在栏底的 spacer。 */
 
 .aw-app-content {
   position: relative;
@@ -1131,6 +1133,22 @@ select {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 英文名画在中文名旁边，同一行、基线对齐、更淡更小。它不进无障碍名
+   （`aria-hidden`）——名字只有一套，这个只是让 Chat / Tasks / Code 这三个
+   产品名仍然看得见。 */
+.aw-global-link-alias {
+  margin-left: 6px;
+  color: var(--aw-nav-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.aw-global-link.active .aw-global-link-alias,
+.aw-global-link:hover .aw-global-link-alias {
+  color: var(--aw-nav-muted);
 }
 
 .aw-rail-identity {
@@ -1808,8 +1826,14 @@ select {
 }
 
 .aw-app-shell:not(.is-rail-collapsed)
-  :is(.aw-logo-copy, .aw-global-link-copy, .aw-rail-identity-copy) {
+  :is(.aw-logo-copy, .aw-rail-identity-copy) {
   display: grid;
+}
+
+.aw-app-shell:not(.is-rail-collapsed) .aw-global-link-copy {
+  display: flex;
+  align-items: baseline;
+  white-space: nowrap;
 }
 
 .aw-app-shell:not(.is-rail-collapsed) .aw-rail-collapse {
@@ -1833,140 +1857,103 @@ select {
   text-transform: uppercase;
 }
 
-.aw-sidebar-workspace {
+/* 当前模式的最近记录：导航下面独立的一区，带自己的标题行。
+ *
+ * 上一版把这份列表嵌在它所属的导航项底下，导航项那一行兼作标题与折叠开关，
+ * 而列表 `flex: 1 1 auto` 撑满剩余高度——于是排在它后面的导航项被推到栏底，
+ * 换一个模式它们又回来。2026-09-04 的评审把这件事量出来了（docs/reviews）。
+ * 现在导航那几行永远 `flex: 0 0 auto`，撑满剩余高度的只有这一区。 */
+.aw-sidebar-records {
   display: flex;
   min-width: 0;
-  flex: 0 0 auto;
-  flex-direction: column;
-}
-
-.aw-sidebar-workspace.is-active {
-  min-height: 88px;
+  min-height: 0;
   flex: 1 1 auto;
+  flex-direction: column;
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--aw-nav-rule);
 }
 
-/* 收起之后这一栏不该还占着那段高度——收起的意义就是把它让出去。
-   折叠状态现在归壳层管（导航项那一行就是这一组的标题），所以是一个真的
-   class，不再需要 :has() 往 portal 进来的内容里看。 */
-.aw-sidebar-workspace.is-active.is-collapsed {
-  min-height: auto;
+/* 收起之后这一区不该还占着那段高度——收起的意义就是把它让出去。 */
+.aw-sidebar-records.is-collapsed {
   flex: 0 0 auto;
 }
 
-/* 导航项这一行同时是这一组的标题：名字、折叠开关、以及这个工作区自己的
-   动作都在上面。展开着的那一项让名字缩到内容宽度，把余下的横向空间留给
-   右端的动作；没展开的那些仍然整行可点，它们只是导航。 */
-.aw-workspace-row {
+.aw-sidebar-records-row {
   display: flex;
   min-width: 0;
+  min-height: 32px;
   align-items: center;
   gap: 2px;
 }
 
-.aw-sidebar-workspace.is-active .aw-workspace-row > .aw-global-link {
-  flex: 0 1 auto;
-}
-
-.aw-sidebar-workspace.is-active .aw-workspace-row {
+/* 标题行整行是开关，靶子是一整行 30px，不是一颗 13px 的箭头。字号和上面
+   「工作空间 / 资源」两个分组标签同一套——它就是一个分组标签，只是多了一颗
+   箭头和右端的动作。 */
+.aw-records-fold {
+  display: flex;
+  min-width: 0;
+  min-height: 30px;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 0 7px 0 6px;
+  gap: 5px;
+  border: 0;
   border-radius: 8px;
-  background: var(--aw-nav-active);
+  background: transparent;
+  color: var(--aw-nav-faint);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 
-/* 箭头长在行里，不是行旁边的第二个控件：整行就是那个开关。
-   收起时指向右——它说的是「展开的方向」，不是「现在是什么状态」；一个朝下
-   的箭头配一个收起的区，每次都要想一下才知道点了会怎样。
+.aw-records-fold:hover {
+  background: var(--aw-nav-hover);
+  color: var(--aw-nav-text);
+}
 
-   下面这条 `color` 有 11 天不生效（2026-08-21 到 09-01）。箭头的前身
-   `.aw-workspace-fold` 是行**旁边**一个独立的 <button>，够不着
-   `.aw-global-link.active svg`，那时 muted 是真的；afa86f8 把它收进行里变成行内
-   图标之后，那条 (0,2,1) 的规则开始压过它 (0,1,0)，
-   而箭头**只在当前工作区那一行渲染**、那个 button 恒带 `active`——于是它一直
-   是 --aw-nav-text，和「退回成行内的一个图标」正好相反，没有任何测试会红。
+.aw-records-fold > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-   修法是删掉 `.aw-global-link.active svg { color: currentColor }` 而不是在这里
-   堆特异度：那条规则在整个应用里唯一能观察到的效果就是这个 bug。导航图标的
-   高亮另有出处（下面 `.aw-global-link:is(:hover, .active) .aw-global-link-icon`），
-   删掉之后实测它仍是 --aw-nav-text。
-
-   顺带对齐了同一行里的另外两个控件：搜索和 + （`.aw-side-action`）本来就是
-   muted。这一行现在是「亮图标 + 亮标题」说身份，三个 muted 控件说能做什么。 */
+/* 箭头长在行里。收起时指向右——它说的是「展开的方向」，不是「现在是什么
+   状态」；一个朝下的箭头配一个收起的区，每次都要想一下才知道点了会怎样。 */
 .aw-workspace-fold-icon {
   flex: none;
-  margin-left: 4px;
   color: var(--aw-nav-muted);
   transition: transform var(--aw-duration-fast) var(--aw-ease);
 }
 
-.aw-sidebar-workspace.is-collapsed .aw-workspace-fold-icon {
+.aw-sidebar-records.is-collapsed .aw-workspace-fold-icon {
   transform: rotate(-90deg);
-}
-
-/* 当前这一行是 <button> 而不是 <a>，浏览器给按钮的默认外观（居中、边框、
-   系统字体）会把它和旁边四个链接画成两种东西。 */
-.aw-workspace-row > button.aw-global-link {
-  width: 100%;
-  border: 0;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
 .aw-workspace-actions {
   display: flex;
-  flex: 1;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
 }
 
-/* 只剩这一行真正独有的东西：它要和右边的动作区分宽度。
- *
- * 原先还压着三条几何：min-height 38px（和基类同值，纯复述）、border-radius 7px
- * 和 font-size 13px（和当时的基类 8px / 13.5px 不同）。后两条的「不同」不是有人
- * 选过，是这一行恰好被包在 .aw-workspace-row 里、而底下那条「资源 · 知识库」没有
- * ——同一个类名，因为祖先不同而长成两个样子。删掉之后「一行长什么样」只有基类
- * 一处说了算，加不加容器都一样。 */
-.aw-workspace-row > .aw-global-link {
-  flex: 1 1 auto;
-}
-
-.aw-workspace-row > .aw-global-link.active {
-  background: transparent;
-  font-weight: 550;
-}
-
-.aw-sidebar-workspace.is-active
-  .aw-workspace-row
-  > button.aw-global-link:hover {
-  background: transparent;
-}
-
-.aw-workspace-row > .aw-global-link.active .aw-global-link-icon {
-  color: var(--aw-nav-text);
-}
-
-/* 缩进 + 一条竖线，说的是「这个列表属于上面那一行」。
- *
- * 这一处改过两次，值得把两次都记下来。原先是 27px 缩进，我为了给会话标题
- * 多让出宽度把它整个拉平了，理由是「同一时刻只有一个工作区展开，靠相邻就
- * 说清楚了」——那个理由不成立：拉平之后导航项和它底下的会话行左缘相同、
- * 行高相近，读起来是一列互不相干的东西，层级没有任何东西在表示。
- *
- * 宽度那笔账是真的，所以这次回来的比原来窄：19px 而不是 27px（缩进 10 +
- * 内边距 8 + 1px 的线）。272px 的侧栏里会话标题因此是 177px，仍然比最初的
- * 169px 宽，而层级看得见了。 */
+/* 不再缩进。上一版靠 30px 的缩进和一条竖线说「这个列表属于上面那一行」，
+   现在标题行就在列表头上，归属由标题说，宽度全部还给会话标题。 */
 .aw-sidebar-context-slot {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  margin: 2px 0 5px 30px;
-  padding-left: 0;
+  margin: 2px 0 5px;
   overflow: hidden;
-  border-left: 0;
 }
 
-.aw-sidebar-workspace.is-collapsed .aw-sidebar-context-slot {
+.aw-sidebar-records.is-collapsed .aw-sidebar-context-slot {
   display: none;
 }
 
@@ -2096,13 +2083,8 @@ select {
 }
 
 .aw-app-shell.is-rail-collapsed
-  :is(.aw-sidebar-section-label, .aw-sidebar-context-slot) {
+  :is(.aw-sidebar-section-label, .aw-sidebar-records) {
   display: none;
-}
-
-.aw-app-shell.is-rail-collapsed .aw-sidebar-workspace.is-active {
-  min-height: auto;
-  flex: 0 0 auto;
 }
 
 .aw-app-shell.is-rail-collapsed .aw-sidebar-footer-nav {
@@ -2581,47 +2563,41 @@ select {
     transition-delay: 0s;
   }
 
+  /* 抽屉里只有当前模式的列表：导航由底部那条栏负责，品牌、分组标签、更多和
+     身份都不进来。列表永远展开——桌面上的「收起」和抽屉无关，抽屉打开就是
+     为了看它，所以折叠按钮也不画。 */
   .aw-global-rail
     :is(
       .aw-rail-brand-row,
       .aw-sidebar-section-label,
-      .aw-sidebar-workspace:not(.is-active),
-      .aw-sidebar-workspace.is-active > .aw-global-link,
+      .aw-global-link,
       .aw-sidebar-footer-nav,
-      .aw-rail-identity
+      .aw-rail-identity,
+      .aw-records-fold
     ) {
     display: none;
   }
 
-  .aw-global-rail
-    .aw-sidebar-workspace.is-active
-    > .aw-workspace-row
-    > .aw-global-link {
+  .aw-global-rail .aw-sidebar-records-row:has(.aw-workspace-actions:empty) {
     display: none;
   }
 
-  .aw-global-rail
-    .aw-sidebar-workspace.is-active
-    > .aw-workspace-row:has(.aw-workspace-actions:empty) {
-    display: none;
-  }
-
-  .aw-global-rail .aw-sidebar-workspace.is-active > .aw-workspace-row {
+  .aw-global-rail .aw-sidebar-records-row {
     min-height: 32px;
     justify-content: flex-end;
-    background: transparent;
   }
 
-  .aw-global-rail .aw-sidebar-workspace.is-active {
+  .aw-app-shell.is-rail-collapsed .aw-global-rail .aw-sidebar-records,
+  .aw-global-rail .aw-sidebar-records {
     display: flex;
     min-height: 0;
     flex: 1 1 auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
   }
 
-  .aw-app-shell.is-rail-collapsed .aw-global-rail .aw-sidebar-context-slot,
-  .aw-global-rail
-    .aw-sidebar-workspace.is-collapsed
-    .aw-sidebar-context-slot,
+  .aw-global-rail .aw-sidebar-records.is-collapsed .aw-sidebar-context-slot,
   .aw-global-rail .aw-sidebar-context-slot {
     display: flex;
     margin: 0;
@@ -3045,4 +3021,71 @@ select {
     -webkit-text-fill-color: currentcolor;
     animation: none;
   }
+}
+
+/* 第三层：工程说明 ------------------------------------------------------
+ *
+ * 每页分三层（2026-09-04 评审第 2 条）：第一层状态与动作，第二层证据与详情，
+ * 第三层是这个 <details>，装 ADR、门禁规则、协议字段和设计理由。summary 画成
+ * 一行小节标题，折起来时只占这一行。 */
+.aw-engineering-notes {
+  margin-top: 22px;
+  padding-top: 8px;
+  border-top: 1px solid var(--aw-border);
+}
+
+.aw-engineering-notes > summary {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  color: var(--aw-text-muted);
+  list-style: none;
+  cursor: pointer;
+}
+
+.aw-engineering-notes > summary::-webkit-details-marker {
+  display: none;
+}
+
+.aw-engineering-notes > summary:hover {
+  color: var(--aw-text);
+}
+
+.aw-engineering-notes > summary > strong {
+  color: var(--aw-text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aw-engineering-notes > summary > small {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-engineering-notes > summary .aw-step-caret {
+  flex: none;
+  transition: transform var(--aw-duration-fast) var(--aw-ease);
+}
+
+.aw-engineering-notes[open] > summary .aw-step-caret {
+  transform: rotate(90deg);
+}
+
+.aw-engineering-notes-body {
+  display: grid;
+  padding-top: 10px;
+  gap: 22px;
+}
+
+/* 「重新检查」贴在「没在跑」那句话下面：首屏三件事的第三件。 */
+.aw-screen-recheck {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  gap: 6px;
 }

@@ -26,7 +26,7 @@ import {
 import { useStoredState } from "../hooks/useStoredState";
 import { SettingsDialog } from "./SettingsDialog";
 import { useIdentity } from "./IdentityContext";
-import { isPathWithin, NAVIGATION } from "./navigation";
+import { isPathWithin, NAVIGATION, type NavigationItem } from "./navigation";
 import { QuickSwitcher } from "./QuickSwitcher";
 import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
@@ -45,6 +45,46 @@ interface PrimaryNavigationMemory {
   ownerByLocationKey: Record<string, string>;
   pendingIdentityPath: string | null;
   identityBoundaryActive: boolean;
+}
+
+/**
+ * 主导航里的一行。永远是 `Link`，当前那一项只多一个 `aria-current`。
+ *
+ * `Link` 而不是 `NavLink`：这一项代表一组前缀（/work 与 /work/:id 都是它），
+ * 而 `NavLink` 会用自己那条单路径匹配覆盖 `aria-current`，在 /work/abc 上读成
+ * 「不在这里」。
+ */
+function RailLink({
+  current,
+  item,
+  to,
+}: {
+  current: boolean;
+  item: NavigationItem;
+  to: string;
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      aria-current={current ? "page" : undefined}
+      aria-label={item.label}
+      className={`aw-global-link ${current ? "active" : ""}`}
+      title={`${item.label} · ${item.description}`}
+      to={to}
+    >
+      <span className="aw-global-link-icon">
+        <Icon aria-hidden="true" size={18} />
+      </span>
+      <span className="aw-global-link-copy">
+        {item.label}
+        {item.alias === null ? null : (
+          <small aria-hidden="true" className="aw-global-link-alias">
+            {item.alias}
+          </small>
+        )}
+      </span>
+    </Link>
+  );
 }
 
 export function AppShell() {
@@ -312,6 +352,18 @@ export function AppShell() {
   const mobileMoreActive = secondaryActive || knowledgeCurrent;
   const contextSidebarAvailable =
     currentPrimaryFlow !== undefined || knowledgeCurrent;
+  // 哪一份列表挂在侧栏里，以及它此刻收没收起。先算成一个小对象再进 JSX：
+  // 折叠按钮的 onClick 是个闭包，TypeScript 对 `contextItem` 的收窄不跟进去。
+  const contextItem =
+    currentPrimaryFlow ?? (knowledgeCurrent ? KNOWLEDGE_NAVIGATION : undefined);
+  const records =
+    contextItem === undefined || contextItem.records === null
+      ? null
+      : {
+          key: contextItem.to,
+          label: contextItem.records,
+          collapsed: collapsedWorkspaces[contextItem.to] === true,
+        };
   const handleMoreKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -451,131 +503,87 @@ export function AppShell() {
             )}
           </button>
         </div>
+        {/* 主导航是一组固定的链接，位置、顺序和点击含义在八个页面上都一样。
+            它下面另起一区放当前模式的最近记录（对话 / 任务 / 编码 / 知识库）。
+
+            **这一版推翻了上一版**，上一版的做法是把列表嵌在它所属的那个导航项
+            底下，导航项那一行同时充当列表的标题、折叠开关和动作位。省掉的是
+            一行标题，付出的是三样东西，2026-09-04 那份评审逐条量出来了：Chat
+            激活时它的会话列表把 Tasks 和 Code 推到栏底，切到 Tasks 之后 Code 又
+            换了位置，进辅助页整栏还从 272px 收成 188px、品牌名折行——同一个
+            去处在不同页面上出现在不同的高度，位置记忆建立不起来；而当前那一项
+            未选中时是链接、选中后变成折叠按钮，同一行两种点击含义。
+
+            所以现在：导航永远是链接（当前那一项只是多一个 aria-current），列表
+            的名字回到列表自己头上，折叠是一颗看得见的箭头，新建和搜索仍在那一
+            行的右端。上一版省掉的那行标题回来了——它就是「稳定的位置」的价格。 */}
         <span className="aw-sidebar-section-label">工作空间</span>
-        {PRIMARY_NAVIGATION.map((item) => {
-          const Icon = item.icon;
-          const current = item.covers.some((prefix) =>
-            isPathWithin(location.pathname, prefix),
-          );
-          const collapsed = collapsedWorkspaces[item.to] === true;
-          return (
-            <div
-              className={`aw-sidebar-workspace ${current ? "is-active" : ""} ${
-                current && collapsed ? "is-collapsed" : ""
-              }`}
-              key={item.to}
-            >
-              {/* 导航项这一行**就是**这一组的标题：名字、折叠开关和这个
-                  工作区自己的动作都在它上面。此前名字下面还另起一行
-                  「最近对话 / 最近任务 / 最近编码」——同一件事在同一栏里被
-                  命名了两次，而第二次占掉一整行高度。 */}
-              <div className="aw-workspace-row">
-                {current ? (
-                  /* 当前这一项已经在它自己的页面上了，所以这一行的工作不再
-                     是「去哪里」，而是「这一组展开不展开」——于是它是一个
-                     真的 disclosure 按钮，整行可点，不是一个链接旁边再挂
-                     一颗只有 20px 的箭头。
-                     上一版就是那样：折叠只能点箭头，而那颗箭头在一行 36px
-                     的行里是一个 20px 的靶子，还紧挨着两个别的图标。
-                     回到这一栏根部（新对话 / 新任务 / 新会话）的路没有丢，
-                     它是右边那颗 + —— 那本来就是这一栏里除了「回到哪一段」
-                     之外唯一的另一件事。 */
-                  <button
-                    aria-controls="workspace-sidebar-context"
-                    aria-current="page"
-                    aria-expanded={!collapsed}
-                    className="aw-global-link active"
-                    onClick={() => {
-                      setCollapsedWorkspaces((held) => ({
-                        ...held,
-                        [item.to]: !collapsed,
-                      }));
-                    }}
-                    title={`${collapsed ? "展开" : "收起"}${item.label}列表`}
-                    type="button"
-                  >
-                    <span className="aw-global-link-icon">
-                      <Icon aria-hidden="true" size={18} />
-                    </span>
-                    <span className="aw-global-link-copy">{item.label}</span>
-                    <ChevronDown
-                      aria-hidden="true"
-                      className="aw-workspace-fold-icon"
-                      size={13}
-                    />
-                  </button>
-                ) : (
-                  /* `Link`, not `NavLink`: this entry stands for a set of
-                     prefixes, and `NavLink` overwrites `aria-current` with its
-                     own single-path match -- which reads "not here" on /work. */
-                  <Link
-                    aria-label={item.label}
-                    className="aw-global-link"
-                    title={`${item.label} · ${item.description}`}
-                    to={destinationFor(item)}
-                  >
-                    <span className="aw-global-link-icon">
-                      <Icon aria-hidden="true" size={18} />
-                    </span>
-                    <span className="aw-global-link-copy">{item.label}</span>
-                  </Link>
-                )}
-                {current ? (
-                  <>
-                    <div
-                      className="aw-workspace-actions"
-                      ref={setSidebarActionsHost}
-                    />
-                  </>
-                ) : null}
-              </div>
-              {current ? (
-                // 不带 aria-label：`aria-label` 在没有 role 的 <div> 上
-                // 是被禁止的，辅助技术会直接丢掉它（在无障碍树里确认过
-                // 它不在）。里面每个 feature 自己的 <aside>/<nav> 都带着
-                // 真名字，一个读不出来的标签只会让人以为这里有名字。
-                <div
-                  className="aw-sidebar-context-slot"
-                  id="workspace-sidebar-context"
-                  ref={setSidebarHost}
-                />
-              ) : null}
-            </div>
-          );
-        })}
+        {PRIMARY_NAVIGATION.map((item) => (
+          <RailLink
+            current={item.covers.some((prefix) =>
+              isPathWithin(location.pathname, prefix),
+            )}
+            item={item}
+            key={item.to}
+            to={destinationFor(item)}
+          />
+        ))}
         <span className="aw-sidebar-section-label">资源</span>
         {KNOWLEDGE_NAVIGATION === undefined ? null : (
+          <RailLink
+            current={knowledgeCurrent}
+            item={KNOWLEDGE_NAVIGATION}
+            to={KNOWLEDGE_NAVIGATION.to}
+          />
+        )}
+        {records === null ? (
+          <div className="aw-rail-spacer" />
+        ) : (
           <div
-            className={`aw-sidebar-workspace ${
-              knowledgeCurrent ? "is-active" : ""
+            className={`aw-sidebar-records ${
+              records.collapsed ? "is-collapsed" : ""
             }`}
           >
-            <Link
-              aria-label={KNOWLEDGE_NAVIGATION.label}
-              aria-current={knowledgeCurrent ? "page" : undefined}
-              className={`aw-global-link ${knowledgeCurrent ? "active" : ""}`}
-              title={`${KNOWLEDGE_NAVIGATION.label} · ${KNOWLEDGE_NAVIGATION.description}`}
-              to={KNOWLEDGE_NAVIGATION.to}
-            >
-              <span className="aw-global-link-icon">
-                <KNOWLEDGE_NAVIGATION.icon aria-hidden="true" size={18} />
-              </span>
-              <span className="aw-global-link-copy">
-                {KNOWLEDGE_NAVIGATION.label}
-              </span>
-            </Link>
-            {knowledgeCurrent ? (
+            <div className="aw-sidebar-records-row">
+              {/* 整行是开关，箭头长在行里：靶子是一整行 30px，不是一颗 13px
+                  的图标。`aria-label` 把动作说全（「收起最近对话」），可见文字
+                  只有名字——名字含在动作里，读屏念的和眼睛看的对得上。 */}
+              <button
+                aria-controls="workspace-sidebar-context"
+                aria-expanded={!records.collapsed}
+                aria-label={`${records.collapsed ? "展开" : "收起"}${records.label}`}
+                className="aw-records-fold"
+                onClick={() => {
+                  setCollapsedWorkspaces((held) => ({
+                    ...held,
+                    [records.key]: !records.collapsed,
+                  }));
+                }}
+                type="button"
+              >
+                <ChevronDown
+                  aria-hidden="true"
+                  className="aw-workspace-fold-icon"
+                  size={13}
+                />
+                <span>{records.label}</span>
+              </button>
               <div
-                className="aw-sidebar-context-slot"
-                id="workspace-sidebar-context"
-                ref={setSidebarHost}
+                className="aw-workspace-actions"
+                ref={setSidebarActionsHost}
               />
-            ) : null}
+            </div>
+            {/* 不带 aria-label：`aria-label` 在没有 role 的 <div> 上是被禁止的，
+                辅助技术会直接丢掉它。里面每个 feature 自己的 <aside>/<nav> 都
+                带着真名字。收起时只是 display: none，不卸载——窄屏抽屉打开的
+                就是这一块，而抽屉里没有「收起」这件事。 */}
+            <div
+              className="aw-sidebar-context-slot"
+              id="workspace-sidebar-context"
+              ref={setSidebarHost}
+            />
           </div>
         )}
-        {currentPrimaryFlow === undefined && !knowledgeCurrent ? (
-          <div className="aw-rail-spacer" />
-        ) : null}
         <div className="aw-sidebar-footer-nav">
           <button
             aria-label="更多"

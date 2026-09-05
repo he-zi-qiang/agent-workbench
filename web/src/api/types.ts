@@ -858,7 +858,18 @@ export interface ComputerSessionResponse {
   session: ComputerSession | null;
   /** 读不到的理由，读得到时是空串。 */
   detail: string;
+  /**
+   * **API 进程**跑在哪个平台上，粗分四档。
+   *
+   * 「怎么把屏幕控制服务器起来」这句提示按它分支，而不是按浏览器所在的系统：
+   * macOS 原生是 `scripts/dev.sh computer-server`，Windows 是 `scripts\computer.cmd`
+   * （ADR-0108），Compose 栈里 API 是个 Linux 容器、服务器却得在宿主机上起——
+   * 一个在 Mac 上看 Windows 那套栈的人，浏览器的系统是错的那个答案。
+   */
+  host_platform: HostPlatform;
 }
+
+export type HostPlatform = "darwin" | "win32" | "linux" | "other";
 
 export interface ComputerSession {
   service: string;
