@@ -13,12 +13,15 @@ import {
   ApiError,
   checkHealth,
   getDeploymentCapabilities,
+  getSystemWorkers,
   setDeploymentSwitch,
 } from "../../api/client";
 import type {
   DeploymentCapabilitiesResponse,
   DeploymentCapability,
   DeploymentSwitch,
+  WorkerPresenceView,
+  WorkersResponse,
 } from "../../api/types";
 import { useIdentity } from "../../app/IdentityContext";
 import {
@@ -36,6 +39,23 @@ import {
  */
 export function HealthReport({ heading }: { heading?: ReactNode }) {
   const queryClient = useQueryClient();
+  const { identity } = useIdentity();
+  // Worker 自己每 20 秒登记一次（ADR-0110）；这里 15 秒问一次，和健康检查同一节奏。
+  // 查不到不重试：一个没有登记表的旧 API 答 404，重试三次也还是 404。
+  const workers = useQuery({
+    queryKey: ["system-workers", identity.tenantId, identity.principalId],
+    queryFn: () => getSystemWorkers(identity),
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  // 和 `CapabilityReport` 同一个 key、同一份选项，所以是同一份缓存：自检要
+  // 读它，但不该为此多发一次请求。
+  const capabilities = useQuery({
+    queryKey: ["deployment-capabilities", identity.tenantId, identity.principalId],
+    queryFn: () => getDeploymentCapabilities(identity),
+    staleTime: Infinity,
+    refetchOnWindowFocus: "always",
+  });
   const health = useQuery({
     queryKey: ["system-health"],
     queryFn: async () => {
@@ -65,6 +85,7 @@ export function HealthReport({ heading }: { heading?: ReactNode }) {
             void queryClient.invalidateQueries({
               queryKey: ["deployment-capabilities"],
             });
+            void workers.refetch();
           }}
           type="button"
         >
@@ -72,6 +93,14 @@ export function HealthReport({ heading }: { heading?: ReactNode }) {
           重新检查
         </button>
       </header>
+
+      <DemoReadiness
+        capabilities={capabilities.data?.capabilities ?? null}
+        live={health.data?.live.ok}
+        ready={health.data?.ready.ok}
+        workers={workers.data ?? null}
+        workersError={workers.isError}
+      />
 
       {health.isPending && <LoadingLine label="正在检查服务" />}
       {health.error !== null && <ErrorNotice message={errorMessage(health.error)} />}
@@ -103,24 +132,18 @@ export function HealthReport({ heading }: { heading?: ReactNode }) {
             health.isError,
           )}
         />
-        <UnknownMetric
-          detail="当前没有 Worker heartbeat 或状态查询 API。"
-          icon={<CircleHelp aria-hidden="true" size={18} />}
-          label="任务与文档 Worker"
-        />
+        <WorkerMetrics error={workers.isError} report={workers.data} />
       </section>
 
-      {/* 这段话此前写的是「数据库已就绪不代表模型、Qdrant、Task Worker 或文档处理
-          Worker 都正常；现有公开接口无法验证这些状态」。**模型那半句从今天起不成立**
-          ——下面这份清单就是那个接口（ADR-102），它答得出这个进程有没有装配起
-          模型、检索、联网搜索与 MCP 工具。剩下的半句仍然成立，而且是这一页现在
-          唯一还要靠人去核对的部分：Worker 跑在别的进程里，没有任何上报通道。 */}
+      {/* 这段话此前说「Worker 在另一个进程里，它是不是 --demo 合成 Worker，从这里
+          看不出来」。**Worker 那半句从 ADR-0110 起不成立**：进程自己每 20 秒登记
+          一次，上面那两格读的就是登记，合成与否也写在登记里。还看不出来的只剩
+          Qdrant——它没有登记，也不在 /health/ready 里。压成一句，按评审第 2 条
+          「把诊断说明压成一句，并给相应操作」。 */}
       <div className="aw-notice is-warning">
         <CircleHelp aria-hidden="true" size={16} />
         <span>
-          数据库已就绪不代表 Qdrant 与两个 Worker 都正常。下面这份清单只答得出 API
-          进程自己装配成了什么；Worker 在另一个进程里，它是不是 <code>--demo</code>{" "}
-          合成 Worker，从这里看不出来。
+          数据库已就绪不代表 Qdrant 与两个 Worker 都正常：Worker 现在自己登记（上面两格），Qdrant 仍然从这里看不出来——上传后停在「处理中」时先看文档 Worker 那一格。
         </span>
       </div>
 
@@ -461,6 +484,267 @@ function HealthMetric({
       </strong>
       <small>{detail}</small>
     </div>
+  );
+}
+
+/**
+ * 两格：任务 Worker、文档 Worker（ADR-0110）。
+ *
+ * 三种答案要长得不一样：**在线**（有一行还没过期）、**失联**（有行、都过期了——
+ * 「最近一次心跳在 N 秒前」比一个红点有用）、**没有登记**（一行都没有：从没起过，
+ * 或者起在一个没打 0033 迁移的库上）。API 没有登记表时退回上一版那一格「状态未知」
+ * ——那是「这个 API 看不见」，不是「没有 Worker」。
+ */
+function WorkerMetrics({
+  error,
+  report,
+}: {
+  error: boolean;
+  report: WorkersResponse | undefined;
+}) {
+  if (error || report === undefined || !report.available) {
+    return (
+      <UnknownMetric
+        detail={
+          error
+            ? "读不到 Worker 登记；API 没在跑或比控制台旧。"
+            : report === undefined
+              ? "正在读取 Worker 登记。"
+              : "这个 API 没有 Worker 登记表（早于 ADR-0110）。"
+        }
+        icon={<CircleHelp aria-hidden="true" size={18} />}
+        label="任务与文档 Worker"
+      />
+    );
+  }
+  return (
+    <>
+      <WorkerMetric
+        icon={<CircleDashed aria-hidden="true" size={18} />}
+        kind="task"
+        label="任务 Worker 进程"
+        rows={report.workers}
+      />
+      <WorkerMetric
+        icon={<CircleDashed aria-hidden="true" size={18} />}
+        kind="ingestion"
+        label="文档 Worker 进程"
+        rows={report.workers}
+      />
+    </>
+  );
+}
+
+function WorkerMetric({
+  icon,
+  kind,
+  label,
+  rows,
+}: {
+  icon: ReactNode;
+  kind: WorkerPresenceView["kind"];
+  label: string;
+  rows: WorkerPresenceView[];
+}) {
+  const mine = rows.filter((row) => row.kind === kind);
+  const fresh = mine.filter((row) => row.fresh);
+  const demo = fresh.some((row) => row.capabilities["demo"] === true);
+  const latest = mine.reduce<WorkerPresenceView | null>(
+    (held, row) =>
+      held === null || row.seconds_since_heartbeat < held.seconds_since_heartbeat
+        ? row
+        : held,
+    null,
+  );
+  const value =
+    fresh.length > 0
+      ? `在线${fresh.length > 1 ? ` · ${String(fresh.length)} 个` : ""}${demo ? " · 合成演示" : ""}`
+      : latest !== null
+        ? "失联"
+        : "没有登记";
+  const detail =
+    fresh.length > 0
+      ? `${fresh.map((row) => row.deployment).join("、")} 装配；${demo ? "--demo 起的，不会调用真实模型。" : "每 20 秒登记一次。"}`
+      : latest !== null
+        ? `最近一次心跳在 ${String(Math.round(latest.seconds_since_heartbeat))} 秒前，之后没有再登记。`
+        : kind === "task"
+          ? "从没有 Worker 登记过；起它：scripts/dev.sh demo-worker。"
+          : "从没有 Worker 登记过；起它：scripts/dev.sh ingest。";
+  return (
+    <HealthMetric
+      detail={detail}
+      icon={icon}
+      label={label}
+      ok={fresh.length > 0}
+      unavailable={false}
+      value={value}
+    />
+  );
+}
+
+/**
+ * 演示前自检（2026-09-04 评审 D 项）。
+ *
+ * 一个「可以开始演示」的判断，而不是让人自己把五格状态和一份清单在脑子里合起来。
+ * 必须项：API、数据库、任务 Worker、模型（`chat.direct`）。文档 Worker 与知识库问答
+ * 是「资料问答」那条演示才需要的，缺了只降级、不拦。每一条缺失都带着补法，补法
+ * 来自能力清单自己的 remedy 或登记格里那条命令。
+ *
+ * **API 能响应不等于任务可执行**——这正是这块存在的理由：此前这一页最上面的绿灯
+ * 只说 API，而任务停在排队里的时候 API 一直是绿的。
+ */
+function DemoReadiness({
+  capabilities,
+  live,
+  ready,
+  workers,
+  workersError,
+}: {
+  capabilities: DeploymentCapability[] | null;
+  live: boolean | undefined;
+  ready: boolean | undefined;
+  workers: WorkersResponse | null;
+  workersError: boolean;
+}) {
+  const row = (id: string) =>
+    capabilities?.find((held) => held.id === id) ?? null;
+  const freshOf = (kind: WorkerPresenceView["kind"]) =>
+    workers?.workers.filter((held) => held.kind === kind && held.fresh) ?? [];
+  const taskWorkers = freshOf("task");
+  const ingestWorkers = freshOf("ingestion");
+  const workersKnown = workers !== null && workers.available && !workersError;
+  const direct = row("chat.direct");
+  const rag = row("chat.knowledge_base");
+  const checks: {
+    key: string;
+    label: string;
+    state: "ok" | "missing" | "unknown";
+    required: boolean;
+    hint: string;
+  }[] = [
+    {
+      key: "api",
+      label: "API 可响应",
+      state: live === undefined ? "unknown" : live ? "ok" : "missing",
+      required: true,
+      hint: "起它：scripts/dev.sh demo-api。",
+    },
+    {
+      key: "db",
+      label: "数据库就绪",
+      state: ready === undefined ? "unknown" : ready ? "ok" : "missing",
+      required: true,
+      hint: "起服务并迁移：scripts/dev.sh services，再 scripts/dev.sh migrate。",
+    },
+    {
+      key: "task-worker",
+      label: "任务 Worker 在线",
+      state: !workersKnown
+        ? "unknown"
+        : taskWorkers.length > 0
+          ? "ok"
+          : "missing",
+      required: true,
+      hint: workersKnown
+        ? "起它：scripts/dev.sh demo-worker（Windows 容器栈由 stack.cmd 一起带起）。"
+        : "这个 API 看不见 Worker 登记；只能去看进程。",
+    },
+    {
+      key: "model",
+      label: "模型可用",
+      state:
+        direct === null
+          ? "unknown"
+          : direct.state === "available"
+            ? "ok"
+            : "missing",
+      required: true,
+      hint:
+        direct !== null && direct.remedy !== ""
+          ? direct.remedy
+          : "在设置的「模型密钥」里存一把 key，然后重启 API。",
+    },
+    {
+      key: "ingest-worker",
+      label: "文档 Worker 在线",
+      state: !workersKnown
+        ? "unknown"
+        : ingestWorkers.length > 0
+          ? "ok"
+          : "missing",
+      required: false,
+      hint: "没有它，上传的资料会一直停在「处理中」；起它：scripts/dev.sh ingest。",
+    },
+    {
+      key: "rag",
+      // 不叫「知识库问答（RAG）」：那是下面能力清单里那一行的标题，两处同名会让
+      // 按文字找那一行的人（和测试）先撞上这里。
+      label: "知识库问答可用",
+      state:
+        rag === null ? "unknown" : rag.state === "available" ? "ok" : "missing",
+      required: false,
+      hint:
+        rag !== null && rag.remedy !== "" ? rag.remedy : "资料问答那条演示需要它。",
+    },
+  ];
+  const blocking = checks.filter(
+    (check) => check.required && check.state === "missing",
+  );
+  const unknown = checks.filter(
+    (check) => check.required && check.state === "unknown",
+  );
+  const degraded = checks.filter(
+    (check) => !check.required && check.state !== "ok",
+  );
+  const synthetic = taskWorkers.some(
+    (held) => held.capabilities["demo"] === true,
+  );
+  const verdict =
+    blocking.length > 0
+      ? `还不能开始演示：${String(blocking.length)} 项要先处理`
+      : unknown.length > 0
+        ? "还不能下结论：有一项答不出"
+        : synthetic
+          ? "可以开始演示，但任务由合成 Worker 执行，不调用真实模型"
+          : "可以开始演示";
+  const tone =
+    blocking.length > 0
+      ? "is-blocked"
+      : unknown.length > 0
+        ? "is-unknown"
+        : "is-ready";
+  return (
+    <section
+      aria-labelledby="aw-readiness-title"
+      className={`aw-readiness ${tone}`}
+    >
+      <h2 id="aw-readiness-title">{verdict}</h2>
+      <ul className="aw-readiness-list">
+        {checks.map((check) => (
+          <li
+            className={`is-${check.state}${check.required ? "" : " is-optional"}`}
+            key={check.key}
+          >
+            <strong>
+              {check.label}
+              {check.required ? null : <small>可降级</small>}
+            </strong>
+            <span>
+              {check.state === "ok"
+                ? "就绪"
+                : check.state === "unknown"
+                  ? "答不出"
+                  : `缺：${check.hint}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {degraded.length > 0 && blocking.length === 0 ? (
+        <p className="aw-readiness-note">
+          {degraded.map((check) => check.label).join("、")}没就绪：资料问答那条演示会降级，其余两条不受影响。
+        </p>
+      ) : null}
+    </section>
   );
 }
 

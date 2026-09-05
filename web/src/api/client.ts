@@ -55,6 +55,7 @@ import type {
   UsageResponse,
   UsageWindow,
   WorkspaceResponse,
+  WorkersResponse,
 } from "./types";
 
 const WORD_DOCUMENT_MEDIA_TYPE =
@@ -776,6 +777,13 @@ export async function getDeploymentCapabilities(
   identity: PrincipalIdentity,
 ): Promise<DeploymentCapabilitiesResponse> {
   return apiRequest(identity, "/v1/system/capabilities");
+}
+
+/** 谁在替这套部署跑任务、索引文档（ADR-0110）。 */
+export async function getSystemWorkers(
+  identity: PrincipalIdentity,
+): Promise<WorkersResponse> {
+  return apiRequest(identity, "/v1/system/workers");
 }
 
 /**

@@ -10,10 +10,12 @@ import sys
 from collections.abc import Sequence
 from contextlib import suppress
 
+from agent_workbench.adapters.persistence import PostgresWorkerPresenceStore
 from agent_workbench.adapters.persistence.notifications import (
     TASK_READY_CHANNEL,
     TaskReadyListener,
 )
+from agent_workbench.application.worker_presence import WorkerPresenceBeacon
 from agent_workbench.apps.task_worker.composition import (
     RealTaskHandlersUnavailableError,
     build_task_worker_dependencies,
@@ -21,6 +23,7 @@ from agent_workbench.apps.task_worker.composition import (
 from agent_workbench.apps.task_worker.runner import TaskWorkerRunner
 from agent_workbench.bootstrap import load_settings, provider_key
 from agent_workbench.bootstrap import switches as console_switches
+from agent_workbench.bootstrap.deployment import deployment_label
 from agent_workbench.bootstrap.projections import project_task_worker
 
 EXIT_OK = 0
@@ -82,7 +85,25 @@ async def serve(*, demo: bool) -> None:
             wakeup=None if listener is None else listener.woken,
         )
         await dependencies.startup()
-        await runner.run_forever(stop)
+        # Say "I am here" before claiming anything, and keep saying it while
+        # running (ADR-0110). The beacon is fail-soft by construction: a store
+        # that cannot be written costs a warning, never the Worker.
+        beacon = WorkerPresenceBeacon(
+            PostgresWorkerPresenceStore(dependencies.engine),
+            worker_id=config.worker_id,
+            kind="task",
+            deployment=deployment_label(),
+            capabilities={
+                "demo": demo,
+                "graph_version": str(config.task.graph_version),
+                "tools": sorted(str(name) for name in dependencies.tool_names),
+                "mcp_tools": sorted(str(name) for name in dependencies.mcp_tool_names),
+                "grounding_unavailable": dependencies.grounding_unavailable,
+            },
+            interval_seconds=float(dependencies.worker.heartbeat_seconds),
+        )
+        async with beacon:
+            await runner.run_forever(stop)
     finally:
         if listener is not None:
             await listener.aclose()

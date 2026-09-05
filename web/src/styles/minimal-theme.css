@@ -3302,3 +3302,80 @@ select {
   color: var(--aw-text-muted);
   font-size: 12px;
 }
+
+/* 演示前自检（评审 D 项）：一句结论，下面是每一项和它的补法。 */
+.aw-readiness {
+  margin: 0 0 18px;
+  padding: 14px 18px 12px;
+  border: 1px solid var(--aw-border);
+  border-left: 3px solid var(--aw-text-muted);
+  border-radius: 0 12px 12px 0;
+  background: var(--aw-panel-soft);
+}
+
+.aw-readiness.is-ready {
+  border-left-color: var(--aw-success, #2f7d4f);
+}
+
+.aw-readiness.is-blocked {
+  border-left-color: var(--aw-danger, #b3261e);
+}
+
+.aw-readiness > h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.aw-readiness-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 4px 18px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  list-style: none;
+}
+
+.aw-readiness-list > li {
+  display: grid;
+  gap: 1px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.aw-readiness-list > li > strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.aw-readiness-list > li > strong > small {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.aw-readiness-list > li > span {
+  color: var(--aw-text-muted);
+}
+
+.aw-readiness-list > li.is-missing > span {
+  color: var(--aw-text);
+}
+
+.aw-readiness-list > li.is-ok > span::before {
+  content: "✓ ";
+  color: var(--aw-success, #2f7d4f);
+}
+
+.aw-readiness-list > li.is-missing > span::before {
+  content: "✕ ";
+  color: var(--aw-danger, #b3261e);
+}
+
+.aw-readiness-note {
+  margin: 8px 0 0;
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+}

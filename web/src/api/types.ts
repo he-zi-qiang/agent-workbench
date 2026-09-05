@@ -567,6 +567,35 @@ export interface DeploymentCapabilitiesResponse {
   capabilities: DeploymentCapability[];
 }
 
+/**
+ * 一个 Worker 进程最近一次关于自己的话（ADR-0110）。
+ *
+ * `fresh` 与 `seconds_since_heartbeat` 都是服务端按**它的**时钟算好的：浏览器的
+ * 时钟是第三个钟，控制台不拿它减。
+ */
+export interface WorkerPresenceView {
+  worker_id: string;
+  kind: "task" | "ingestion";
+  deployment: string;
+  /** 进程在装配时报上来的能力快照，按数据读，不据此决定任何事。 */
+  capabilities: Record<string, unknown>;
+  started_at: string;
+  heartbeat_at: string;
+  expires_at: string;
+  fresh: boolean;
+  seconds_since_heartbeat: number;
+}
+
+/**
+ * `available: false` 是「这个 API 看不见 Worker」（没有登记表的旧 API），不是
+ * 「没有 Worker」——两种在页面上必须长得不一样。
+ */
+export interface WorkersResponse {
+  available: boolean;
+  observed_at: string | null;
+  workers: WorkerPresenceView[];
+}
+
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
 export interface ApprovalView {

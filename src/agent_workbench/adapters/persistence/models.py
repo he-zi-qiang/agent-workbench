@@ -934,6 +934,34 @@ workflow_checkpoint_writes = Table(
 # carries, and why a decision is stored beside the Task rather than derived from
 # the event stream.
 
+# A Worker process saying it is here (ADR-0110). Written on a timer by the
+# process itself, read by the console; never referenced by anything else.
+#
+# `expires_at` is set by the writer and judged against the database clock by
+# the reader -- the one clock every other liveness question here already uses.
+# A row past its expiry stays: "stopped answering at 10:42" is a fact worth
+# more than a missing row, and the reader labels it stale.
+worker_presence = Table(
+    "worker_presence",
+    metadata,
+    Column("worker_id", String(IDENTIFIER_LENGTH), primary_key=True),
+    Column("kind", String(32), nullable=False),
+    Column("deployment", String(IDENTIFIER_LENGTH), nullable=False),
+    Column(
+        "capabilities",
+        JSONB(none_as_null=True),
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    ),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("kind IN ('task', 'ingestion')", name="worker_presence_kind"),
+    CheckConstraint(
+        "expires_at > heartbeat_at", name="worker_presence_expiry_after_beat"
+    ),
+)
+
 approvals = Table(
     "approvals",
     metadata,
