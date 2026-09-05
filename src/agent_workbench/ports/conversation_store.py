@@ -150,6 +150,21 @@ class StoredMessage(VersionedModel):
     #: 用 `None` 而不是零值 `BudgetUsage()`：一轮真的没花 token 和一轮的花销这里
     #: 答不上来，在屏幕上必须长得不一样，而零是个看起来像答案的答案。
     usage: BudgetUsage | None = None
+    #: 这条助手消息属于哪一轮。用户那一条、以及早于回合台账的历史行是 `None`。
+    #:
+    #: 2026-09-04 评审 A 项：实时回合有引用、turn_id 和 grounded，历史投影却只有
+    #: role/text/usage，于是刷新之后引用全部消失——恰好削弱这个项目最值得展示的
+    #: 那一段。三个字段一起补：`turn_id` 让「点开引用」仍然走
+    #: `turns/{turn_id}/citations/{chunk_id}` 那条**每次重新授权**的路（ADR-067），
+    #: 历史里的引用不是一份缓存的原文，只是一个还要再问一次的指针。
+    turn_id: Identifier | None = None
+    #: 那一轮发布时的引用。只有 committed 的回合才有；扣下的、失败的、还没落定
+    #: 的都是空——扣下那一轮的结果已经被擦掉，本来就没有东西可给。
+    citations: tuple[Citation, ...] = ()
+    #: 那一轮是否基于检索到的证据（ADR-018）。不是某一轮产出的、或那一轮没有
+    #: committed 的，是 `None`——不是 `False`：`False` 是「没查资料就答了」这个
+    #: 需要贴警告的事实，而 `None` 是「这里答不出」。
+    grounded: bool | None = None
 
 
 class AuthorizedRevision(DomainModel):

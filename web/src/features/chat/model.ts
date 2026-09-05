@@ -1169,7 +1169,8 @@ function historyLoaded(state: ChatState, sessionId: string, messages: MessageVie
   const session = state.sessions[sessionId];
   if (session === undefined) return state;
   // A live turn contains richer run correlation. Never replace it with the
-  // lossy history projection, which has neither run ids nor citations.
+  // history projection: that one carries citations and turn ids now, but no
+  // run ids and none of the activities the live turn streamed.
   if ((state.turnOrderBySession[sessionId] ?? []).length > 0) {
     return updateSessionHistory(state, sessionId, "loaded");
   }
@@ -1206,6 +1207,17 @@ function historyLoaded(state: ChatState, sessionId: string, messages: MessageVie
         // `?? null` 而不是留 undefined：这一轮的花销「服务端没给」和「这一轮
         // 没花」要走同一条渲染分支（都不画），而 `TurnUsage` 只认 null/undefined。
         usage: message.usage ?? null,
+        // 历史投影自 2026-09-05 起带着回合 id、引用和 grounded（评审 A 项）。
+        // 三个都按「有就给、没有就不写键」处理：早于回合台账的旧行 turn_id 是
+        // null，那一轮的引用点不开，页面会说明；grounded 的 null 是「答不出」，
+        // 不是 false，所以不写进去——写成 false 会给旧回答贴上未经检索的警告。
+        citations: message.citations ?? [],
+        ...(message.turn_id === null || message.turn_id === undefined
+          ? {}
+          : { turnId: message.turn_id }),
+        ...(message.grounded === null || message.grounded === undefined
+          ? {}
+          : { grounded: message.grounded }),
       };
       turns[current.localId] = current;
     }

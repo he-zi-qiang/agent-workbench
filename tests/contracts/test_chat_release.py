@@ -23,9 +23,11 @@ from agent_workbench.adapters.memory.chat_release import _withheld
 from agent_workbench.adapters.persistence.chat_release import (
     PostgresChatReleaseCoordinator,
 )
+from agent_workbench.domain.context import Citation
 from agent_workbench.domain.messages import user_message
 from agent_workbench.domain.runs import AgentOutcome
 from agent_workbench.ports.conversation_store import (
+    AuthorizedRevision,
     ChatTurnResult,
     StoredChatTurn,
 )
@@ -206,3 +208,126 @@ def test_a_withheld_replacement_keeps_the_label_of_the_candidate_it_replaces() -
         ).grounded
         is True
     )
+
+
+CITED = Citation(chunk_id="chunk_0001", document_id="doc_0001", document_version="1")
+
+
+def _cited_candidate() -> ChatTurnResult:
+    """A grounded result that actually names a source."""
+
+    return ChatTurnResult(
+        outcome=_outcome(),
+        answer=ANSWER,
+        authorized_revisions=(
+            AuthorizedRevision(document_id="doc_0001", source_revision=1),
+        ),
+        citations=(CITED,),
+        grounded=True,
+    )
+
+
+async def _prepare(harness: ChatReleaseHarness, result: ChatTurnResult) -> str:
+    """Claim one turn and stage ``result`` on it; return the turn id.
+
+    Stops short of the coordinator on purpose. The coordinator's fence re-reads
+    every authorized revision from the document store, and ``doc_0001`` exists
+    in no test database -- so on PostgreSQL it would (correctly) withhold this
+    very answer, and the projection under test would never see a committed
+    turn. What these tests pin is the *projection* of a committed turn, so
+    they commit it the way the fence does once it has passed: through the
+    store's own ``mark_released``.
+    """
+
+    await harness.conversations.create_session(
+        session_id=SESSION,
+        tenant_id=TENANT,
+        owner_id=OWNER,
+    )
+    claim = await harness.conversations.claim_turn(
+        session_id=SESSION,
+        tenant_id=TENANT,
+        principal_id=OWNER,
+        idempotency_key=KEY,
+        request_hash=REQUEST_HASH,
+        run_id=RUN,
+        user_message=user_message("a question"),
+        lease_seconds=LEASE_SECONDS,
+    )
+    await harness.conversations.prepare_release(
+        session_id=SESSION,
+        tenant_id=TENANT,
+        principal_id=OWNER,
+        turn_id=claim.turn.turn_id,
+        result=result,
+    )
+    return claim.turn.turn_id
+
+
+def test_history_carries_the_released_turns_evidence(
+    chat_release: StoreHarness,
+) -> None:
+    """After a release, ``history()`` says which turn each answer was and what it cited.
+
+    The console rebuilds a reloaded conversation from this projection, and
+    until 2026-09-05 it carried role, text and usage only -- so every citation
+    vanished on refresh (review 2026-09-04, item A). Three facts are pinned:
+    the assistant message names its turn (the id the passage route is mounted
+    under, so a citation stays a re-authorised read rather than a cached
+    text), it carries the citations the release published, and it says the
+    answer was grounded. The user's own message has none of them.
+    """
+
+    async def scenario(harness: ChatReleaseHarness) -> None:
+        turn_id = await _prepare(harness, _cited_candidate())
+        released = await harness.conversations.mark_released(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER, turn_id=turn_id
+        )
+        assert released.status == "committed"
+        history = await harness.conversations.history(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        asked, answered = history
+        assert asked.message.role == "user"
+        assert asked.turn_id is None
+        assert asked.citations == ()
+        assert asked.grounded is None
+        assert answered.message.role == "assistant"
+        assert answered.turn_id == turn_id
+        assert answered.citations == (CITED,)
+        assert answered.grounded is True
+
+    chat_release.run(scenario)
+
+
+def test_history_says_nothing_about_evidence_for_a_withheld_answer(
+    chat_release: StoreHarness,
+) -> None:
+    """A withheld turn is linked to its message but hands on no evidence.
+
+    Its stored result is a scrubbed shell by construction, so there is nothing
+    to give -- and ``grounded`` is ``None`` rather than ``False``: ``False`` is
+    the "answered without retrieving" fact the console warns about, and a
+    withheld answer earned no such warning.
+    """
+
+    async def scenario(harness: ChatReleaseHarness) -> None:
+        candidate = _cited_candidate()
+        turn_id = await _prepare(harness, candidate)
+        released = await harness.conversations.mark_released(
+            session_id=SESSION,
+            tenant_id=TENANT,
+            principal_id=OWNER,
+            turn_id=turn_id,
+            withheld_result=_withheld(candidate, REFUSAL),
+        )
+        assert released.status == "withheld"
+        history = await harness.conversations.history(
+            session_id=SESSION, tenant_id=TENANT, principal_id=OWNER
+        )
+        _asked, answered = history
+        assert answered.turn_id == turn_id
+        assert answered.citations == ()
+        assert answered.grounded is None
+
+    chat_release.run(scenario)

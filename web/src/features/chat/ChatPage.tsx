@@ -1172,15 +1172,16 @@ function ChatTurn({
             这一轮只留下了你的问题，没有留下回答。
           </p>
         ) : null}
-        {turn.historical && turn.answer !== undefined ? (
-          // The history endpoint returns role and text and nothing else, so a
-          // reloaded answer carries no citations and no grounded flag. Running
-          // the live verdict here would tell the reader "服务端没有为这段答案发布引用"
-          // about answers that did publish citations, and would quietly drop the
-          // ungrounded warning off answers that earned one.
+        {turn.historical && turn.answer !== undefined && turn.turnId === undefined ? (
+          // A reloaded answer with no turn behind it: a row written before the
+          // history projection carried turn ids (2026-09-05, review item A).
+          // Nothing honest can be said about its evidence -- running the live
+          // verdict would tell the reader "服务端没有为这段答案发布引用" about an
+          // answer that may well have cited plenty. Reloaded answers *with* a
+          // turn go through `Citations` below like a live one.
           <p className="aw-chat-no-citations">
             <CircleDot aria-hidden="true" size={13} />
-            历史记录只保存对话文本，不含引用与证据标记
+            这条回答早于回合记录，历史里没有它的引用与证据标记
           </p>
         ) : null}
         {turn.phase === "failed" ? (
@@ -1198,7 +1199,10 @@ function ChatTurn({
             )}
           </div>
         ) : null}
-        {!turn.historical &&
+        {/* 历史里的回合只要带着 turn id 就和实时的一样画引用：投影现在带着
+            发布时的引用和 grounded（评审 A 项）；点开原文仍然走每次重新授权的
+            那条路，所以资料被撤回之后这里的引用会正确地打不开，而不是回放旧文。 */}
+        {(!turn.historical || turn.turnId !== undefined) &&
         (turn.phase === "committed" || turn.phase === "withheld") ? (
           <>
             <Citations

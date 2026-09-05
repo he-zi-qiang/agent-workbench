@@ -207,6 +207,21 @@ export interface MessageView {
   role: string;
   text: string;
   usage?: TurnUsageView | null;
+  /**
+   * 这条助手消息属于哪一轮。有它，历史里的引用才点得开——那条路是
+   * `turns/{turn_id}/citations/{chunk_id}`，每次重新授权（ADR-067）。
+   * 用户那一条、早于回合台账的旧行是 `null`。
+   *
+   * 三个字段都是可选的：同一个形状也给 Code 会话的 `/messages` 用，那条路上
+   * 没有回合台账，从不发这三个键。缺席和 `null` 在读的这一侧是同一件事。
+   */
+  turn_id?: Identifier | null;
+  /** 那一轮发布时的引用；只有 committed 的回合才有。 */
+  citations?: Citation[];
+  /**
+   * `null` 是「这里答不出」，`false` 才是「没查资料就答了」——前者不贴警告。
+   */
+  grounded?: boolean | null;
 }
 
 export interface HistoryResponse {
