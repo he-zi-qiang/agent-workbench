@@ -94,14 +94,17 @@ const STARTER_PROMPTS = [
   {
     title: "梳理项目资料",
     prompt: "请梳理所选项目资料，提炼关键结论、主要分歧和下一步建议。",
+    outcome: "输入：所选知识库 → 产出：带引用的结论摘要，引用可点开核对",
   },
   {
     title: "拆解复杂问题",
     prompt: "请先把这个问题拆成几个关键部分，再说明每一部分应该如何分析。",
+    outcome: "产出：问题拆解与分析路径，不依赖资料",
   },
   {
     title: "准备一份方案",
     prompt: "请帮我比较几个可行方案，列出各自的收益、风险与推荐选择。",
+    outcome: "产出：方案对比与推荐；要成文件请改用任务",
   },
 ] as const;
 
@@ -872,6 +875,7 @@ export function ChatPage() {
               items={attachments.items}
               onRemove={attachments.remove}
               onRetry={attachments.retry}
+              targetName={attachments.targetName}
             />
             <textarea
               aria-label="问题"
@@ -978,7 +982,7 @@ function ChatWelcome({
             <PanelLeft aria-hidden="true" size={18} />
           </IconButton>
         }
-        description="直接提问，或选择知识库获得带引用的回答。"
+        description="直接提问，或选一个知识库：回答会带上来源，点开引用能核对原文。"
         title="有什么可以帮你？"
       />
     </div>

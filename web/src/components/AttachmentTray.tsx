@@ -315,6 +315,12 @@ export function useKnowledgeAttachments(
   }, [abortInFlight]);
   const hasBlockingItems = items.some((item) => item.state !== "ready");
 
+  // 文件去哪个知识库，按名字说出来。2026-09-04 评审第 5 条：图标和摆放仍容易
+  // 诱导出「普通附件」的预期，而「上传到了『校招资料』并会一直保留」比「上传到
+  // 了所选知识库」更难被读成附件。列表里没有这个库时是 null——不是「没选」，是
+  // 「名字还没到」，托盘那时只说「所选知识库」。
+  const targetName = selected?.name ?? null;
+
   return useMemo(
     () => ({
       items,
@@ -324,8 +330,18 @@ export function useKnowledgeAttachments(
       clear,
       hasBlockingItems,
       readOnlyReason,
+      targetName,
     }),
-    [addFiles, clear, hasBlockingItems, items, readOnlyReason, remove, retry],
+    [
+      addFiles,
+      clear,
+      hasBlockingItems,
+      items,
+      readOnlyReason,
+      remove,
+      retry,
+      targetName,
+    ],
   );
 }
 
@@ -392,15 +408,22 @@ export function AttachmentTray({
   items,
   onRemove,
   onRetry,
+  targetName,
 }: {
   items: KnowledgeAttachment[];
   onRemove: (localId: string) => void;
   onRetry: (localId: string) => void;
+  /** 目标知识库的名字；`null` 或省略时退回「所选知识库」。 */
+  targetName?: string | null;
 }) {
   if (items.length === 0) return null;
   const anyUploaded = items.some((item) => item.uploaded);
+  const target =
+    targetName === undefined || targetName === null
+      ? "所选知识库"
+      : `知识库「${targetName}」`;
   return (
-    <div className="aw-attachment-tray" aria-label="要加入知识库的文件">
+    <div className="aw-attachment-tray" aria-label={`要加入${target}的文件`}>
       {items.map((item) => (
         <div className={`aw-attachment is-${item.state}`} key={item.localId}>
           {item.state === "uploading" || item.state === "indexing" ? (
@@ -442,8 +465,7 @@ export function AttachmentTray({
       ))}
       {anyUploaded ? (
         <p className="aw-attachment-note">
-          这些文件已经上传到所选知识库并会一直保留；这里的 ×
-          只是不再列出它，不会删除已上传的文档。要管理它们，去「知识库」页面。
+          这些文件已经上传到{target}并会一直保留；这里的 × 只是不再列出它，不会删除已上传的文档。要管理它们，去「知识库」页面。
         </p>
       ) : null}
     </div>

@@ -41,6 +41,8 @@ vi.mock("../api/client", () => ({
   }),
   storeProviderKey: vi.fn(),
   clearProviderKey: vi.fn(),
+  // 侧栏的「待处理」每 15 秒问一次；默认没有人在等。
+  listApprovals: vi.fn().mockResolvedValue({ approvals: [], cursor: null }),
 }));
 
 beforeEach(() => {
@@ -588,6 +590,87 @@ describe("AppShell rail", () => {
       "href",
       "/chat",
     );
+  });
+});
+
+describe("AppShell 待处理", () => {
+  function mounted(at = "/system") {
+    return render(
+      <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <IdentityProvider>
+          <MemoryRouter initialEntries={[at]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route element={<p>System page</p>} path="/system" />
+                <Route element={<PathProbe />} path="/work/:taskId" />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </IdentityProvider>
+      </ThemeProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("从任何一页都看得见等你批准的任务，点进去就是那个任务", async () => {
+    const { listApprovals } = await import("../api/client");
+    vi.mocked(listApprovals).mockResolvedValue({
+      approvals: [
+        {
+          approval_id: "apr_1",
+          task_id: "task_waiting",
+          status: "pending",
+          decision_version: 1,
+          decided_at: null,
+          created_at: "2026-09-05T01:00:00Z",
+        },
+      ],
+      cursor: null,
+    });
+    const user = userEvent.setup();
+    mounted("/system");
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    const entry = await rail.findByRole("button", { name: "待处理，1 项" });
+    expect(entry).toHaveTextContent("1");
+    // 只问 pending 的：一个把已决定的也列出来的队列，会让「我已经答过了」
+    // 和「它没了」分不开。
+    expect(vi.mocked(listApprovals).mock.calls[0]?.[1]).toMatchObject({
+      statuses: ["pending"],
+    });
+
+    await user.click(entry);
+    const dialog = within(screen.getByRole("dialog", { name: "待处理" }));
+    const link = dialog.getByRole("link", { name: /task_waiting/ });
+    expect(link).toHaveAttribute("href", "/work/task_waiting");
+    // 范围写在脸上：Code 的命令审批不在这里。
+    expect(dialog.getByText(/只列任务的审批/)).toBeInTheDocument();
+    await user.click(link);
+    expect(screen.getByRole("status", { name: "当前路径" })).toHaveTextContent(
+      "/work/task_waiting",
+    );
+    expect(screen.queryByRole("dialog", { name: "待处理" })).toBeNull();
+  });
+
+  it("没人在等的时候入口还在，只是没有数字", async () => {
+    // 上一条给这个 mock 排了一条审批；mock 跨用例活着，这里明确清空。
+    const { listApprovals } = await import("../api/client");
+    vi.mocked(listApprovals).mockResolvedValue({ approvals: [], cursor: null });
+    const user = userEvent.setup();
+    mounted("/system");
+
+    const rail = within(screen.getByRole("navigation", { name: "主导航" }));
+    const entry = await rail.findByRole("button", { name: "待处理" });
+    expect(entry.querySelector(".aw-rail-badge")).toBeNull();
+    await user.click(entry);
+    expect(
+      within(screen.getByRole("dialog", { name: "待处理" })).getByText(
+        "没有等你批准的任务。",
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(entry).toHaveFocus());
   });
 });
 

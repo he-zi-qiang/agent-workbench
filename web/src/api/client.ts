@@ -1,4 +1,6 @@
 import type {
+  ApprovalListResponse,
+  ApprovalStatus,
   ApprovalDecision,
   ApprovalView,
   ArtifactDownloadTarget,
@@ -900,6 +902,25 @@ export async function getTaskTimeline(
     identity,
     `/v1/tasks/${encodeURIComponent(taskId)}/timeline?${params.toString()}`,
   );
+}
+
+/**
+ * The caller's own approvals, filtered by status.
+ *
+ * `status` is repeated per value because the route declares it as a list
+ * query parameter; the filter is *not* the server's default (a queue that
+ * silently hid decided approvals would make "I already answered that"
+ * indistinguishable from "it is gone"), so the console asks for exactly the
+ * pending ones.
+ */
+export async function listApprovals(
+  identity: PrincipalIdentity,
+  options: { statuses: ApprovalStatus[]; limit?: number },
+): Promise<ApprovalListResponse> {
+  const params = new URLSearchParams();
+  for (const status of options.statuses) params.append("status", status);
+  params.set("limit", String(options.limit ?? 50));
+  return apiRequest(identity, `/v1/approvals?${params.toString()}`);
 }
 
 export async function getApproval(

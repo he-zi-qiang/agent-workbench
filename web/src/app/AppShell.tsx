@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  Inbox,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -27,6 +28,11 @@ import { useStoredState } from "../hooks/useStoredState";
 import { SettingsDialog } from "./SettingsDialog";
 import { useIdentity } from "./IdentityContext";
 import { isPathWithin, NAVIGATION, type NavigationItem } from "./navigation";
+import {
+  PendingApprovalsDialog,
+  PendingApprovalsLink,
+  usePendingApprovals,
+} from "./PendingApprovals";
 import { QuickSwitcher } from "./QuickSwitcher";
 import type { WorkspaceSidebarContextValue } from "./WorkspaceSidebar";
 
@@ -172,6 +178,32 @@ export function AppShell() {
   }, []);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const focusBeforeQuickSwitcher = useRef<HTMLElement | null>(null);
+  // 待处理：等你批准的任务。和快速跳转同一套开合与焦点归还。
+  const pendingApprovals = usePendingApprovals(identity);
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const focusBeforePending = useRef<HTMLElement | null>(null);
+  const openPending = useCallback(() => {
+    focusBeforePending.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setPendingOpen(true);
+  }, []);
+  const closePending = useCallback(() => {
+    const returnTarget = focusBeforePending.current;
+    setPendingOpen(false);
+    restoreFocusTo(returnTarget);
+  }, [restoreFocusTo]);
+  const openPendingFromMore = useCallback(() => {
+    restoreMoreFocus.current = false;
+    focusBeforePending.current = focusBeforeMore.current;
+    setMobileMoreOpen(false);
+    setPendingOpen(true);
+  }, []);
+  const pendingCount =
+    pendingApprovals.data === undefined
+      ? null
+      : pendingApprovals.data.approvals.length;
   const openQuickSwitcher = useCallback(() => {
     focusBeforeQuickSwitcher.current =
       document.activeElement instanceof HTMLElement
@@ -451,7 +483,8 @@ export function AppShell() {
   // The rail is deliberately absent from the first list: on mobile the drawer
   // *is* the rail, so making it inert while it is open would disable the modal
   // itself.
-  const railInert = mobileMoreOpen || quickSwitcherOpen || editorOpen;
+  const railInert =
+    mobileMoreOpen || quickSwitcherOpen || pendingOpen || editorOpen;
   const behindModal = railInert || sidebarDrawerOpen;
   const sidebarContext: WorkspaceSidebarContextValue = {
     managed: true,
@@ -536,6 +569,11 @@ export function AppShell() {
             to={KNOWLEDGE_NAVIGATION.to}
           />
         )}
+        <PendingApprovalsLink
+          count={pendingCount}
+          onOpen={openPending}
+          open={pendingOpen}
+        />
         {records === null ? (
           <div className="aw-rail-spacer" />
         ) : (
@@ -716,6 +754,22 @@ export function AppShell() {
                 );
               })}
               <button
+                aria-label="待处理"
+                className="aw-mobile-more-link"
+                onClick={openPendingFromMore}
+                type="button"
+              >
+                <Inbox aria-hidden="true" size={19} />
+                <span className="aw-mobile-more-copy">
+                  <strong>待处理</strong>
+                  <small>
+                    {pendingCount === null || pendingCount === 0
+                      ? "等你批准的任务"
+                      : `${String(pendingCount)} 个任务等你批准`}
+                  </small>
+                </span>
+              </button>
+              <button
                 aria-label="快速跳转"
                 className="aw-mobile-more-link"
                 onClick={openQuickSwitcherFromMore}
@@ -756,6 +810,14 @@ export function AppShell() {
         <QuickSwitcher
           currentPath={location.pathname}
           onClose={closeQuickSwitcher}
+        />
+      ) : null}
+      {pendingOpen ? (
+        <PendingApprovalsDialog
+          approvals={pendingApprovals.data?.approvals ?? []}
+          error={pendingApprovals.isError}
+          loading={pendingApprovals.isPending}
+          onClose={closePending}
         />
       ) : null}
       <SettingsDialog />

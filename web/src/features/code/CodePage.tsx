@@ -131,15 +131,18 @@ const CODE_STARTERS = [
   {
     title: "规划一个实现",
     prompt: "请先拆解这个功能的实现方案，说明关键决策、风险和验证方式：",
+    outcome: "产出：一份实现方案，不改任何文件",
   },
   {
     title: "生成一个文件",
     prompt: "根据下面的要求生成一个完整文件，并检查内容是否可以直接使用：",
+    outcome: "产出：写进这个文件夹的一个新文件，右栏可以打开检查",
   },
   {
     title: "编写测试用例",
     prompt:
       "为下面的行为编写清晰的测试用例，覆盖正常路径、边界条件和失败情况：",
+    outcome: "产出：一个测试文件，以及它跑出来的结果",
   },
 ] as const;
 
@@ -1488,7 +1491,7 @@ export function CodePage() {
                     <PanelLeft aria-hidden size={18} />
                   </IconButton>
                 }
-                description={`在 ${startingIn.root_path ?? startingIn.name} 里编码。Agent 读写的是这个文件夹里的真实文件。`}
+                description={`在 ${startingIn.root_path ?? startingIn.name} 里编码。Agent 修改的是这个文件夹里的真实文件：每一次写入都记在回合里，右栏能打开改过的文件检查。`}
                 title="开始编码"
               />
               {/* 换文件夹的入口。此前只有「一个项目都没有」时才画得出选择器，

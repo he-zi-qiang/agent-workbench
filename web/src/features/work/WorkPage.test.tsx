@@ -12,6 +12,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
+  cancelTask,
   createTask,
   decideApproval,
   deleteTask,
@@ -38,6 +39,7 @@ vi.mock("../../api/client", async () => {
   const actual = await vi.importActual("../../api/client");
   return {
     ...actual,
+    cancelTask: vi.fn(),
     createTask: vi.fn(),
     decideApproval: vi.fn(),
     deleteTask: vi.fn(),
@@ -701,6 +703,9 @@ describe("WorkPage task submission", () => {
     // The question, then the stages of work under it.
     expect(await screen.findByRole("heading", { name: "今天丹东天气怎么样" })).
       toBeInTheDocument();
+    // 落定的任务把执行过程折成一行，结果在它前面；这条用例看的是过程里的
+    // 步骤，所以先展开它。
+    await user.click(screen.getByText("执行过程", { selector: "summary > strong" }));
     const stage = await screen.findByText("收集资料");
 
     // Collapsed on a finished Task, so six lines of history rather than a
@@ -1769,6 +1774,9 @@ describe("WorkPage task submission", () => {
     // line above the step it caused -- not inside the step's detail, and
     // not behind a second click. It used to be a 思考摘要 body two clicks
     // down, with a hard-cut copy of itself on the line above.
+    await user.click(
+      await screen.findByText("执行过程", { selector: "summary > strong" }),
+    );
     const stage = await screen.findByText("撰写草稿");
     await user.click(stage);
 
@@ -1855,6 +1863,171 @@ describe("WorkPage task submission", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "生成报告" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "不用了" })).not.toBeInTheDocument();
+  });
+});
+
+describe("WorkPage 行动区（2026-09-04 评审第 4 条）", () => {
+  beforeEach(() => {
+    // 前面有用例给 `createTask` 排了一个永不 resolve 的 once 实现（「create 在
+    // 路上时不把读者拉走」那条）而没消费掉；这里的重试会把它接走，于是
+    // onSuccess 永远不来。单跑这个文件里的这一条是绿的，整个文件跑就红。
+    vi.resetAllMocks();
+    localStorage.clear();
+    vi.mocked(getTaskCapabilities).mockResolvedValue({
+      delegation: {
+        enabled: false,
+        max_delegation_depth: 1,
+        max_children_per_run: 1,
+        max_parallel_child_invocations: 1,
+        max_tokens_per_agent_invocation: 0,
+      },
+    });
+    vi.mocked(listTasks).mockResolvedValue({ tasks: [], cursor: null });
+    vi.mocked(listKnowledgeBases).mockResolvedValue({ knowledge_bases: [] });
+  });
+
+  it("停止不藏在折叠里：一颗按钮，原因预填，确认后带着原因去取消", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_live",
+      status: "running",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "整理这批资料",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:00:30Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(runTimeline());
+    vi.mocked(cancelTask).mockResolvedValue({
+      task_id: "task_live",
+      status: "cancelled",
+      status_detail: "在控制台手动停止",
+      agent_invocation_count: 0,
+      objective_preview: "整理这批资料",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    renderWorkPage("/work/task_live");
+
+    const actions = within(
+      await screen.findByRole("group", { name: "任务操作" }),
+    );
+    expect(actions.getByText(/正在执行/)).toBeInTheDocument();
+    // 折叠里没有取消表单了。
+    expect(screen.queryByLabelText(/停止原因/)).not.toBeInTheDocument();
+
+    await user.click(actions.getByRole("button", { name: "停止任务" }));
+    const reason = screen.getByLabelText(/停止原因/);
+    expect(reason).toHaveValue("在控制台手动停止");
+    await user.click(screen.getByRole("button", { name: "确认停止" }));
+
+    await waitFor(() =>
+      expect(cancelTask).toHaveBeenCalledWith(
+        expect.anything(),
+        "task_live",
+        "在控制台手动停止",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/停止原因/)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("落定之后结果在前，执行过程折成一行", async () => {
+    vi.mocked(getTask).mockResolvedValue({
+      task_id: "task_run",
+      status: "succeeded",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "比较三个方案并输出一份建议报告",
+      created_at: "2026-08-02T12:00:00Z",
+      updated_at: "2026-08-02T12:01:00Z",
+    });
+    vi.mocked(getTaskTimeline).mockResolvedValue(reportTimeline());
+    renderWorkPage("/work/task_run");
+
+    const output = await screen.findByRole("region", { name: "任务产出" });
+    const fold = screen
+      .getByText("执行过程", { selector: "summary > strong" })
+      .closest("details");
+    expect(fold).not.toBeNull();
+    expect(fold).not.toHaveAttribute("open");
+    // 结果在过程前面。
+    expect(
+      output.compareDocumentPosition(fold as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    // 行动区不再给停止；下载仍然只有结果区里那一颗（两颗同名按钮读成两件事）。
+    const actions = within(screen.getByRole("group", { name: "任务操作" }));
+    expect(actions.getByText(/已完成/)).toBeInTheDocument();
+    expect(actions.queryByRole("button", { name: "停止任务" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^下载/ })).toHaveLength(1);
+  });
+
+  it("等待批准时决定在最前面，行动区能把焦点送到批准键上", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getTask).mockResolvedValue(task("waiting_approval"));
+    vi.mocked(getTaskTimeline).mockResolvedValue(approvalTimelineWithDraft());
+    vi.mocked(getApproval).mockResolvedValue(approval("pending", 1));
+    renderWorkPage("/work/task_approval");
+
+    const approve = await screen.findByRole("button", { name: "生成报告" });
+    const draft = screen.getByRole("region", { name: "待确认的内容" });
+    expect(
+      approve.compareDocumentPosition(draft) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    await user.click(screen.getByRole("button", { name: "去批准" }));
+    expect(approve).toHaveFocus();
+  });
+
+  it("失败后按原输入重新提交是一个新任务，两边都写着对方", async () => {
+    const user = userEvent.setup();
+    // 失败的那个叫 task_run：时间线夹具里的事件都属于这个 id，换一个名字
+    // 会被时间线 hook 当成别的流丢掉，于是读不到任务输入、也就没有重试。
+    vi.mocked(getTask).mockImplementation((_identity, taskId) =>
+      Promise.resolve({
+        task_id: taskId,
+        status: taskId === "task_run" ? ("failed" as const) : ("queued" as const),
+        status_detail:
+          taskId === "task_run"
+            ? "the research_external step failed with provider_unavailable (retryable) during search"
+            : null,
+        agent_invocation_count: 0,
+        objective_preview: "整理这批资料",
+        created_at: "2026-08-02T12:00:00Z",
+        updated_at: "2026-08-02T12:01:00Z",
+      }),
+    );
+    // `answerTimeline` 带着任务输入的 artifact 引用；重试读的就是它。
+    vi.mocked(getTaskTimeline).mockResolvedValue(answerTimeline());
+    vi.mocked(getArtifactJson).mockResolvedValue(taskInput(false));
+    vi.mocked(newIdempotencyKey).mockReturnValue("key-retry");
+    vi.mocked(createTask).mockResolvedValue({
+      task_id: "task_again",
+      status: "queued",
+      status_detail: null,
+      agent_invocation_count: 0,
+      objective_preview: "整理这批资料",
+      created_at: "2026-08-02T12:02:00Z",
+      updated_at: "2026-08-02T12:02:00Z",
+    });
+    renderWorkPage("/work/task_run");
+
+    const actions = within(
+      await screen.findByRole("group", { name: "任务操作" }),
+    );
+    expect(actions.getByRole("button", { name: "复制诊断" })).toBeInTheDocument();
+    await user.click(
+      await actions.findByRole("button", { name: "按原输入重新提交" }),
+    );
+
+    // 到了新任务，头上写着来处；retryOf 不进请求。
+    await screen.findByText(/由任务/);
+    expect(screen.getByRole("link", { name: /task_run/ })).toHaveAttribute(
+      "href",
+      "/work/task_run",
+    );
+    expect(vi.mocked(createTask).mock.calls[0]?.[1]).not.toHaveProperty("retryOf");
   });
 });
 

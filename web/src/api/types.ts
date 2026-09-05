@@ -564,14 +564,19 @@ export interface ApprovalView {
 }
 
 /**
- * `GET /v1/approvals` has no client any more.
+ * One page of `GET /v1/approvals`.
  *
- * The endpoint is still served and still tested -- ADR-048 removed the console's
- * cross-task inbox, not the ability to answer -- but the answer now happens in
- * the Task that is waiting, and `getApproval` / `decideApproval` are what that
- * needs. A typed wrapper for a list nothing renders would be a wrapper that
- * drifts from the endpoint without anybody noticing.
+ * This client went away with ADR-048 (the cross-task inbox page was removed;
+ * the *decision* happens in the Task that is waiting) and is back for a
+ * narrower job: the rail's 待处理 entry, which only says *where to go*. It
+ * never decides -- `getApproval` / `decideApproval` on the Task page still do
+ * that -- so ADR-048's reason for deleting the page ("a queue that decides
+ * without the draft in view") does not apply to a list of links.
  */
+export interface ApprovalListResponse {
+  approvals: ApprovalView[];
+  cursor: string | null;
+}
 
 export interface TokenUsage {
   input_tokens?: number;
