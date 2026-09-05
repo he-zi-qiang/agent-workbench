@@ -23,12 +23,13 @@ here because the next row somebody adds is where it gets broken.
 
 **Three states, and the third is not a rounding of the other two.**
 ``unknown`` is what this process must answer about anything living in another
-process. The API cannot see whether a Task Worker is running, and it certainly
-cannot see whether that Worker was started with ``--demo`` -- there is no
-Worker-to-control-plane reporting channel in this system (docs/known-gaps.md,
-E-09). Reporting that absence as ``absent`` would be a claim; reporting it as
-``available`` because the API can accept a submission would be worse. It is
-unknown, and the row says which command answers it.
+process. The capability report describes what *this* process assembled, and a
+Task Worker is another process, so its row stays ``unknown`` here. Since
+ADR-0110 the other process reports in on its own: ``GET /workers`` below reads
+the rows each Worker writes about itself, and the console draws that beside
+this report. The row's remedy points there rather than at ``docker compose
+ps``. Reporting the absence as ``absent`` would be a claim; reporting it as
+``available`` because the API can accept a submission would be worse.
 
 **The envelope, not a guess.** The Task rows are read off
 ``config.task.default_authorization_envelope`` -- the exact tuple that will be
@@ -483,12 +484,13 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
             # exactly like one that is real from here.
             state="unknown",
             reason=(
-                "本部署没有 Worker 上报通道：从 API 看不出有没有 Worker 在跑，"
-                "也看不出它是真实 Worker 还是 --demo 合成 Worker。"
+                "这份清单只答得出这个 API 进程装配了什么；Worker 在另一个进程里，"
+                "它自己登记的在线与否、是不是 --demo 合成 Worker，在运行状态页"
+                "顶上那两格（GET /v1/system/workers，ADR-0110）。"
             ),
             remedy=(
-                "docker compose --profile demo ps 看进程，"
-                "docker compose logs task-worker 看它启动时注册了哪些图与工具。"
+                "看运行状态页「任务 Worker 进程」那一格；没有登记时起它："
+                "scripts/dev.sh demo-worker，Windows 容器栈由 stack.cmd 一起带起。"
             ),
         ),
         Capability(

@@ -8,17 +8,14 @@ import logging
 import signal
 import sys
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
-from agent_workbench.adapters.persistence import PostgresWorkerPresenceStore
-from agent_workbench.application.worker_presence import WorkerPresenceBeacon
 from agent_workbench.apps.ingestion_worker.composition import (
     IngestionBackendUnavailableError,
     build_ingestion_worker_dependencies,
 )
 from agent_workbench.apps.ingestion_worker.runner import IngestionWorkerRunner
 from agent_workbench.bootstrap import load_settings
-from agent_workbench.bootstrap.deployment import deployment_label
 from agent_workbench.bootstrap.projections import project_ingestion_worker
 
 EXIT_OK = 0
@@ -57,19 +54,8 @@ async def serve(*, demo: bool) -> None:
     try:
         await dependencies.startup()
         # Same readout the Task Worker writes (ADR-0110); same fail-soft rule.
-        beacon = WorkerPresenceBeacon(
-            PostgresWorkerPresenceStore(dependencies.engine),
-            worker_id=config.worker_id,
-            kind="ingestion",
-            deployment=deployment_label(),
-            capabilities={
-                "demo": demo,
-                "sparse": bool(config.embedding.sparse_enabled),
-                "collection": str(config.qdrant.write_collection),
-            },
-            interval_seconds=float(config.heartbeat_seconds),
-        )
-        async with beacon:
+        presence = dependencies.presence
+        async with presence if presence is not None else nullcontext():
             await runner.run_forever(stop)
     finally:
         await dependencies.dispose()

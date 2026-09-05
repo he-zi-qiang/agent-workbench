@@ -178,14 +178,18 @@ Qdrant。能说的只有「`src/` 只改了一段 docstring、五个目录里没
 
 | 环境 | 结果 |
 |---|---|
-| 后端，真实 PostgreSQL + Qdrant（本机，空载重跑） | `4122 passed / 12 skipped`（14 分 50 秒）※※——**第六十八批那棵树的数，第六十九批没重测（※※※）** |
-| 后端，不起任何外部服务（本机） | `3349 passed / 800 skipped`（1 分 37 秒） |
-| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`/`e2e`） | `1408 passed / 2 skipped`（13 分 19 秒）※——**同上，第六十九批没重测** |
-| 前端 Vitest（本机 55 个文件） | `863 passed` |
+| 后端，真实 PostgreSQL + Qdrant（本机，空载重跑） | `4122 passed / 12 skipped`（14 分 50 秒）※※——**第六十八批那棵树的数，此后没重测（※※※）** |
+| 后端，不起任何外部服务（本机） | `3515 passed / 806 skipped`（1 分 36 秒） |
+| 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`/`e2e`） | `1408 passed / 2 skipped`（13 分 19 秒）※——**同上，此后没重测** |
+| 前端 Vitest（本机 58 个文件） | `917 passed` |
+| 前端 Playwright（本机，桌面 + 移动视口 Chromium） | `6 passed` |
 
-第二、四行实测于 **2026-09-02**、第六十九批那棵树；第一、三行仍是 **2026-09-01** 晚第六十八批
-那棵树上的数（机器空载；第一行同一棵树上还有一次带负载的红跑，※※）。第六十八批那一版是
-`4122 / 3334 / 1408 / 863`，离线的 +15 全部是第六十九批自己的测试，归属见表上那一段。
+第二、四、五行实测于 **2026-09-05**、第七十六批那棵树（`agent工作台` 上一次 `ruff` / `pyright` /
+`pytest` 全绿的那次跑，1 分 36 秒）；第一、三行仍是 **2026-09-01** 晚第六十八批那棵树上的数
+（机器空载；第一行同一棵树上还有一次带负载的红跑，※※）。第七十六批**只**对着真实 PostgreSQL
+跑了它自己新增或改动的契约（`test_chat_release.py`、`test_conversation_store.py`、
+`test_chat_turn_store.py`、`test_worker_presence.py`，181 + 8 条全过），没有重跑整组服务型目录
+——所以第三行仍是旧数，写在这里而不是悄悄沿用。第六十九批那一版是 `4122 / 3349 / 1408 / 863`。
 
 **第一行此前记着 3 项失败，现在没有了，而消失的原因值得写下来。** 那三条都在
 `tests/e2e/test_worker_process_crash_recovery.py`，症状是 v1 图的 `approval` 节点一次

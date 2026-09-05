@@ -22,6 +22,7 @@ from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresExecutionGuardFactory,
     PostgresOutbox,
+    PostgresWorkerPresenceStore,
     create_query_engine,
 )
 from agent_workbench.adapters.persistence.knowledge_graph import (
@@ -37,7 +38,9 @@ from agent_workbench.application.graph_extraction import (
     graph_identity,
 )
 from agent_workbench.application.ingestion import IngestionService
+from agent_workbench.application.worker_presence import WorkerPresenceBeacon
 from agent_workbench.apps.ingestion_worker.identity import restore_document_owner
+from agent_workbench.bootstrap.deployment import deployment_label
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
@@ -78,6 +81,10 @@ class IngestionWorkerDependencies:
     #: connection pool to `agent-encoder` (ADR-0106) and are closed here; the
     #: in-process ones hold nothing and are skipped.
     encoders: tuple[object, ...] = ()
+
+    #: This process saying it is here, on a timer (ADR-0110); see the Task
+    #: Worker's container for why it is assembled here and not in ``serve``.
+    presence: WorkerPresenceBeacon | None = None
 
     async def startup(self) -> None:
         """Fail closed before claiming work from the durable outbox."""
@@ -214,6 +221,18 @@ def build_ingestion_worker_dependencies(
         worker=worker,
         model_http=http,
         encoders=(embedder, sparse_encoder),
+        presence=WorkerPresenceBeacon(
+            PostgresWorkerPresenceStore(engine),
+            worker_id=config.worker_id,
+            kind="ingestion",
+            deployment=deployment_label(),
+            capabilities={
+                "demo": demo,
+                "sparse": bool(config.embedding.sparse_enabled),
+                "collection": str(config.qdrant.write_collection),
+            },
+            interval_seconds=float(config.heartbeat_seconds),
+        ),
     )
 
 

@@ -1070,6 +1070,9 @@ def test_serve_hands_the_listener_s_wakeup_to_the_runner(
 
     class Dependencies:
         worker = Worker()
+        # No presence beacon (ADR-0110): the real assembly builds one, and
+        # `serve` has to tolerate a container that did not.
+        presence = None
 
         async def startup(self) -> None:
             return None

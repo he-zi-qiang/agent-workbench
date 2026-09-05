@@ -256,6 +256,12 @@ select {
   border-bottom: 1px solid var(--aw-border);
 }
 
+/* 四格而不是三格（ADR-0110 之后 Worker 拆成两格）：app.css 写死 repeat(3)，第四格
+   会孤零零掉到下一行。按宽度自适应，1280px 以上四格一行，窄一点两行两格。 */
+.aw-metric-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 .aw-metric,
 .aw-eval-legend > div {
   padding: 16px 14px;

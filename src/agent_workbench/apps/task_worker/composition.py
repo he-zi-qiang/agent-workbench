@@ -44,6 +44,7 @@ from agent_workbench.adapters.persistence import (
     PostgresExecutionGuardFactory,
     PostgresTaskRegistry,
     PostgresToolExecutionLedger,
+    PostgresWorkerPresenceStore,
     create_query_engine,
 )
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
@@ -82,8 +83,10 @@ from agent_workbench.application.task_research import (
     ExternalResearchService,
     InternalResearchService,
 )
+from agent_workbench.application.worker_presence import WorkerPresenceBeacon
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.task_worker.identity import restore_submitted_principal
+from agent_workbench.bootstrap.deployment import deployment_label
 from agent_workbench.bootstrap.embedding_factory import (
     EmbeddingUnavailable,
     build_embedder,
@@ -233,6 +236,13 @@ class TaskWorkerDependencies:
     #: the other. `None` for the demo and adapter-injection paths, which
     #: assemble no retrieval and were never asked to.
     grounding_unavailable: str | None = None
+
+    #: This process saying it is here, on a timer (ADR-0110). Built here rather
+    #: than in ``serve`` because everything it reports -- the worker id, the
+    #: tool names, the heartbeat interval -- is decided by this assembly, and
+    #: ``serve`` should only have to open and close it. ``None`` is what a
+    #: hand-built container in a test leaves, and ``serve`` tolerates it.
+    presence: WorkerPresenceBeacon | None = None
 
     async def startup(self) -> None:
         """Validate the live read alias before claiming durable Task work."""
@@ -418,6 +428,31 @@ async def build_task_worker_dependencies(
             tool_names=() if assembled is None else assembled.tool_names,
             grounding_unavailable=(
                 None if assembled is None else assembled.grounding_unavailable
+            ),
+            presence=WorkerPresenceBeacon(
+                PostgresWorkerPresenceStore(engine),
+                worker_id=config.worker_id,
+                kind="task",
+                deployment=deployment_label(),
+                capabilities={
+                    "demo": demo,
+                    "graph_version": str(config.task.graph_version),
+                    "graphs": sorted(str(version) for version in graphs),
+                    "tools": sorted(
+                        str(name)
+                        for name in (() if assembled is None else assembled.tool_names)
+                    ),
+                    "mcp_tools": sorted(
+                        str(name)
+                        for name in (
+                            () if assembled is None else assembled.mcp_tool_names
+                        )
+                    ),
+                    "grounding_unavailable": (
+                        None if assembled is None else assembled.grounding_unavailable
+                    ),
+                },
+                interval_seconds=float(config.task.heartbeat_seconds),
             ),
         )
     except BaseException:
