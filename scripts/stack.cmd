@@ -72,6 +72,55 @@ if /i "%~1"=="status" goto :status
 if /i "%~1"=="restart" goto :restart
 if /i "%~1"=="sandbox-image" goto :sandbox_image
 
+rem  Can the engine reach a registry? Asked here, before anything is spent,
+rem  and only on the path that builds. `down`, `logs`, `status`, `restart`
+rem  and `sandbox-image` have already branched away above.
+rem
+rem  The failure this exists for is not a network outage, it is a stale
+rem  setting. Docker Desktop keeps a manual proxy of its own, and a Windows
+rem  machine running Clash or v2ray usually has it pointed at that tool's
+rem  local port. Upgrading the tool moves the port -- 7890 was the old
+rem  default, 7897 is the current one -- and nothing tells Docker Desktop.
+rem  The engine then dials a port with no listener on every registry
+rem  request, and buildkit prints the same refusal four times over, once per
+rem  base image, in a wall that names the proxy and never the setting that
+rem  holds it. Measured on such a machine 2026-09-10; what it was reported
+rem  as was "startup keeps failing".
+rem
+rem  `docker pull`, not `docker manifest inspect` and not a probe build. The
+rem  pull happens in the ENGINE, which is the process Docker Desktop hands
+rem  that proxy setting to. `manifest inspect` is a client-side registry
+rem  call and reads HTTPS_PROXY out of this console instead -- so on the
+rem  very machine that motivated this probe it succeeds while every build
+rem  fails, which is worse than having no probe at all. hello-world is about
+rem  2 kB and the pull is a no-op once it is in the local cache; failing, it
+rem  took 0.23s against a build that took 20s to say the same thing.
+docker pull --quiet hello-world:latest >nul 2>nul
+if errorlevel 1 (
+    echo stack: Docker's engine cannot reach a registry, so the build would 1>&2
+    echo        die on its first line. Stopping here instead. 1>&2
+    echo. 1>&2
+    echo        The usual cause on Windows is Docker Desktop's own proxy 1>&2
+    echo        setting naming a port nothing listens on -- a Clash or v2ray 1>&2
+    echo        port that moved, 7890 in the older builds and 7897 in the 1>&2
+    echo        current ones. Docker Desktop, Settings, Resources, Proxies: 1>&2
+    echo        correct the port there, or put that page back on the system 1>&2
+    echo        proxy, then Apply and restart. See docs/windows-quickstart.md. 1>&2
+    if exist "%APPDATA%\Docker\settings-store.json" (
+        echo. 1>&2
+        echo        What Docker Desktop has saved right now: 1>&2
+        findstr /i "ProxyHTTPMode OverrideProxyHTTP" "%APPDATA%\Docker\settings-store.json" 1>&2
+    )
+    echo. 1>&2
+    echo        To read the error itself:  docker pull hello-world 1>&2
+    echo        To build anyway:           scripts\stack.cmd anyway 1>&2
+    if /i not "%~1"=="anyway" (
+        set "RC=1"
+        goto :popped
+    )
+    echo        Proceeding because you asked. 1>&2
+)
+
 rem  Memory, asked before the build rather than discovered during it, and
 rem  only on the path that builds. `down`, `logs`, `status`, `restart` and
 rem  `sandbox-image` have already branched away above.

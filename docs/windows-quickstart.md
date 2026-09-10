@@ -130,14 +130,20 @@ scripts\stack.cmd
 它按顺序做这些事，每一步失败都会说是哪一步：
 
 1. 探 Docker（两种失败分开报）
-2. 量内存（§0）
-3. `docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench:local .`——首次要拉
+2. 探镜像仓库通不通（`docker pull hello-world`，四分之一秒）。这一步是为一种**不像网络
+   问题的网络问题**加的：Docker Desktop 自己存着一个手动代理，Clash / v2ray 升级之后
+   本地端口会变（旧版 7890，现在多是 7897），而没有任何东西会去改 Docker Desktop 那一栏。
+   引擎于是每次请求都去拨一个没人监听的端口，buildkit 把同一句拒绝按基础镜像打四遍，
+   通篇只提代理、不提是哪个设置存着它。探到不通就停，并把 Docker Desktop 当前存的那几行
+   原样打出来
+3. 量内存（§0）
+4. `docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench:local .`——首次要拉
    Node 24、Python 3.12、Docker CLI、LibreOffice 和检索运行时。LibreOffice 是给 Word 版面
    预览的（[ADR-0109](adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)），
    约 700 MB；不要它就 `scripts\stack.cmd lite`
-4. `docker compose --profile demo up -d --wait`——十四个容器，等到全部 healthy，最多 600 秒。
+5. `docker compose --profile demo up -d --wait`——十四个容器，等到全部 healthy，最多 600 秒。
    `encoder` 要把三个模型加载并预热完才算 healthy，其余四个进程都等它
-5. 打开 `http://127.0.0.1:8000/ui/`
+6. 打开 `http://127.0.0.1:8000/ui/`
 
 **首次运行按几十分钟算**，绝大部分花在构建镜像和下载权重上。这两件事都只发生一次：
 权重落在一个具名卷里，第二次启动是秒级到分钟级。
@@ -306,6 +312,7 @@ docker compose --profile demo down -v
 |---|---|
 | `no docker on PATH` | 装完没重开终端 |
 | `Docker is installed but the engine is not running` | Docker Desktop 没启动，或鲸鱼图标还在动 |
+| `Docker's engine cannot reach a registry` | Docker Desktop 里存着的手动代理指向一个没人监听的端口。它会把 `settings-store.json` 里那几行原样打出来；Docker Desktop → Settings → Resources → Proxies，把端口改对（Clash 现在多是 7897），或切回系统代理，Apply 并重启 |
 | 它说内存不够就停了 | §0，改 `.wslconfig` 然后 `wsl --shutdown` |
 | `weights-init` 卡住或失败 | 网络。看它打印的 endpoint，然后回到 §3 设镜像站 |
 | `the stack did not come up healthy` | `scripts\stack.cmd logs`，看哪个容器在重启 |
