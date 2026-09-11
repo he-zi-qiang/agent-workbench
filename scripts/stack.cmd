@@ -403,6 +403,58 @@ rem  after this (ADR-0107). Restart exactly those four. PostgreSQL, Qdrant,
 rem  the collector and the encoder keep running -- the encoder in particular,
 rem  because restarting it means reloading three models -- so this takes
 rem  seconds, where `down` and a fresh start would take the image build again.
+rem
+rem  All of which is true only when the rest of the stack IS running, and the
+rem  most common moment to type this is the one moment it is not.
+rem
+rem  `docker compose restart` restarts the services it is given and does NOT
+rem  start what they depend on. Against a stopped stack it therefore starts
+rem  these four, leaves PostgreSQL, Qdrant and the encoder stopped, and exits
+rem  0. The API comes up with no database, no vector store and no encoder
+rem  behind it, the console answers nothing, and the launcher has just
+rem  reported success. Measured 2026-09-11: exactly that, and what it got
+rem  reported as was "restarting still fails".
+rem
+rem  A Windows reboot is what puts the stack in that state. Nothing here
+rem  declares a restart policy, so when Docker Desktop comes back every
+rem  long-running container is sitting in `Exited (255)` -- the code a
+rem  container gets when the engine was stopped under it -- and none of them
+rem  return on their own.
+rem
+rem  So check first, and refuse rather than half-start. Three services are
+rem  probed rather than one because they fail independently and each is
+rem  enough on its own to make the four below useless.
+rem
+rem  Compared inside `for /f` rather than with `findstr /x` against a dumped
+rem  list. `findstr /x` anchors the whole line and counts the CR that Docker
+rem  writes, so `postgres` never equals the line `postgres` and every probe
+rem  reports missing -- a gate that refuses on a perfectly healthy stack,
+rem  which is what the first version of this did. `for /f` strips the CR, and
+rem  it needs no temporary file.
+set "HAVE_PG="
+set "HAVE_QD="
+set "HAVE_EN="
+for /f "usebackq delims=" %%s in (`docker compose --profile demo ps --status running --services 2^>nul`) do (
+    if /i "%%s"=="postgres" set "HAVE_PG=1"
+    if /i "%%s"=="qdrant" set "HAVE_QD=1"
+    if /i "%%s"=="encoder" set "HAVE_EN=1"
+)
+set "NOTUP="
+if not defined HAVE_PG set "NOTUP=1"
+if not defined HAVE_QD set "NOTUP=1"
+if not defined HAVE_EN set "NOTUP=1"
+if defined NOTUP (
+    echo stack: restart only restarts the four processes that read config once. 1>&2
+    echo        PostgreSQL, Qdrant or the encoder is not running, so restarting 1>&2
+    echo        those four would leave an API with nothing behind it -- and say 1>&2
+    echo        it succeeded. This is what a Windows reboot leaves behind. 1>&2
+    echo. 1>&2
+    echo        Start the whole stack instead:  scripts\stack.cmd 1>&2
+    echo        What is running right now:      scripts\stack.cmd status 1>&2
+    set "RC=1"
+    goto :popped
+)
+
 docker compose --profile demo restart sandbox api task-worker task-worker-b
 set "RC=%errorlevel%"
 goto :popped

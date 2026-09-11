@@ -340,6 +340,24 @@ docker compose --profile demo down -v
 
 ---
 
+### 重开机之后
+
+Windows 重启会把容器全部打死——它们会停在 `Exited (255)`，那是引擎被硬停时容器拿到的
+退出码。**没有任何东西会让它们自己回来**：这里没有声明重启策略。
+
+```bat
+scripts\stack.cmd
+```
+
+不是 `restart`。`restart` 只重启那四个读一次配置的进程，不管它们的依赖；对着一个停着的栈跑
+它，会起来一个背后什么都没有的 API，然后报成功。`stack.cmd` 会在这种状态下拒绝执行
+`restart` 并告诉你改用哪条命令（实测 2026-09-11，重启后约 70 秒回到全绿）。
+
+Docker Desktop 本身不会自启（`AutoStart=false`），所以先手动打开它，等引擎起来，再跑上面
+这条。
+
+---
+
 ### Docker Desktop 自己打不开时
 
 ```bat
@@ -355,6 +373,8 @@ scripts\docker-unstick.cmd
 | 症状 | 多半是 |
 |---|---|
 | `no docker on PATH` | 装完没重开终端 |
+| 重启电脑之后容器全是 `Exited (255)` | 正常。引擎被硬停时容器就是这个码。跑 `scripts\stack.cmd`，不是 `restart` |
+| `restart only restarts the four processes that read config once` | 栈没起来，`restart` 帮不上。跑 `scripts\stack.cmd` |
 | Docker Desktop 弹 `An unexpected error occurred` 然后自己退出 | 孤儿套接字，见本节最后一段。`scripts\docker-unstick.cmd` |
 | `Docker is installed but the engine is not running` | Docker Desktop 没启动，或鲸鱼图标还在动 |
 | `Docker's engine cannot reach a registry` | Docker Desktop 里存着的手动代理指向一个没人监听的端口。它会把 `settings-store.json` 里那几行原样打出来；Docker Desktop → Settings → Resources → Proxies，把端口改对（Clash 现在多是 7897），或切回系统代理，Apply 并重启 |
