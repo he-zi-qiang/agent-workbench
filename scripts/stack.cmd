@@ -188,6 +188,73 @@ echo.
 
 :memory_ok
 
+rem  Disk, measured on the volume Docker actually writes to, for the same
+rem  reason as the memory gate above: the alternative is tens of minutes of
+rem  build followed by a failure that does not name its own cause.
+rem
+rem  What this stack costs was measured 2026-09-11, after one build that
+rem  succeeded:
+rem
+rem      18.6 GB   the agent-workbench:local image. The embedding extra and
+rem                LibreOffice are most of it.
+rem       9.3 GB   the named volumes, of which about 6.7 GB is model weights.
+rem      19.8 GB   build cache. Reclaimable AFTERWARDS, but it exists during
+rem                the build, which is when the volume is tightest.
+rem      -------
+rem      48.5 GB   the docker_data.vhdx that came out of it.
+rem
+rem      30 GB   under this the built result does not fit even with the cache
+rem              pruned, so the build cannot finish. Hard stop.
+rem      50 GB   the measured figure rounded up. Under it the build can still
+rem              run out while the cache is at its peak.
+rem
+rem  The failure this prevents does not look like a disk failure. Docker fills
+rem  the volume, the build stops at `unpacking to ...` and stays there: no
+rem  error, no exit, the log simply stops and the daemon begins answering 500
+rem  to every API call. It reads as a hang. It cost most of two nights before
+rem  anybody measured the volume instead of the image.
+rem
+rem  Measured through PowerShell rather than `dir`: the free-space line `dir`
+rem  prints is localized, so parsing it fails on a non-English console, which
+rem  is the common case here. PowerShell is on every supported Windows. The
+rem  path is resolved through its reparse point first, because moving this
+rem  directory to a roomier drive and leaving a junction behind is the usual
+rem  remedy when the default location sits on a full system drive, and
+rem  measuring the junction itself would report the wrong volume.
+set "DISKGB="
+for /f "tokens=*" %%g in ('powershell -NoProfile -Command "$p=Join-Path $env:LOCALAPPDATA 'Docker\wsl'; if(-not (Test-Path -LiteralPath $p)){$p=Join-Path $env:LOCALAPPDATA 'Docker'}; $i=Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; if($i -and $i.Target){$p=$i.Target}; $d=[IO.Path]::GetPathRoot($p).Substring(0,1); [int][math]::Floor((Get-PSDrive $d).Free/1GB)" 2^>nul') do set "DISKGB=%%g"
+if not defined DISKGB set "DISKGB=0"
+if "%DISKGB%"=="" set "DISKGB=0"
+
+if %DISKGB% GEQ 50 goto :disk_ok
+if %DISKGB% GEQ 30 goto :disk_tight
+
+echo stack: Docker's disk has about %DISKGB% GB free. One built image, its 1>&2
+echo        volumes and the build cache measured 48.5 GB together, so this 1>&2
+echo        build would fill the volume and then STOP at "unpacking" without 1>&2
+echo        printing an error. Stopping here rather than there. 1>&2
+echo. 1>&2
+echo        Docker Desktop, Settings, Resources, Advanced, Disk image 1>&2
+echo        location: point it at a drive with room. Docker Desktop moves 1>&2
+echo        what is already there. See docs/windows-quickstart.md. 1>&2
+echo. 1>&2
+echo        To reclaim some in place:  docker system prune -a 1>&2
+echo        To build anyway:           scripts\stack.cmd anyway 1>&2
+if /i not "%~1"=="anyway" (
+    set "RC=1"
+    goto :popped
+)
+echo        Proceeding because you asked. 1>&2
+goto :disk_ok
+
+:disk_tight
+echo Docker's disk has about %DISKGB% GB free. One built image plus its volumes
+echo plus the build cache measured 48.5 GB, so this can still run out while the
+echo cache is at its peak. Run `docker system prune -a` first if it does.
+echo.
+
+:disk_ok
+
 rem  Build with `docker build`, then `compose up` WITHOUT --build. That split
 rem  looks redundant and is not.
 rem
