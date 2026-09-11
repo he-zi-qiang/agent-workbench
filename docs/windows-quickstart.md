@@ -356,6 +356,37 @@ scripts\stack.cmd
 Docker Desktop 本身不会自启（`AutoStart=false`），所以先手动打开它，等引擎起来，再跑上面
 这条。
 
+#### 让它自己回来
+
+```bat
+scripts\autostart.cmd install     每次登录自动把栈起起来
+scripts\autostart.cmd remove      不要了
+scripts\autostart.cmd status      装没装，上一次跑成什么样
+scripts\autostart.cmd run         现在就做一遍登录时做的事
+```
+
+`install` 往**启动文件夹**放一个转发用的小 cmd（不是计划任务：`Register-ScheduledTask` 与
+`schtasks /create` 在普通登录用户下都答 `Access is denied`，实测 2026-09-11，那条路要提权）。
+登录时它等 Docker 引擎答话——最多 20 分钟，因为那是一台刚开机、同时在做所有别的事的机器在起
+WSL 2 虚机——然后跑 `docker compose --profile demo up -d --wait`，在最小化窗口里，结果写进
+`var\autostart.log`。
+
+**它不构建镜像**，也**不开浏览器**。登录时触发一场几十分钟的构建，比栈没起来坏得多；没人在看一次
+登录。镜像不在就让 `up` 失败并记进日志。
+
+还要在 Docker Desktop → Settings → General 勾上 **Start Docker Desktop when you sign in**，
+否则引擎不会自己出现。两者不需要协调先后：这个启动项等的是引擎，谁先谁后都行。
+
+实测 2026-09-11：从完全停止的栈到 `/health/ready` 200，**60 秒**，且沙箱与 Worker 的 MCP
+工具目录都完整（见下）。
+
+> [!NOTE]
+> **为什么不给容器加 `restart: unless-stopped`。**
+> 那个显而易见的修法在这台栈上是错的：守护进程重启时 `depends_on` 不生效，容器各自无序拉起，
+> 而沙箱开关、联网搜索开关、Worker 的 MCP 工具目录都是**启动时决定一次、此后不再改**的。
+> 结果会是一台全绿而悄悄少了功能的部署——比明显没起来更坏。完整论证见
+> [ADR-0111](adr/0111-a-reboot-is-recovered-by-the-ordered-start-not-by-restart-policies.md)。
+
 ---
 
 ### Docker Desktop 自己打不开时
@@ -373,7 +404,8 @@ scripts\docker-unstick.cmd
 | 症状 | 多半是 |
 |---|---|
 | `no docker on PATH` | 装完没重开终端 |
-| 重启电脑之后容器全是 `Exited (255)` | 正常。引擎被硬停时容器就是这个码。跑 `scripts\stack.cmd`，不是 `restart` |
+| 重启电脑之后容器全是 `Exited (255)` | 正常。引擎被硬停时容器就是这个码。跑 `scripts\stack.cmd`，不是 `restart`；想让它自己回来见 §7 |
+| 装了 autostart 但登录后栈没起来 | 看 `var\autostart.log`。多半是 Docker Desktop 没自启（Settings → General）|
 | `restart only restarts the four processes that read config once` | 栈没起来，`restart` 帮不上。跑 `scripts\stack.cmd` |
 | Docker Desktop 弹 `An unexpected error occurred` 然后自己退出 | 孤儿套接字，见本节最后一段。`scripts\docker-unstick.cmd` |
 | `Docker is installed but the engine is not running` | Docker Desktop 没启动，或鲸鱼图标还在动 |
