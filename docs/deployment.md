@@ -243,6 +243,20 @@ and nothing else, and it separates the two failures that look alike from the
 outside — Docker absent, and Docker present with the engine stopped — because
 only the first is obvious from what Docker prints.
 
+`scripts\shortcut.cmd` puts that double-click on the desktop as an icon of its
+own, and `scripts\shortcut.cmd remove` takes it off again. It has to generate
+the `.lnk` rather than ship one: a shortcut stores an absolute path, this
+checkout is at a different one on every machine, and a `.lnk` arriving inside a
+downloaded ZIP arrives with the mark of the web on it. A `.cmd` cannot carry its
+own icon — Windows takes a file's icon from its type — and cannot be pinned to
+the taskbar; a shortcut does both. The icon itself is
+`scripts/agent-workbench.ico`: the console's own rail mark -- same two nav
+tokens, same corner radius -- drawn by `scripts/make_icon.py` from half-planes,
+standard library only, because `--aw-display` resolves to the system UI stack
+and there is no one letterform to embed. If `HF_ENDPOINT` is set in
+the terminal that runs it, the mirror is written into the shortcut's own command
+line, which is the only way a double-click has ever been able to carry it.
+
 It runs the two-step build above rather than `up --build`, for the reason given
 there: a Windows checkout under a Chinese directory name is the ordinary case
 here, and that is exactly the shape the bake path refuses.
