@@ -55,6 +55,39 @@ PostgreSQL、Qdrant 与 collector **没有量过**：
 
 真想在不够的机器上看看会怎样：`scripts\stack.cmd anyway`。
 
+### 还有一笔磁盘的账，它比内存那笔更容易被漏掉
+
+内存不够会被 `stack.cmd` 拦住并说清楚。磁盘不够**不会**：Docker 把卷写满之后，构建停在
+`unpacking to ...` 这一行不动——不报错、不退出、日志不再增长，守护进程开始对每个 API 调用
+返 500。它读起来像卡死，不像磁盘满。
+
+一次成功构建之后实测（2026-09-11）：
+
+| | 大小 | |
+|---|---|---|
+| `agent-workbench:local` 镜像 | **18.6 GB** | embedding 运行时与 LibreOffice 占了大半 |
+| 具名卷 | **9.3 GB** | 其中约 6.7 GB 是模型权重 |
+| 构建缓存 | **19.8 GB** | 事后可回收，但它**在构建期间存在**，而那正是最紧的时候 |
+| `docker_data.vhdx` 合计 | **48.5 GB** | |
+
+| | 约需 | 意思 |
+|---|---|---|
+| 硬下限 | **30 GB** | 低于它，就算把缓存清光，构建产物也放不下 |
+| 舒服 | **50 GB** | 上面那个实测数字取整。低于它，构建仍可能在缓存峰值时耗尽 |
+
+**关键在于量的是哪块盘。** Docker Desktop 默认把数据放在系统盘
+（`%LocalAppData%\Docker\wsl`），所以 C 盘空间再紧、D 盘再空也没用——Docker 一个字节都不
+会往 D 盘写。要改：Docker Desktop → Settings → Resources → Advanced → **Disk image
+location**，指到一块有空间的盘，Docker Desktop 会把已有数据搬过去。
+
+> [!NOTE]
+> 只改 `settings-store.json` 里的 `DataFolder` **对 WSL2 后端无效**——那个键管的是
+> Hyper-V 后端的虚拟机磁盘。WSL2 后端的数据在 `docker-desktop` 这个发行版里，位置由发行版
+> 注册信息决定，得走上面那个 UI，或者把目录搬走再在原位置留一个 junction。
+
+`stack.cmd` 在构建之前会量这块盘，并且会先穿过 reparse point 再量——否则留了 junction 的
+机器上，它报的会是系统盘的剩余，而不是数据实际所在那块盘的。
+
 ---
 
 ## 1. 装 Docker Desktop
@@ -137,13 +170,14 @@ scripts\stack.cmd
    通篇只提代理、不提是哪个设置存着它。探到不通就停，并把 Docker Desktop 当前存的那几行
    原样打出来
 3. 量内存（§0）
-4. `docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench:local .`——首次要拉
+4. 量磁盘（§0）——量的是 Docker 数据卷所在的那块盘，不是 C 盘
+5. `docker build --build-arg WITH_FIDELITY_PREVIEW=1 -t agent-workbench:local .`——首次要拉
    Node 24、Python 3.12、Docker CLI、LibreOffice 和检索运行时。LibreOffice 是给 Word 版面
    预览的（[ADR-0109](adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)），
    约 700 MB；不要它就 `scripts\stack.cmd lite`
-5. `docker compose --profile demo up -d --wait`——十四个容器，等到全部 healthy，最多 600 秒。
+6. `docker compose --profile demo up -d --wait`——十四个容器，等到全部 healthy，最多 600 秒。
    `encoder` 要把三个模型加载并预热完才算 healthy，其余四个进程都等它
-6. 打开 `http://127.0.0.1:8000/ui/`
+7. 打开 `http://127.0.0.1:8000/ui/`
 
 **首次运行按几十分钟算**，绝大部分花在构建镜像和下载权重上。这两件事都只发生一次：
 权重落在一个具名卷里，第二次启动是秒级到分钟级。
@@ -313,6 +347,8 @@ docker compose --profile demo down -v
 | `no docker on PATH` | 装完没重开终端 |
 | `Docker is installed but the engine is not running` | Docker Desktop 没启动，或鲸鱼图标还在动 |
 | `Docker's engine cannot reach a registry` | Docker Desktop 里存着的手动代理指向一个没人监听的端口。它会把 `settings-store.json` 里那几行原样打出来；Docker Desktop → Settings → Resources → Proxies，把端口改对（Clash 现在多是 7897），或切回系统代理，Apply 并重启 |
+| `Docker's disk has about N GB free` | §0 的磁盘那一节。改 Disk image location，或 `docker system prune -a` |
+| 构建停在 `unpacking to ...` 不动，日志不再增长，`docker` 命令开始返 500 | 数据卷写满了。这不是卡死，是磁盘满。见 §0 磁盘那一节 |
 | 它说内存不够就停了 | §0，改 `.wslconfig` 然后 `wsl --shutdown` |
 | `weights-init` 卡住或失败 | 网络。看它打印的 endpoint，然后回到 §3 设镜像站 |
 | `the stack did not come up healthy` | `scripts\stack.cmd logs`，看哪个容器在重启 |
