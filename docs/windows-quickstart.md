@@ -115,7 +115,8 @@ set HF_ENDPOINT=https://hf-mirror.com
 PowerShell 里是 `$env:HF_ENDPOINT = "https://hf-mirror.com"`。
 
 不设也能跑，只是下载可能卡住；卡住时 `weights-init` 那个容器会把用到的 endpoint 和这行
-命令一起打出来。**双击运行的话这个变量传不进去**，需要镜像站就从终端里跑。
+命令一起打出来。**双击运行的话这个变量传不进去**，需要镜像站就从终端里跑——或者把它
+写进桌面快捷方式里，见 [§4 做成一个桌面图标](#做成一个桌面图标)。
 
 ---
 
@@ -144,6 +145,48 @@ scripts\stack.cmd
 
 中途它会打印一句摘要，说这套栈**还缺什么**。那句话是刻意的：一个什么也不说的控制台
 会被读成一个坏了的控制台，这件事发生过。
+
+### 做成一个桌面图标
+
+`.cmd` 双击得了，但它和机器上所有别的 `.cmd` 长得一模一样——Windows 的文件图标来自
+**文件类型**，不存在「只给这一个文件换个图标」。要一个认得出、还能钉到任务栏的入口，
+那东西得是一个快捷方式：
+
+```bat
+scripts\shortcut.cmd
+```
+
+跑一次（双击它也行），桌面上多一个叫 **Agent 工作台** 的图标，指着 `scripts\stack.cmd`，
+戴着 `scripts\agent-workbench.ico`——就是控制台侧栏顶上那个方块：同样的两个颜色、同样的
+圆角，白底一个 A。它由 `scripts/make_icon.py` 画出来，只用标准库，所以改这个图标就是改
+那里的几个坐标。右键「固定到任务栏」可以；`.cmd` 本身钉不了，快捷方式可以。拿掉它：
+`scripts\shortcut.cmd remove`。
+
+那个 A 是**画**出来的，不是用字体排的：`--aw-display` 落到 `var(--aw-sans)`，也就是系统
+界面字栈——侧栏那个字母在 Windows 上是 Segoe UI，在 macOS 上是 SF，没有哪一个轮廓是
+「对的那个」，只有形状是。它也比 CSS 里那个（28 px 方块里 14 px 的字）更大更粗一档：
+资源管理器列表视图按 16 px 画图标，照原比例下去横杠不足一个像素，中间那个三角会糊死。
+
+**仓库里为什么不直接放一个 `.lnk`。** 它存的是绝对路径，而这个 checkout 在每台机器上的
+路径都不一样。而且一个随 ZIP 下载下来的 `.lnk` 会带着 mark of the web，Windows 会为你
+刚刚自己解压出来的东西弹一次警告。所以仓库里放的是生成器，不是产物。
+
+**它顺带补上了 §3 那个洞。** 双击进来的窗口不继承任何终端，所以 `HF_ENDPOINT` 从来到不了
+它。现在只要在**跑 `shortcut.cmd` 的那个终端里**先设好，它就被写进快捷方式自己的命令行，
+以后每一次双击都带着：
+
+```bat
+set HF_ENDPOINT=https://hf-mirror.com
+scripts\shortcut.cmd
+```
+
+改主意就再跑一次，同名的快捷方式会被覆盖。不设也能跑，只是回到 §3 那条默认路。
+
+> **这条路没有在一台真的 Windows 上跑过**，和本文开头那句说明是同一个性质。
+> `tests/deployment/test_windows_shortcut.py` 守的是让它成立的规则——文件是 ASCII、
+> 换行是 CRLF、`rem` 行里不含会被 cmd 当成命令的条件操作符、那段 PowerShell 里不出现
+> 任何一个会被 cmd 二次解析的引号或 `&`、图标是一个九档尺寸的 ICO 且仍然是
+> `make_icon.py` 画出来的那一个——规则比运行弱。
 
 ---
 
@@ -246,6 +289,8 @@ scripts\stack.cmd restart        :: 只重启沙箱、API 与两个 Worker；数
 scripts\stack.cmd sandbox-image  :: 构建能画 PDF 的沙箱镜像，然后 restart
 scripts\stack.cmd down           :: 停掉并删掉容器
 scripts\stack.cmd anyway         :: 内存不够也照跑（见 §0）
+scripts\shortcut.cmd            :: 在桌面放一个图标，指向上面第一条（一次性）
+scripts\shortcut.cmd remove     :: 把那个图标拿掉
 ```
 
 `restart` 不碰 `encoder`：重启它等于重新加载三个模型，几分钟；而它不读 key、不读开关，
@@ -318,6 +363,7 @@ docker compose --profile demo down -v
 | 控制台开了但 Chat 说它没有联网功能 | 没 key，或 key 存了没 `restart`。见 §5 |
 | 任务秒过、报告像模像样但引用是假的 | 合成 Worker。见 §5 那一段 |
 | 手敲 `docker compose up --build` 直接死在 gRPC header 上 | §2。用 `stack.cmd`，别用 `--build` |
+| 桌面图标画的是通用图标，不是那个白底的 A | Explorer 的图标缓存还留着旧的。注销再登录最稳；图标本身在不在，`scripts\shortcut.cmd` 会自己说 |
 
 `http://127.0.0.1:8000/ui/` 打不开时先 `scripts\stack.cmd status`：API 只映射到
 **127.0.0.1**，局域网上访问不到是有意的。
