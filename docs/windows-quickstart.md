@@ -340,11 +340,22 @@ docker compose --profile demo down -v
 
 ---
 
+### Docker Desktop 自己打不开时
+
+```bat
+scripts\docker-unstick.cmd
+```
+
+见 §8 最后一段。引擎健康时它拒绝运行，所以误跑一次不会打断正在跑的东西。
+
+---
+
 ## 8. 出问题时
 
 | 症状 | 多半是 |
 |---|---|
 | `no docker on PATH` | 装完没重开终端 |
+| Docker Desktop 弹 `An unexpected error occurred` 然后自己退出 | 孤儿套接字，见本节最后一段。`scripts\docker-unstick.cmd` |
 | `Docker is installed but the engine is not running` | Docker Desktop 没启动，或鲸鱼图标还在动 |
 | `Docker's engine cannot reach a registry` | Docker Desktop 里存着的手动代理指向一个没人监听的端口。它会把 `settings-store.json` 里那几行原样打出来；Docker Desktop → Settings → Resources → Proxies，把端口改对（Clash 现在多是 7897），或切回系统代理，Apply 并重启 |
 | `Docker's disk has about N GB free` | §0 的磁盘那一节。改 Disk image location，或 `docker system prune -a` |
@@ -364,6 +375,40 @@ docker compose --profile demo down -v
 
 `http://127.0.0.1:8000/ui/` 打不开时先 `scripts\stack.cmd status`：API 只映射到
 **127.0.0.1**，局域网上访问不到是有意的。
+
+### Docker Desktop 起不来：孤儿套接字
+
+Docker Desktop 弹 “An unexpected error occurred” 然后退出，日志
+（`%LocalAppData%\Docker\log\host\com.docker.backend.exe.log`，搜
+`backend cancelling with error`）里写的是：
+
+```
+starting services: initializing Ingest server:
+listening on unix://.../Docker/run/sailor-ingest.sock:
+rename sailor-ingest.sock sailor-ingest.sock.stale:
+The file cannot be accessed by the system.
+```
+
+这是 AF_UNIX 套接字文件。持有它的进程没了之后，Windows 把文件留在一个既打不开、也删不掉、
+也改不了名的状态里，而 Docker Desktop 启动时的第一件事就是把它改名成 `.stale`——于是此后
+每次启动都死在同一行。
+
+> [!IMPORTANT]
+> **这不是强杀 Docker 造成的。** 第一次遇到它是在一次强制停止之后，很容易就当成活该；
+> 但它随后在一次返回 0 的、干净的 `docker desktop stop` 之后又发生了一次
+> （实测 2026-09-11，Docker Desktop 4.89.0）。正常停止就会留下这些套接字，下一次启动撞上它们。
+
+```bat
+scripts\docker-unstick.cmd
+```
+
+它把两个目录整个改名挪开——`%LocalAppData%\Docker\run` 和
+`%LocalAppData%\docker-secrets-engine`——Docker Desktop 启动时会重建它们。**改名目录有效而
+删文件无效**：文件碰不得，但它们的父目录是普通目录。只修第一个的话，崩溃会移到第二个上，
+第二个就是这么被发现的。
+
+挪开的 `*.orphan-*` 目录留在原地不删，因为删它们会因同样的原因失败；重启一次 Windows
+就能清掉。引擎健康时这个命令拒绝运行，所以误跑一次不会打断正在跑的东西。
 
 ---
 
