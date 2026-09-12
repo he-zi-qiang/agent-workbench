@@ -6,22 +6,27 @@ import { BrowserFrame } from "./BrowserFrame";
 // 客户端模块更贴近它真实的样子——它没有走 api/client，因为返回的是二进制而
 // 不是 JSON。
 const fetchMock = vi.fn();
+// Held here rather than reached for as `URL.revokeObjectURL` in the assertion:
+// reading a method off an object hands `expect` an unbound function, which is
+// what `@typescript-eslint/unbound-method` objects to and is a real hazard for
+// any method that uses `this`. Naming the mock says what is meant anyway.
+const createObjectURL = vi.fn<() => string>();
+const revokeObjectURL = vi.fn<(url: string) => void>();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   // jsdom 不带这两个。`createObjectURL` 返回一个可辨认的串，好让断言能确认
   // 图真的挂上去了；`revokeObjectURL` 被记着，因为「一秒一张、不撤销就是一
   // 分钟六十个 blob」是这个组件里一条真实的约束。
-  vi.stubGlobal("URL", {
-    ...URL,
-    createObjectURL: vi.fn(() => "blob:frame-1"),
-    revokeObjectURL: vi.fn(),
-  });
+  createObjectURL.mockReturnValue("blob:frame-1");
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   fetchMock.mockReset();
+  createObjectURL.mockReset();
+  revokeObjectURL.mockReset();
 });
 
 describe("BrowserFrame（ADR-0112 §3.6）", () => {
@@ -51,7 +56,7 @@ describe("BrowserFrame（ADR-0112 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      blob: async () => new Blob([new Uint8Array([0xff, 0xd8])]),
+      blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     render(<BrowserFrame />);
     await waitFor(() => {
@@ -76,13 +81,13 @@ describe("BrowserFrame（ADR-0112 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      blob: async () => new Blob([new Uint8Array([0xff, 0xd8])]),
+      blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     const view = render(<BrowserFrame />);
     await waitFor(() => {
       expect(screen.getByAltText("浏览器当前画面")).toBeTruthy();
     });
     view.unmount();
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
   });
 });
