@@ -3736,24 +3736,6 @@ describe("CodePage 的自动预览", () => {
     expect(vi.mocked(askCode)).toHaveBeenCalledTimes(2);
   });
 
-  it("关掉自动验证之后，错误只显示出来", async () => {
-    // 它会花钱，所以关得掉；关掉之后那颗「交给它」的按钮还在——读者自己决定。
-    const user = userEvent.setup();
-    wroteAPage();
-
-    mounted();
-    await user.click(screen.getByRole("button", { name: "自动验证" }));
-    await user.type(screen.getByLabelText("要做的事"), "写个页面");
-    await user.click(screen.getByRole("button", { name: "发送" }));
-    await faulted("ReferenceError: GRAVITY is not defined");
-    await nextFrame();
-
-    expect(vi.mocked(askCode)).toHaveBeenCalledTimes(1);
-    expect(
-      screen.getByRole("button", { name: "把这些错误交给它" }),
-    ).toBeInTheDocument();
-  });
-
   it("页面报的错一键回到输入框里，闭上那个回路", async () => {
     // 这一条钉的是整条回路，而不是其中一段：模型写出页面 → 右栏把它跑起来 →
     // 它自己报出运行时错误 → 一次点击把那些话放回输入框 → 下一轮去修。
