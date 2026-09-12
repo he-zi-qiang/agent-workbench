@@ -89,7 +89,44 @@ calls beats one that does not exist after one.
 Reads and searches that do not depend on each other can be proposed together in
 one message; they run as a group and keep the order you gave them. A write or a
 command runs on its own, after everything proposed before it.
+
+A search finds; it does not measure. The search tool answers where a pattern
+occurs, and it matches whole source lines -- indentation, quotes and commas
+included -- so it cannot tell you how long a string literal is, how many of
+something there are, or whether an expression comes out right. A check that
+needs computation is one of two things here: something a tool you hold can
+run, or something you do once by reading the exact lines and reasoning from
+them, and then report as checked by reading rather than by running. It is
+never a question to narrow with another search: a turn that asks `{40}`, then
+`{41}`, then `{42}` has turned a search tool into a ruler, and every answer it
+gets is about the line, not the string. When you have enough to act, act. Do
+not re-derive what an earlier result already established, and do not read a
+file again to confirm an edit that returned successfully -- the tool would have
+refused if it had not applied.
 """
+
+#: The closing paragraph above is 2026-09-12 (ADR-0114), and it was written
+#: from one transcript rather than from a principle. A project turn asked to
+#: write Mario found a `mario.html` whose `AGENTS.md` said every level row must
+#: be exactly 160 characters and must be re-checked after an edit. It held
+#: nothing that runs code -- the Compose profile has no `project_run`, no
+#: sandbox and no browser (F-24, F-37, F-39) -- so it measured with
+#: `project_grep`: `^.{160}$`, then `X{44}...X{1,200}`, then a bisection of a
+#: run length two searches per step for thirty steps ("The middle run is at
+#: most 96. Let me narrow it." ... 89, 79, 69, 59, 49). Seventy-four searches
+#: of one file in sixty steps, ending on `max_steps`; the explorer it delegated
+#: to made a hundred and fourteen. And the answers were wrong: the source line
+#: carries three spaces, a quote and a comma around the literal, so every
+#: anchored count was off by five, and the turn "fixed" rows that were already
+#: right. Every row was 160 the whole time (`awk '{print length}'`, afterwards).
+#:
+#: The identical-call breaker in `runtime/agent_runtime.py` never fired,
+#: because no two of those searches were the same question. What was missing
+#: was the sentence a model with a shell never needs: that a search tool is not
+#: an instrument. The "when you have enough, act" and "do not re-read to
+#: confirm" halves are Claude Code's own operating rules, transplanted, for the
+#: same reason they exist there -- a turn re-deriving what it already holds
+#: spends its budget and reads to the person watching as incapable.
 
 
 def _rewrite(prompt: str, old: str, new: str) -> str:
@@ -821,6 +858,60 @@ def with_browser(prompt: str) -> str:
     return prompt + _BROWSER
 
 
+#: What a turn is told when it holds `delegate_agent` (ADR-0114).
+#:
+#: An append with no anchor, like `_WRITE_GATE` and `_BROWSER`: no base prompt
+#: says a word about delegation, so there is nothing to unsay first. It is worth
+#: saying at all because the tool's own description (`adapters/tools/delegate.py`)
+#: says how to delegate and nothing about *whether* to -- and a model holding a
+#: tool with no guidance on when not to use it uses it.
+#:
+#: Measured 2026-09-12, the same session as the paragraph above. The parent
+#: turn delegated an "audit" of one 41 KB file to `explorer`; the child made
+#: thirty-one searches in fourteen steps to reach a conclusion the parent then
+#: re-verified itself. The next turn delegated three more: 119 tool calls, 0,
+#: and 109 before the repeat breaker ended it -- each child holding the parent's
+#: whole 60-step, 120-call budget (`derive_child_budget` passes those down
+#: undivided, on purpose), and each holding only the read tools, so none of
+#: them could do the one thing the parent could not. Four runs' worth of budget
+#: spent learning what one run already knew.
+#:
+#: The rule is Claude Code's, nearly verbatim: do not spawn unless asked; each
+#: spawn starts cold and re-derives context you already have; a task with
+#: several parts is not a request to spawn. The one addition is the sentence
+#: about computation, because here it is the reason delegation cannot rescue a
+#: stuck turn -- the child is stuck the same way.
+_DELEGATION = """
+
+You can hand one self-contained question to a sub-agent with `delegate_agent`,
+and the default is not to. A sub-agent starts cold: it has read nothing you
+have read, holds only the tools that read, cannot compute anything you cannot,
+and spends a budget of its own the size of this turn's. On a question a few
+reads would answer, delegating costs more than answering; on a question you
+could not settle, it usually cannot either. Delegate when the user asks you to,
+or when a question is separable, answerable by reading alone, and would
+otherwise fill this conversation with results you need only the conclusion of.
+A task with several parts is not a reason to delegate -- do the parts here.
+When you do delegate, put everything the sub-agent needs into its prompt,
+including what you already know, and read its report as material to check
+rather than as a fact."""
+
+
+def with_delegation(prompt: str) -> str:
+    """Correct a prompt for a turn that holds ``delegate_agent`` (ADR-0114).
+
+    An append with no anchor, so it is not enumerated for drift in
+    `_assert_every_prompt_combination_resolves` -- there is nothing here a base
+    prompt could stop containing. What that assertion does cover is the order
+    it is applied in, which is the same slot `with_browser` has: after the
+    tool-shaped arms and before `with_plan_only`, so that a plan turn -- which
+    keeps `delegate_agent`, a `read` tool -- reads this paragraph above the one
+    that narrows it.
+    """
+
+    return prompt + _DELEGATION
+
+
 __all__ = [
     "CODER_SYSTEM_PROMPT",
     "CODER_SYSTEM_PROMPT_PROJECT",
@@ -829,6 +920,7 @@ __all__ = [
     "MAX_MEMORY_CHARS",
     "PROJECT_MEMORY_FILE",
     "with_browser",
+    "with_delegation",
     "with_host_commands",
     "with_plan_only",
     "with_project_memory",

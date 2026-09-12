@@ -227,6 +227,11 @@ class _RunLedger:
     #: Keyed by content rather than by ``tool_call_id``, which is fresh every
     #: turn and so cannot see a model asking the same question twice.
     call_counts: dict[str, int] = field(default_factory=dict[str, int])
+    #: How many times each *tool* has been asked anything in this run,
+    #: whatever the arguments (ADR-0114). The coarser count `call_counts`
+    #: cannot give: a run that asks one tool a fresh question every time never
+    #: repeats a signature and still never gets anywhere.
+    tool_counts: dict[str, int] = field(default_factory=dict[str, int])
     #: How many calls this run has had refused for repeating themselves.
     repeat_refusals: int = 0
     #: How many times this run has shortened its own conversation.
@@ -321,6 +326,56 @@ does not show.\
 #: stopped. A model that asks once more after being told has misread the answer;
 #: one that asks a third time is not going to stop on its own.
 MAX_REPEAT_REFUSALS: Final[int] = 2
+
+#: Every this-many calls to *one tool*, its result carries a sentence saying so
+#: (ADR-0114).
+#:
+#: A nudge, not a refusal, and not a ceiling -- the two things above are the
+#: ceiling and the refusal, and they answer a different question. They see a
+#: run asking the *same* question again. What they cannot see is a run asking
+#: one tool a *different* question every time in pursuit of an answer that
+#: tool does not have: measured 2026-09-12, a coding turn made 74 `project_grep`
+#: calls against one file, each pattern different from the last, bisecting a
+#: string's length with regex quantifiers ("at most 96 ... 89 ... 79 ... 69
+#: ... 59 ... 49 ... 47 ... 49"), two per step for thirty steps, and ended on
+#: `max_steps` with the answer wrong. No two of those calls shared a
+#: signature, so `MAX_IDENTICAL_CALLS` never fired, and the step ceiling that
+#: did fire reads to the person watching as the model being incapable.
+#:
+#: 25, and the number is calibrated rather than guessed. Over every run in the
+#: local event log that day, the busiest single tool of a run that *completed*
+#: had a median of 2 calls and a 90th percentile of 11; the runs that looped
+#: had 31, 42, 74, 98, 106 and 114. The nudge lands after the healthy tail and
+#: before the pathology has spent half its budget, and it lands again at
+#: every multiple so a run that shrugs off the first one is told again rather
+#: than once.
+#:
+#: Why a sentence in the result and not a refusal: the call may be legitimate
+#: -- a wide exploration of a large tree is thirty greps -- and a refusal of
+#: legitimate work is the mistake the identical-call breaker was careful not
+#: to make (its bar sits above re-reading). A sentence costs a false positive
+#: nothing but the sentence. It is the shape Claude Code uses for the same
+#: situation: a reminder attached to a tool result, from the harness, in the
+#: harness's own voice.
+SAME_TOOL_NUDGE_EVERY: Final[int] = 25
+
+
+def _nudge(tool_name: str, count: int) -> str:
+    """The sentence appended to the ``count``-th result of ``tool_name``.
+
+    Written to be read by the model that is looping, so it names the count, the
+    tool, and the two honest ways out -- act on what is known, or report what
+    could not be determined. It deliberately does not say "stop": the run may
+    be right to continue, and a harness cannot know. What it can know is the
+    count, and the count is the fact worth handing over.
+    """
+
+    return (
+        f"\n\n[This is call {count} of {tool_name} in this run. If the last "
+        "several were narrowing one question, this tool is not going to answer "
+        "it: write down what you know and act on it, or report what could not "
+        "be determined.]"
+    )
 
 
 def _call_signature(call: ToolCall) -> str:
@@ -1080,6 +1135,12 @@ class ClaudeLikeAgentRuntime:
         # and died on the token ceiling with the answer it needed already in
         # context.
         repeatable: list[ToolCall] = []
+        # Which of this batch's calls is the 25th, 50th, ... of its tool, and
+        # which number it is (ADR-0114). Decided here, while counting, because
+        # a batch may hold two calls of one tool -- the observed loop proposed
+        # exactly two per step -- and the sentence belongs on the one that
+        # crossed the line, not on both.
+        nudged: dict[str, int] = {}
         for call in admitted:
             # Counted before anything else can skip the rest of the loop, and
             # that ordering is the whole guard. A refusal is cheap in tokens
@@ -1091,6 +1152,15 @@ class ClaudeLikeAgentRuntime:
             signature = _call_signature(call)
             seen_before = ledger.call_counts.get(signature, 0)
             ledger.call_counts[signature] = seen_before + 1
+            # The per-tool count, kept in the same breath and for the same
+            # reason: a call the checks below refuse is still the model asking
+            # this tool once more, and a count that skipped refusals would let
+            # a run alternate refused and fresh calls without ever reaching a
+            # multiple.
+            asked = ledger.tool_counts.get(call.tool_name, 0) + 1
+            ledger.tool_counts[call.tool_name] = asked
+            if asked % SAME_TOOL_NUDGE_EVERY == 0:
+                nudged[call.tool_call_id] = asked
             if seen_before < MAX_IDENTICAL_CALLS and (
                 call.tool_name not in offered and self._gateway.knows(call.tool_name)
             ):
@@ -1213,6 +1283,31 @@ class ClaudeLikeAgentRuntime:
                 "error",
                 exc.to_error_info(),
                 ledger,
+            )
+        if nudged:
+            # Appended to the *message*, after the event was emitted from the
+            # unaltered result, and the difference between the two is exactly
+            # this sentence. `ToolCompleted.output_bytes` describes what the
+            # tool answered, which is what an operator reading the log wants
+            # to know about the tool; what the model was told on top of that
+            # is the runtime's doing and is recorded here, in the runtime.
+            #
+            # Successful results only. An error result carries its text in
+            # `error`, and `ToolResultBlock.from_tool_result` renders that
+            # *only when `content` is empty* -- so appending to a refusal would
+            # replace "invalid_tool_input: the snippet appears 0 times" with
+            # the nudge and lose the refusal. The count still advanced, so the
+            # next multiple lands on whatever that call is.
+            aligned = tuple(
+                result.model_copy(
+                    update={
+                        "content": result.content
+                        + _nudge(result.tool_name, nudged[result.tool_call_id])
+                    }
+                )
+                if result.tool_call_id in nudged and result.status == "ok"
+                else result
+                for result in aligned
             )
         ledger.messages.append(assistant_message(text=turn.text, tool_calls=turn.calls))
         ledger.messages.append(tool_message(aligned))

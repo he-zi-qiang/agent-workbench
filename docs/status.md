@@ -27,6 +27,85 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-12（第七十九批）：搜索只负责找到，不负责度量——模型拿 grep 量字符数，量了七十四次（ADR-0114）
+
+起因是用户贴来的一段转录——81 步，六十来步写着「搜索项目目录」，末尾「这一轮把步数用完了」——
+和一句判断：「code 模式中还是这种问题，重复进行搜索，可能当初设计就有问题？请你参考本地
+Claude desktop 的技术实现进行修改」。
+
+### 1. 查证：不是重复，是二分
+
+事件流里那段会话（Compose 栈，`ses_33521d79…`，六个运行）：父回合 60 步 100 次工具调用里
+**74 次 `project_grep`**，终态 `max_steps`；它委派的 explorer 31 次；第二轮 98 次，三个孩子
+119 / 0 / 109 次。模型每一步的话都在：「Now I must verify every row is exactly 160 characters.
+Let me check with anchored regexes.」→「The middle run is at most 96. Let me narrow it.」→ 89 →
+79 → 69 → 59 → 49 → 47–49 → 49。它在用正则量词对一段 `X` 的长度做二分，每步两次搜索，做了
+三十步，中途三次说「I'm burning calls on guesswork」然后继续。
+
+**`MAX_IDENTICAL_CALLS` 一次没响**：七十四次没有两次是同一个问题。**量出来的还是错的**：
+源码行是 `   "…",`，锚定计数永远差五，于是它把本来就对的行反复「修」。事后 `awk '{print length}'`
+看 `var/projects/windows测试/mario.html` 第 175–189 行，十五行全是 160。
+
+三个条件同时成立才有这个结果：`AGENTS.md` 里一条**正确的**记忆（每行必须 160，改完核对）；
+这个回合**没有任何能计算的东西**（Compose 档：F-24 无沙箱、F-37 无宿主 shell、F-39 浏览器未接）；
+`project_grep` 是它手里唯一像仪器的工具。Claude Code 不需要面对这个组合——它永远有 Bash。
+
+### 2. 改了什么（Claude Code 的四样东西搬三样，第四样记成缺口）
+
+1. **基础提示词多一段，六个变体全部继承**：「A search finds; it does not measure.」——搜索匹配
+   整行源码，给不出字面量多长、几个、对不对；需要计算的核对要么用能跑代码的工具，要么读那几行
+   推一次、报告里写明是读出来的；**不是一个能用再一次搜索去收窄的问题**。段尾是 Claude Code
+   自己的两条：够了就动手、改动返回成功不要再读一遍确认。
+2. **`with_delegation`**：握着 `delegate_agent` 的回合被告知默认不用——孩子冷启动、只有读工具、
+   **你算不了的它也算不了**、花一份一样大的预算；用户要求或问题真的可分且只靠读时才用。从
+   `tool_names` 读不从部署开关读（ADR-0096 的选择可以勾掉它）。导入期全组合断言从 32 个变 64 个。
+3. **explorer 的提示词也说这句**（它只有读工具，更需要）。
+4. **运行时提醒**（`SAME_TOOL_NUDGE_EVERY = 25`）：一个运行里某把工具第 25、50、… 次调用的
+   结果末尾附一句「这是第 N 次调用 X；如果最近几次在收窄同一个问题，这把工具答不了它」。
+   不拒绝、不设上限。25 是量的：当天本地事件流里跑完的运行，最忙那把工具 p50 = 2、p90 = 11；
+   循环的是 31 / 42 / 74 / 98 / 106 / 114。写进消息不写进事件（`ToolCompleted.output_bytes`
+   仍是工具自己的字节；系统提示是缓存前缀，中途改它等于把 169 万缓存 token 作废）。只加在
+   成功结果上——`ToolResultBlock.from_tool_result` 只在 `content` 为空时渲染 `error`，往拒绝上
+   追加会把拒绝盖掉。
+5. **`config.compose-local.toml` 补 `[model.main] timeout_seconds = 240` / `[runtime]
+   model_timeout_seconds = 300`**：上面那段的第二轮死于「the model call exceeded the runtime's
+   120.0s envelope」，正是 demo-local 2026-08-27 注释过的那对平局，这个 profile 没跟。
+
+**没做的、记成 F-40**：给 Compose 档的编码回合一个能算的地方。容器内 `project_run` 会跑在
+挂着 key 卷的 API 容器里、环境原样继承——要自己的 ADR。
+
+### 3. 证据
+
+九条新测试，名字在 ADR-0114 §5；`agent-config-check --config config/config.compose-local.toml`
+通过；`ruff format --check` / `ruff check` 全树通过；`pyright` 的 14 个错全部是本机 Windows 上
+`os.O_NOFOLLOW` / `os.killpg` / `signal.SIGKILL` 那一类、CI 的 Linux 上不存在的，与本批无关。
+
+**离线全量，本机 Windows 11，2026-09-12**：`3458 passed / 157 failed / 810 skipped / 1 deselected`，
+22 分 53 秒。**157 个失败全部是 Windows 平台的，且与本批无关**，证法是对照而不是推断：
+在一棵干净的 `main@a278f04` 工作树上用同一个 venv 复跑那 13 个失败文件，失败的测试**集合逐条
+相同**（`diff` 为空；对照多出的一条是本次 deselect 掉的 `test_a_directory_has_no_size…`，
+它在 main 上同样失败）。按文件：`test_project_tools` 49、`test_project_file_store` 30、
+`test_project_sandbox` 13、`test_project_api` 2——都是 `adapters/filesystem/sandbox.py` 在 win32
+上没有 `os.O_NOFOLLOW`；`test_dev_script_up` 21、`test_dev_script_web_search` 13、
+`test_local_*_profile` 18——都是 `subprocess.run(["bash", "scripts/dev.sh", …])`；
+`test_sandbox_bootstrap` 5、`test_provider_key_api` 1、`test_settings` 1（环境变量大小写）。
+另外 5 条是 `tests/apps/test_computer_consent.py`：它只 monkeypatch 了 darwin 那条路，在 Windows
+上会**真的弹出**「屏幕控制批准」对话框，每条等 120 秒超时——一次全量因此拖到 22 分钟。
+`tests/apps/test_browser_mcp_server.py` 也有几条在这台机器上要等到超时才走。三者都是本批之前
+就在的，值得单独登记，本批没有动。
+
+这一列的数字**不能**跟 HIGHLIGHTS §2 那张表里 macOS 上量的离线数相减：平台不同，跳过集不同。
+
+### 4. 顺带观察，没有诊断
+
+转录里前两步显示的是裸的 `ToolCompleted`（应为「查看项目目录」「读取项目目录」）。事件流里
+这两步的 `ToolProposed` 都在（seq 4–5），而 `useCodeStream` 说它从会话开头回放整段耐久历史，
+所以 `groupSteps` 为什么没给这两组拿到 `tool_name`，本批没有查到原因，也没有动它。
+
+`agent-config-check --config config/config.code-local.toml` 在本机报「research.enabled requires a
+non-placeholder provider API key」——它要 key 文件在场，本批没改那个 profile。
+
+---
 ## 2026-09-12（第七十八批）：一个号只指一件事，编码会话拿到它自己的浏览器
 
 起因是一句提问：控制台里的模型说「我没有外壳，也没有浏览器，因此无法运行这款游戏。我的

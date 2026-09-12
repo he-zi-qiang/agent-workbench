@@ -25,6 +25,7 @@ from agent_workbench.adapters.memory import (
 from agent_workbench.adapters.models.fake import FakeModel, ScriptedTurn
 from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.delegate import DelegateTool
 from agent_workbench.adapters.tools.project_files import (
     ProjectEditTool,
     ProjectGrepTool,
@@ -50,9 +51,12 @@ from agent_workbench.application.code_session import (
     CodeTurn,
     CodeTurnBusyError,
 )
+from agent_workbench.application.delegation import DeferredExecutor, DelegationScope
 from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
+from agent_workbench.application.sub_agents import CODE_SUB_AGENTS
 from agent_workbench.application.workspace_scope import WorkspaceScope
+from agent_workbench.domain.agents import DELEGATE_TOOL
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
@@ -121,6 +125,16 @@ class _Harness:
                 ProjectGrepTool(self.project_scope).binding(),
                 ProjectRunTool(
                     self.project_scope, self.receipts, environment={}
+                ).binding(),
+                # Spec only, the way `apps/api/dependencies.py` registers it
+                # for the ceiling derivation: a `DeferredExecutor` refuses to
+                # run anything, and nothing in this file delegates. It is here
+                # so a test can offer `delegate_agent` and assert what the turn
+                # is told about it (ADR-0114).
+                DelegateTool(
+                    executor=DeferredExecutor(),
+                    catalogue=CODE_SUB_AGENTS,
+                    scope=DelegationScope(),
                 ).binding(),
             ]
         )
@@ -1681,3 +1695,137 @@ def test_every_coding_prompt_says_what_the_console_does_with_a_page() -> None:
         # that had arrived.
         assert "in steps" in prompt
         assert "own ceiling" in prompt
+
+
+def test_every_coding_prompt_says_a_search_does_not_measure() -> None:
+    """ADR-0114, the half that is about the tool the model already holds.
+
+    Measured 2026-09-12: a project turn with nothing that runs code tried to
+    verify a "160 characters per row" invariant with `project_grep` -- seventy-
+    four searches of one file, bisecting a run length with regex quantifiers
+    two calls per step, and every count off by the quotes and indentation the
+    source line carries around the literal. The identical-call breaker cannot
+    see it (no two calls were the same question). The sentence has to be in
+    the prompt, on every base a turn can start from, because a turn holding a
+    shell never needs it and a turn without one has nothing else.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT,
+        CODER_SYSTEM_PROMPT_PROJECT,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+        with_host_commands,
+        with_plan_only,
+    )
+
+    for prompt in (
+        CODER_SYSTEM_PROMPT,
+        CODER_SYSTEM_PROMPT_PROJECT,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+        with_host_commands(CODER_SYSTEM_PROMPT_PROJECT),
+        with_plan_only(CODER_SYSTEM_PROMPT_PROJECT),
+    ):
+        assert "A search finds; it does not measure." in prompt
+        # The concrete failure, named, because "do not misuse search" is
+        # advice a model agrees with and then does anyway.
+        assert "ruler" in prompt
+        # The two operating rules transplanted from Claude Code, in the words
+        # that make them checkable: act, and do not re-read to confirm.
+        assert "When you have enough to act, act." in prompt
+        assert "confirm an edit that returned successfully" in prompt
+
+
+def test_a_turn_holding_delegate_agent_is_told_the_default_is_not_to() -> None:
+    """ADR-0114, the half about the tool that multiplies the first half.
+
+    The delegate tool's own description says how to delegate and nothing about
+    whether to. Measured on the same 2026-09-12 session: an "audit" handed to
+    `explorer` cost 31 searches for a conclusion the parent then re-verified;
+    the next turn handed out three more at 119, 0 and 109 tool calls -- each
+    child holding the parent's whole 60/120 budget and only the read tools.
+
+    Told, and only when holding it: a turn that was never offered the tool
+    must not read a paragraph weighing a choice it does not have, which is the
+    ADR-058 failure from the cheap side.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        CODE_TOOLS,
+        _system_prompt_for,
+    )
+
+    told = _system_prompt_for(
+        (*CODE_PROJECT_TOOLS, DELEGATE_TOOL),
+        external_requires_approval=False,
+        delegation=True,
+    )
+    assert "`delegate_agent`" in told
+    assert "the default is not to" in told
+    # The one sentence Claude Code's rule does not have, and the one that
+    # matters here: the child cannot do what the parent could not.
+    assert "cannot compute anything you cannot" in told
+    assert "A task with several parts is not a reason to delegate" in told
+
+    for names in (CODE_TOOLS, CODE_PROJECT_TOOLS):
+        untold = _system_prompt_for(names, external_requires_approval=False)
+        assert "delegate_agent" not in untold
+
+    # Plan mode keeps `delegate_agent` (it is a `read` tool), and the paragraph
+    # sits above the one that narrows the turn -- the same slot the browser
+    # paragraph has, for the same reason.
+    planned = _system_prompt_for(
+        (*CODE_PROJECT_TOOLS, DELEGATE_TOOL),
+        external_requires_approval=False,
+        plan_only=True,
+        delegation=True,
+    )
+    assert planned.index("the default is not to") < planned.index(
+        "This turn cannot change anything."
+    )
+
+
+def test_delegation_guidance_follows_what_the_turn_holds_not_the_deployment() -> None:
+    """Read off the offered list at request time, after every narrowing.
+
+    A caller's selection (ADR-096) can untick `delegate_agent` from a
+    deployment that offers it. The prompt then has to describe the turn that
+    selection produced, not the one the deployment would have run -- so the
+    flag is `DELEGATE_TOOL in tool_names`, computed beside the browser's, and
+    this test drives it both ways through the real request builder.
+    """
+
+    from agent_workbench.application.code_session import CODE_TOOLS
+
+    def observed(*, keeping: frozenset[str] | None) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = (*CODE_TOOLS, DELEGATE_TOOL)  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="look around",
+                    principal=WRITER,
+                    run_id="run_1",
+                    tools=None if keeping is None else frozenset(keeping),
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    offered = observed(keeping=None)
+    assert DELEGATE_TOOL in offered.tool_names
+    assert "the default is not to" in offered.system_prompt
+
+    narrowed = observed(keeping=frozenset(CODE_TOOLS))
+    assert DELEGATE_TOOL not in narrowed.tool_names
+    assert "delegate_agent" not in narrowed.system_prompt

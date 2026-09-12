@@ -45,6 +45,23 @@ model_id = "deepseek-chat"
 # Same reason as both narrow profiles: a Task whose scope lacks the matching
 # tool must not be forced to open with a tool call.
 tool_calling_required = false
+# **这个数和下面 `[runtime] model_timeout_seconds` 是一对，只提一个等于没提**
+# ——`config.demo-local.toml` 在 2026-08-27 已经把这句话写过一遍，这个 profile 当时
+# 没有跟。两处的出厂值都是 120，于是谁先响是一场平局，而运行时那一层先响的结果是
+# `provider_error: the model call exceeded the runtime's 120.0s envelope`
+# ——可重试，但 Code 回合没有人替它重试，回合就此结束、报告是空的。
+#
+# 2026-09-12 在这套 Compose 栈上实测到一次：一个编码回合跑到第 48 步、上下文约
+# 37k token 时，一次模型调用过了 120 秒，整轮以这句话收场（ADR-0114 §1 记的那个
+# 会话的第二轮）。240 照抄 demo-local 的依据：约 2.2 倍于那边实测最长的成功调用，
+# 且仍只有 `code.turn_timeout_seconds`（出厂 600）的一半。
+timeout_seconds = 240
+
+[runtime]
+# 见上面 `[model.main] timeout_seconds` 的注释：这一层是任何单次模型调用的信封，
+# 适配器的超时套在它**里面**，短的先响。300 让更具体的那个（适配器的 240）先响，
+# 这一层退回它本来的角色——兜底。与 demo-local 同值，理由相同。
+model_timeout_seconds = 300
 
 [triage]
 enabled = true
