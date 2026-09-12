@@ -69,6 +69,7 @@ import {
   getCodeApprovals,
   getCodeHistory,
   getCodeTools,
+  getDeploymentCapabilities,
   getCodeWorkspace,
   getProject,
   listCodeSessions,
@@ -441,6 +442,23 @@ export function CodePage() {
     // 重试三次只会让那句话晚三秒出现。
     retry: false,
   });
+  // 「放手做」提不提供，是这个进程的事实，不是某段会话的（ADR-0116）。会话的 offer
+  // 带着它，但起始屏上还没有会话——第一轮的输入框就画在那里，而第一轮正是人最常发
+  // 的那一轮。2026-09-13 夜里实测：栈重建之后，已有会话旁边四档齐全，新建会话只有
+  // 三档。所以起始屏读能力清单里 `code.unattended` 那一行（和 `CodeReach` 同一个
+  // 查询键，缓存共用），有会话时仍以 offer 为准。
+  const reach = useQuery({
+    queryKey: ["deployment-capabilities", identity.tenantId, identity.principalId],
+    queryFn: () => getDeploymentCapabilities(identity),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const unattendedOffered =
+    toolOffer.data?.unattended_available ??
+    reach.data?.capabilities.some(
+      (row) => row.id === "code.unattended" && row.state === "available",
+    ) ??
+    false;
 
   // 被勾掉的工具，按会话记。
   //
@@ -1562,12 +1580,10 @@ export function CodePage() {
           role="group"
         >
           {PERMISSIONS.filter(
-            // 第四档只在部署提供的时候画（ADR-0116）。目录还没取到时也不画：
+            // 第四档只在部署提供的时候画（ADR-0116）。两份答案都还没到时也不画：
             // 一颗在下一帧消失的按钮，和一颗按下去换来 422 的按钮，教给读者的
             // 都是错的规则。
-            (choice) =>
-              choice.value !== "auto" ||
-              toolOffer.data?.unattended_available === true,
+            (choice) => choice.value !== "auto" || unattendedOffered,
           ).map((choice) => (
             <button
               aria-pressed={permission === choice.value}

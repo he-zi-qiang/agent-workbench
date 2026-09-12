@@ -84,8 +84,28 @@
   - 前端：lint、typecheck、954 条 vitest（上一批 946，+8 全是本批的）、build 全过；pnpm 11.9.0 经
     `corepack` 起（`pnpm` 不在这台机器的 PATH 上）。
 - 复现（runner 容器）：`python3 -c` 那段区段统计原样跑，退出码 0、14 行——见 ADR §1。
-- **没有在控制台真发一轮。** 跑着的 Compose 栈还是旧镜像，重建（`stack.cmd`）与一轮真实的编码会话留给
-  下一轮循环；按能力阶梯，本批的三件事是 Implemented → Tested，Demonstrated 待那一轮。
+- **从控制台真发一轮**（合入之后 `stack.cmd` 重建栈，镜像 `8b161a5e…`；会话 `ses_ba79…`，项目
+  `windows测试`，选「放手做」）。指令：新建 `scratch/hello.txt`、`project_move` 改名、`project_run`
+  跑 `wc -l mario.html` **原样两次**、`project_delete` 删掉。结果 `run_750c…`：6 步、5 次工具调用、
+  11 秒、`RunCompleted`，**零张审批卡**（事件流里没有一条 `PermissionRequested`）：`project_write` /
+  `project_move` 是 `within_submitted_envelope`；第一次 `project_run` 与 `project_delete` 是
+  `PermissionResolved reason_code=unattended_turn`；第二次 `project_run` **没有** `PermissionResolved`
+  ——`ToolCompleted replayed=true`，按记录答的。控制台步骤列表：写入项目目录 / 移动项目目录文件 /
+  在本机执行命令 / 在本机执行命令（沿用上次结果）/ 删除项目目录文件。模型的报告自己指出第二次
+  「came back flagged as the same answer」。目录里剩一个空的 `scratch/`（写入建的，删除只删文件）。
+  按能力阶梯，本批三件事到 **Demonstrated**。
+
+### 2.1 同夜补丁：起始屏上没有第四档
+
+同一次实测里先看见的是一个缺口：栈重建之后，**已有会话**旁边四档齐全，**新建会话**的起始屏只有三档。
+原因是「放手做」提不提供由会话的 offer（`GET …/tools`）带出来，而起始屏上还没有会话——第一轮的输入框
+就画在那里，第一轮正是人最常发的那一轮。修法：能力清单多一行 `code.unattended`
+（`code_host_commands and config.runner is not None`，与 `unattended_available` 同源；原生路径上那一行
+划掉、title 里是 ADR-0077 那句），起始屏的选择器在没有 offer 时读这一行，有会话时仍以 offer 为准；
+「这里能碰到」那一行多画「放手做」。`test_system_capabilities.py` 加一条三种部署各一个答案的用例，
+`CodePage.test.tsx` 加两条（提供时第一轮就有且发 `unattended`；不提供时三档且划掉）。
+前端 956 条 vitest（+2）。`scripts\stack.cmd` 收尾那段话把「every command stops on an approval
+card first」补上了 unattended 的例外。
 
 ### 3. 顺带看到、没修
 

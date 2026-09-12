@@ -3966,3 +3966,76 @@ describe("CodePage 的「放手做」", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+
+describe("起始屏上的「放手做」", () => {
+  // ADR-0116 落地当晚实测：栈重建之后，已有会话旁边四档齐全，新建会话只有三档——
+  // 起始屏没有会话，也就没有带着 `unattended_available` 的 offer 可读。第一轮正是
+  // 人最常发的那一轮，所以起始屏读能力清单里 `code.unattended` 那一行。
+  it("目录说提供时，第一轮就有这一档，发出去的是 unattended", async () => {
+    vi.mocked(getDeploymentCapabilities).mockResolvedValue({
+      capabilities: [
+        {
+          id: "code.unattended",
+          title: "编码会话的「放手做」（approvals=unattended）",
+          tier: "optional",
+          state: "available",
+          reason: "",
+          remedy: "",
+          detail: [],
+          provision: "install",
+          switch: null,
+        },
+      ],
+    });
+    vi.mocked(askCode).mockResolvedValue({
+      report: "跑完了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    const user = userEvent.setup();
+    mounted("/code");
+    await chooseFolder(user);
+    await user.click(await screen.findByRole("button", { name: "放手做" }));
+    await user.type(screen.getByLabelText("要做的事"), "把测试跑绿");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("unattended");
+  });
+
+  it("目录说不提供时，起始屏上三档，「这里能碰到」那一行把它划掉", async () => {
+    vi.mocked(getDeploymentCapabilities).mockResolvedValue({
+      capabilities: [
+        {
+          id: "code.unattended",
+          title: "编码会话的「放手做」（approvals=unattended）",
+          tier: "optional",
+          state: "absent",
+          reason: "命令跑在这台机器上，不在 runner 容器里。",
+          remedy: "只有 Compose 栈提供。",
+          detail: [],
+          provision: "install",
+          switch: null,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    mounted("/code");
+    await chooseFolder(user);
+
+    const reach = await screen.findByLabelText("这台部署里编码会话能碰到什么");
+    expect(within(reach).getByText("放手做")).toHaveClass("is-absent");
+    await screen.findByRole("button", { name: "自动改动" });
+    expect(
+      screen.queryByRole("button", { name: "放手做" }),
+    ).not.toBeInTheDocument();
+  });
+});

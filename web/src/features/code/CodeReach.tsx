@@ -26,6 +26,9 @@ const REACH_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["code.sandbox", "沙箱运行"],
   ["code.host_commands", "宿主命令"],
   ["code.web_search", "联网搜索"],
+  // ADR-0116。第四件也是可以缺席的：原生路径上命令跑在这台机器上，这一档不提供。
+  // 划掉的时候 title 里那句话就是原因，读者不必先发一轮才发现输入框旁边少一档。
+  ["code.unattended", "放手做"],
 ];
 
 export function CodeReach() {

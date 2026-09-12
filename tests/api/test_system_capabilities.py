@@ -81,6 +81,7 @@ def _dependencies(
     code_host_commands: bool = False,
     code_web_search: bool = False,
     code_search_tools: bool = False,
+    code_unattended: bool = False,
     triage: object | None = None,
     research: object | None = None,
     envelope: Any = None,
@@ -107,6 +108,10 @@ def _dependencies(
                 )
             ),
             research=research,
+            # ADR-0116. A configured runner is what makes the unattended
+            # position exist; `None` is the native launcher and the flat
+            # stack before its launcher probed the runner container.
+            runner=object() if code_unattended else None,
             # The four booleans `CodeConfig` carries about what a session may
             # reach (ADR-0109). All off by default, like the flat Compose
             # stack before anybody typed anything.
@@ -298,6 +303,7 @@ def test_an_assembled_deployment_reports_no_reason_where_nothing_is_missing() ->
         "task.mcp_tools",
         "code.sandbox",
         "code.host_commands",
+        "code.unattended",
         "code.web_search",
         "artifact.layout_preview",
     ],
@@ -309,6 +315,32 @@ def test_every_absence_carries_something_to_do_about_it(row_id: str) -> None:
 
     assert rows[row_id]["state"] == "absent"
     assert rows[row_id]["remedy"] != ""
+
+
+def test_the_unattended_row_follows_the_runner_not_the_shell_alone() -> None:
+    """ADR-0116. The position exists only where commands run in the runner.
+
+    Three deployments, three answers: no shell at all; the native launcher's
+    own shell (ADR-0077's sentence holds, the row says so); the Compose stack
+    with its runner container, where the row is available. The console's
+    start screen reads this row to draw the fourth position before a session
+    exists.
+    """
+
+    no_shell = _report(_dependencies(serves_code=True))
+    assert no_shell["code.unattended"]["state"] == "absent"
+    assert "shell" in no_shell["code.unattended"]["reason"]
+
+    native = _report(_dependencies(serves_code=True, code_host_commands=True))
+    assert native["code.unattended"]["state"] == "absent"
+    assert "ADR-0077" in native["code.unattended"]["reason"]
+    assert "runner" in native["code.unattended"]["remedy"]
+
+    compose = _report(
+        _dependencies(serves_code=True, code_host_commands=True, code_unattended=True)
+    )
+    assert compose["code.unattended"]["state"] == "available"
+    assert compose["code.unattended"]["reason"] == ""
 
 
 # --- ADR-0109: what a coding session may reach, one row each ---------------
@@ -410,6 +442,7 @@ def test_the_rows_are_a_stable_set_with_a_tier_each() -> None:
         "code.sessions",
         "code.sandbox",
         "code.host_commands",
+        "code.unattended",
         "code.web_search",
         "artifact.layout_preview",
         "task.submit",
@@ -456,6 +489,9 @@ def test_every_row_says_how_it_is_provided() -> None:
         "code.sessions": "switch",
         "code.sandbox": "install",
         "code.host_commands": "install",
+        # ADR-0116. A runner container, or nothing: no switch on this page
+        # can put commands somewhere the host is not.
+        "code.unattended": "install",
         # `install` here because the fixture's policy flag is off, and a
         # research switch on a row the policy flag gates would light up and
         # change nothing. The test further down flips the flag and gets the
