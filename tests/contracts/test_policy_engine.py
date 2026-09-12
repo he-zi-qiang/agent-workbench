@@ -149,3 +149,113 @@ def test_a_denial_never_carries_rewritten_arguments() -> None:
     decision = _decide(_call("text_statistics"), _context())
 
     assert decision.modified_input is None
+
+
+# --- an unattended envelope (ADR-0116) ---------------------------------------
+#
+# The submitter answered the destructive gate in advance. The engine still
+# reads the arguments, and the shapes in `domain/commands.py` are the calls that
+# answer was never allowed to cover.
+
+RUN_SPEC = ToolSpec(
+    name="project_run",
+    description="Run one shell command in the project directory.",
+    input_schema={"type": "object"},
+    concurrency="exclusive",
+    risk="destructive",
+    idempotency="safe",
+    timeout_seconds=60,
+    permission_scopes=("project:run",),
+)
+
+
+async def _run_handler(invocation: ToolInvocation) -> ToolResult:
+    raise AssertionError("the policy engine never runs a handler")
+
+
+def _unattended_context(*, unattended: bool) -> ExecutionContext:
+    return ExecutionContext(
+        principal=PrincipalContext(
+            principal_id="user_1",
+            tenant_id="tenant_a",
+            scopes=("project:run",),
+        ),
+        envelope=AuthorizationEnvelope(
+            allowed_tools=("project_run",),
+            max_tool_risk="destructive",
+            approval_required_risks=("destructive",),
+            unattended=unattended,
+        ),
+        agent_run_id="run_1",
+        policy_identity="policy-v1:0e67f8dd84919551",
+    )
+
+
+def _decide_run(command: str, *, unattended: bool) -> PolicyDecision:
+    registry = StaticToolRegistry(
+        [
+            read_document_tool(CORPUS),
+            ToolBinding(spec=RUN_SPEC, handler=_run_handler),
+        ]
+    )
+    engine = EnvelopePolicyEngine(registry=registry)
+    call = ToolCall(
+        tool_call_id="toolu_1",
+        tool_name="project_run",
+        arguments={"command": command},
+    )
+    return asyncio.run(engine.decide(call, _unattended_context(unattended=unattended)))
+
+
+def test_an_attended_envelope_holds_every_destructive_call() -> None:
+    """The control: the field defaults off, and off is what every caller meant."""
+
+    decision = _decide_run("pytest -q", unattended=False)
+
+    assert decision.effect == "allow"
+    assert decision.requires_approval is True
+    assert decision.reason_code == "within_submitted_envelope"
+
+
+def test_an_unattended_envelope_answers_a_routine_command_in_advance() -> None:
+    decision = _decide_run("pytest -q", unattended=True)
+
+    assert decision.effect == "allow"
+    assert decision.requires_approval is False
+    # Its own reason, so `PermissionResolved` tells a standing answer from a
+    # call that never needed one.
+    assert decision.reason_code == "unattended_turn"
+
+
+def test_an_unattended_envelope_still_holds_a_shape_that_costs_the_work() -> None:
+    decision = _decide_run("git reset --hard", unattended=True)
+
+    assert decision.effect == "allow"
+    assert decision.requires_approval is True
+    assert decision.reason_code == "command_still_asks:discards uncommitted work"
+
+
+def test_unattended_says_nothing_about_a_tool_below_destructive() -> None:
+    """`external` and `write` are not this field's business (ADR-058, ADR-087)."""
+
+    decision = _decide(
+        _call("export_artifact"),
+        ExecutionContext(
+            principal=PrincipalContext(
+                principal_id="user_1",
+                tenant_id="tenant_a",
+                scopes=("artifact:write",),
+            ),
+            envelope=AuthorizationEnvelope(
+                allowed_tools=("export_artifact",),
+                max_tool_risk="write",
+                approval_required_risks=("write", "destructive"),
+                unattended=True,
+            ),
+            agent_run_id="run_1",
+            policy_identity="policy-v1:0e67f8dd84919551",
+        ),
+    )
+
+    assert decision.requires_approval is True
+    assert decision.reason_code == "within_submitted_envelope"

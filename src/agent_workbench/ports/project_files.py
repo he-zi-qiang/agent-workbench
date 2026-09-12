@@ -281,6 +281,22 @@ class ProjectFileStore(Protocol):
 
         ...
 
+    async def move(self, path: str, new_path: str) -> ProjectFileEntry:
+        """Rename one file, making the destination's parent directories as needed.
+
+        Returns the entry as it now stands under ``new_path``, for the same
+        reason ``write`` returns one: the caller that carries a read receipt
+        across the move needs the size and mtime without a read-back.
+
+        Raises ``NotFoundError`` when nothing is at ``path`` or a directory is,
+        and ``ProjectFileExistsError`` when something is already at
+        ``new_path`` -- refused rather than replaced, because a move that
+        lands on a file is a delete of that file which no read receipt ever
+        covered. Files only, as ``delete`` is and for its reason.
+        """
+
+        ...
+
     async def exists(self, path: str) -> bool:
         """Whether the path names something inside this project."""
 

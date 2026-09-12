@@ -232,8 +232,29 @@ class _RunLedger:
     #: cannot give: a run that asks one tool a fresh question every time never
     #: repeats a signature and still never gets anywhere.
     tool_counts: dict[str, int] = field(default_factory=dict[str, int])
-    #: How many calls this run has had refused for repeating themselves.
-    repeat_refusals: int = 0
+    #: How many batches so far have dispatched something that could change
+    #: what a tool would answer -- any call whose risk is not ``read``
+    #: (ADR-0116). A write moves a file, a command may move any file, and a
+    #: search may put new pages behind the same query; a read moves nothing.
+    #: What this counts is not "did the world change" -- nothing here can know
+    #: that -- but "did this run do anything that *could* have", which is the
+    #: question a repeat has to be judged against.
+    world_version: int = 0
+    #: What each (tool, arguments) pair last answered, and under which
+    #: `world_version` it answered it (ADR-0116). A repeat proposed while the
+    #: version is unchanged is answered from here without dispatch: the model
+    #: is handed the same result again, marked as the same, rather than made
+    #: to spend a dispatch -- and, for a gated tool, a person's click -- to
+    #: re-learn what is already in its context.
+    answered: dict[str, tuple[int, ToolResult]] = field(
+        default_factory=dict[str, tuple[int, ToolResult]]
+    )
+    #: How many times each signature has been answered from `answered`.
+    replayed: dict[str, int] = field(default_factory=dict[str, int])
+    #: Whether the tools have been taken off the request for the rest of the
+    #: run. Set by the repeat that crossed `MAX_REPLAYS`; read where the
+    #: request is built, the same place the spent tool allowance is read.
+    tools_withdrawn: bool = False
     #: How many times this run has shortened its own conversation.
     compactions: int = 0
     #: The provider's count for the *last* prompt this run sent, which is the
@@ -279,15 +300,34 @@ def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
     return tuple(repeated)
 
 
-#: How many times one (tool, arguments) pair may be *dispatched* in a run.
+#: How many times one (tool, arguments) pair is answered *from the record*
+#: before the run's tools are withdrawn (ADR-0116).
 #:
-#: Not 1. Asking a tool the same question twice is ordinary -- a document read
-#: again after a write, a workspace listed before and after -- and this runtime
-#: has always allowed it, both across turns and twice within one. What is not
-#: ordinary is a run that asks a fourth time: the observed loop fetched one URL
-#: eight times and another six, so the bar sits above re-reading and well below
-#: the pathology it exists to cut.
-MAX_IDENTICAL_CALLS: Final[int] = 3
+#: This replaces a dispatch ceiling. Until 2026-09-13 an identical call was
+#: *run* up to three times and refused from the fourth, on the reasoning that
+#: asking again is ordinary -- a document read again after a write, a
+#: workspace listed before and after. That reasoning was right about the
+#: cases and wrong about the mechanism: "after a write" is what made those
+#: repeats ordinary, and a count of dispatches cannot see a write. So the
+#: ordinary repeat is now told apart by `_RunLedger.world_version` -- a call
+#: proposed again after anything non-read ran is a fresh question and is
+#: dispatched -- and the other kind, the same question with nothing between,
+#: is answered from what it answered last time.
+#:
+#: Measured 2026-09-12 on the run that motivated this (`docs/status.md`
+#: 第八十四批): a coding turn proposed one `python3 -c` command four times in
+#: a row, was refused on the fourth, added a comment to the script to make it
+#: a new signature, proposed *that* four times, and was stopped after the
+#: third refusal with `RunFailed` -- ten approval cards for two commands whose
+#: answer was in its context from the first. Under this rule the second and
+#: third proposals cost nothing and nobody, and the fourth ends the loop by
+#: taking the tools away, which leaves the run with the one move it can still
+#: make: write what it has.
+#:
+#: 2 and not 1, because a single re-serve is cheap and the model that missed
+#: an answer once may read it the second time; a model that misses it twice
+#: is not going to read it the third time either.
+MAX_REPLAYS: Final[int] = 2
 
 #: How many times one run may shorten its own conversation (ADR-081).
 #:
@@ -322,10 +362,35 @@ speculate about what to do next, and do not describe anything the transcript
 does not show.\
 """
 
-#: How many times a run may be told it is repeating itself before the run is
-#: stopped. A model that asks once more after being told has misread the answer;
-#: one that asks a third time is not going to stop on its own.
-MAX_REPEAT_REFUSALS: Final[int] = 2
+
+def _replay_note(tool_name: str, *, withdrawn: bool) -> str:
+    """The sentence a result answered from the record carries (ADR-0116).
+
+    Written for the model that is repeating itself, so it says three things
+    and no more: that this is the same call, that nothing has happened since
+    which could change its answer, and what to do instead. It does not say
+    "stop" for the reason `_nudge` does not -- except on the repeat that took
+    the tools away, where "stop" is no longer advice but a description of
+    the next request, and the model is told so it writes a report rather
+    than a fourth proposal.
+    """
+
+    same = (
+        f"\n\n[This is the same {tool_name} call as before, with the same "
+        "arguments, and nothing has run since that could change its answer, "
+        "so this is that answer again rather than a new one."
+    )
+    if withdrawn:
+        return same + (
+            " It has now been repeated past the point of being useful: the "
+            "tools are withdrawn for the rest of this run. Write your report "
+            "now, from what you have, and say what could not be determined.]"
+        )
+    return same + (
+        " Do not call it again: act on what it says, or report what could "
+        "not be determined.]"
+    )
+
 
 #: Every this-many calls to *one tool*, its result carries a sentence saying so
 #: (ADR-0114).
@@ -693,8 +758,18 @@ class ClaudeLikeAgentRuntime:
             # searches, 5.5KB of results, a third proposal, and an answer that
             # said it could not search. Taking the tool away asks the question
             # the run is actually able to answer: "write what you have".
+            # And the same shape for a run that has repeated one call past
+            # `MAX_REPLAYS` (ADR-0116): the tools come off, the question the
+            # run can still answer is asked. `tools_withdrawn` is read here,
+            # beside the allowance, because it is the same decision made for
+            # a different reason -- this run has nothing left to learn from
+            # its tools, whether because it spent them or because it stopped
+            # reading what they said.
             specs = (
-                () if request.budget.tool_allowance_spent(ledger.usage) else advertised
+                ()
+                if ledger.tools_withdrawn
+                or request.budget.tool_allowance_spent(ledger.usage)
+                else advertised
             )
 
             machine.to("model_streaming")
@@ -1020,6 +1095,30 @@ class ClaudeLikeAgentRuntime:
                     ledger,
                 )
 
+            if ledger.tools_withdrawn:
+                # The request carried no tools, and the model proposed one
+                # anyway. A provider that honours the request cannot produce
+                # this; a scripted double and a model that hallucinates a
+                # call both can, and neither is a run that can go on. The
+                # message names the cause -- the repeats -- rather than the
+                # symptom, which is what the person reading the stop wants.
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    "error",
+                    ErrorInfo(
+                        code="tool_failed",
+                        message=(
+                            "the run kept proposing calls it had already made: "
+                            "its tools were withdrawn after "
+                            f"{sum(ledger.replayed.values())} repeats were "
+                            "answered from the record, and it proposed another"
+                        ),
+                    ),
+                    ledger,
+                )
+
             duplicated = _repeated_call_ids(turn.calls)
             if duplicated:
                 # Checked before anything is prepared, authorized or run. The
@@ -1126,14 +1225,16 @@ class ClaudeLikeAgentRuntime:
         # node's, and nothing compared the two.
         offered = frozenset(request.tool_names)
 
-        # A call the run has already made is refused before it is prepared, for
-        # the same reason a repeated id is: nothing downstream can tell the two
-        # apart, and running it again spends budget to re-learn what the run
-        # already knows. Measured on a research node that fetched one URL eight
-        # times because every sub-page redirected to the same place -- it read
-        # the identical text each time, emitted the identical sentence about it,
-        # and died on the token ceiling with the answer it needed already in
-        # context.
+        # A call the run has already made, with nothing run since that could
+        # change its answer, is answered from the record before it is
+        # prepared (ADR-0116). Running it again spends budget -- and, for a
+        # gated tool, a person's attention -- to re-learn what the run already
+        # holds. Measured first on a research node that fetched one URL eight
+        # times because every sub-page redirected to the same place, and then
+        # on a coding turn that proposed one approved command four times in a
+        # row: the refusal that used to stand here stopped the first and made
+        # the second worse, because a refusal is a new answer the model can
+        # react to by changing a comment, and a re-served result is not.
         repeatable: list[ToolCall] = []
         # Which of this batch's calls is the 25th, 50th, ... of its tool, and
         # which number it is (ADR-0114). Decided here, while counting, because
@@ -1161,9 +1262,30 @@ class ClaudeLikeAgentRuntime:
             ledger.tool_counts[call.tool_name] = asked
             if asked % SAME_TOOL_NUDGE_EVERY == 0:
                 nudged[call.tool_call_id] = asked
-            if seen_before < MAX_IDENTICAL_CALLS and (
-                call.tool_name not in offered and self._gateway.knows(call.tool_name)
-            ):
+            recorded = ledger.answered.get(signature)
+            if recorded is not None and recorded[0] == ledger.world_version:
+                # The same question, and nothing has happened since it was
+                # answered. Answered from the record, whatever the tool is: a
+                # read that would return the same bytes, a command whose
+                # world has not moved, a refusal that would be refused again.
+                # `seen_before` is not consulted -- the record is the fact
+                # that it was seen, and the version is the fact that nothing
+                # since could have changed what it said.
+                replays = ledger.replayed.get(signature, 0) + 1
+                ledger.replayed[signature] = replays
+                withdrawn = replays > MAX_REPLAYS
+                if withdrawn:
+                    ledger.tools_withdrawn = True
+                results.append(
+                    await self._gateway.replay(
+                        call,
+                        recorded[1],
+                        note=_replay_note(call.tool_name, withdrawn=withdrawn),
+                        sink=sink,
+                    )
+                )
+                continue
+            if call.tool_name not in offered and self._gateway.knows(call.tool_name):
                 # `knows` and not just the offer, so the two failures keep their
                 # own names. A tool this process never registered is still an
                 # `unknown_tool`, answered further down by the gateway that owns
@@ -1179,24 +1301,6 @@ class ClaudeLikeAgentRuntime:
                             message=(
                                 f"{call.tool_name} was not offered to this run. "
                                 "Use one of the tools you were given."
-                            ),
-                        ),
-                        sink=sink,
-                    )
-                )
-                continue
-            if seen_before >= MAX_IDENTICAL_CALLS:
-                ledger.repeat_refusals += 1
-                results.append(
-                    await self._gateway.refuse(
-                        call,
-                        ErrorInfo(
-                            code="invalid_tool_input",
-                            message=(
-                                f"{call.tool_name} was already called with these "
-                                "arguments in this run and returned its answer "
-                                "then. Use that result, or call it with "
-                                "different arguments."
                             ),
                         ),
                         sink=sink,
@@ -1284,6 +1388,11 @@ class ClaudeLikeAgentRuntime:
                 exc.to_error_info(),
                 ledger,
             )
+        # What the tools answered, before the runtime says anything on top of
+        # it. The record a repeat is served from is taken here rather than
+        # after the nudge below, so a replayed result never carries a "this is
+        # call 25" sentence that was true of a different call.
+        answered = tuple(zip(turn.calls, aligned, strict=True))
         if nudged:
             # Appended to the *message*, after the event was emitted from the
             # unaltered result, and the difference between the two is exactly
@@ -1316,26 +1425,24 @@ class ClaudeLikeAgentRuntime:
         # ledger would report spending more than the budget allowed.
         ledger.usage = ledger.usage.merged(BudgetUsage(tool_calls=len(admitted)))
 
-        if ledger.repeat_refusals > MAX_REPEAT_REFUSALS:
-            # The refusals above are written into the messages first, so the run
-            # ends holding the record of what it was told and how often. Ending
-            # here rather than letting the token ceiling do it turns a run that
-            # burned its whole budget re-reading one page into one that stops
-            # with its evidence, and says why.
-            return await self._failed(
-                request,
-                sink,
-                machine,
-                "error",
-                ErrorInfo(
-                    code="tool_failed",
-                    message=(
-                        "the run kept proposing calls it had already made: "
-                        f"{ledger.repeat_refusals} were refused as repeats"
-                    ),
-                ),
-                ledger,
-            )
+        # The record a later repeat is answered from (ADR-0116), written
+        # *after* this batch's version bump so that a call's own effect never
+        # counts against its own repeat: `run pytest` proposed twice in a row
+        # is answered from the record the second time, while `run pytest`,
+        # `edit`, `run pytest` is dispatched twice, because the edit sits
+        # between them. Everything answered this batch is recorded --
+        # replays too, so the count of replays keeps a record to count
+        # against -- except a failure that says it may be retried, which is
+        # the one answer a model is right to ask for again.
+        if any(
+            self._gateway.risk_of(candidate.call.tool_name) != "read"
+            for candidate in authorized
+        ):
+            ledger.world_version += 1
+        for call, result in answered:
+            if result.error is not None and result.error.retryable:
+                continue
+            ledger.answered[_call_signature(call)] = (ledger.world_version, result)
         return None
 
     async def _run_group(

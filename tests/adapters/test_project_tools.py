@@ -23,10 +23,12 @@ from agent_workbench.adapters.filesystem.project_files import (
 from agent_workbench.adapters.filesystem.sandbox import ProjectSandbox
 from agent_workbench.adapters.tools import project_files
 from agent_workbench.adapters.tools.project_files import (
+    ProjectDeleteTool,
     ProjectEditTool,
     ProjectFilesUnavailableError,
     ProjectGrepTool,
     ProjectListTool,
+    ProjectMoveTool,
     ProjectReadTool,
     ProjectRunTool,
     ProjectWriteTool,
@@ -235,6 +237,8 @@ class TestExclusivity:
             ProjectWriteTool(ProjectFileScope(), ReadReceipts()).spec().name,
             ProjectEditTool(ProjectFileScope(), ReadReceipts()).spec().name,
             ProjectGrepTool(ProjectFileScope()).spec().name,
+            ProjectDeleteTool(ProjectFileScope(), ReadReceipts()).spec().name,
+            ProjectMoveTool(ProjectFileScope(), ReadReceipts()).spec().name,
         }
         assert registered == set(CODE_PROJECT_TOOLS)
 
@@ -274,6 +278,8 @@ class TestExclusivity:
                 ProjectWriteTool(ProjectFileScope(), ReadReceipts()),
                 ProjectEditTool(ProjectFileScope(), ReadReceipts()),
                 ProjectGrepTool(ProjectFileScope()),
+                ProjectDeleteTool(ProjectFileScope(), ReadReceipts()),
+                ProjectMoveTool(ProjectFileScope(), ReadReceipts()),
                 ProjectRunTool(ProjectFileScope(), ReadReceipts(), environment={}),
             )
         }
@@ -284,7 +290,12 @@ class TestExclusivity:
         # envelope denies burns a whole turn on `outside_submitted_envelope`.
         risks = {name: spec.risk for name, spec in self._specs().items()}
 
-        assert code_risk_ceiling(CODE_PROJECT_TOOLS, risks=risks) == "write"
+        # `destructive` on both since ADR-0116, and derived rather than
+        # decided: `project_delete` is in the base set and has no undo, so a
+        # project turn's ceiling admits it whether or not the shell is there.
+        # Until then the base set derived `write`, which was the same
+        # arithmetic over a set that held nothing irreversible.
+        assert code_risk_ceiling(CODE_PROJECT_TOOLS, risks=risks) == "destructive"
         assert (
             code_risk_ceiling(CODE_PROJECT_TOOLS_WITH_RUN, risks=risks) == "destructive"
         )
@@ -1803,3 +1814,132 @@ class TestRunningACommandSomewhereElse:
         assert result.error is not None
         assert result.error.code == "tool_timeout"
         assert "three failures so far" in result.error.message
+
+
+class TestDeletingAndMoving:
+    """`project_delete` and `project_move` (ADR-0116).
+
+    The two verbs the file language was missing. Reported as 「文件夹中的文件
+    不能进行删除和改名」, and true on every path: Claude Code does both through
+    `rm` and `mv` in Bash, and here the shell is `project_run` -- absent on the
+    Windows native launcher, and not what a model holding five file-shaped
+    tools reaches for to remove a file.
+    """
+
+    @pytest.fixture
+    def entered(self, project: Path, scope: ProjectFileScope):
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            yield scope
+
+    async def test_deleting_removes_the_file_and_names_it_as_a_change(
+        self, entered: ProjectFileScope, project: Path, receipts: ReadReceipts
+    ) -> None:
+        result = await ProjectDeleteTool(entered, receipts).handle(
+            _invocation("project_delete", path="README.md")
+        )
+        assert result.error is None
+        assert not (project / "README.md").exists()
+        # ADR-086: the console refreshes what a step changed from this field,
+        # and a path whose bytes are gone is a change to the directory.
+        assert result.project_writes == ("README.md",)
+
+    async def test_deleting_needs_no_receipt(
+        self, entered: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        # `rm` has never asked whether you read the file first, and a build
+        # artefact nobody read is the ordinary thing to remove. What gates a
+        # deletion is a person, through the tool's `destructive` risk.
+        assert receipts.seen("README.md") is None
+        result = await ProjectDeleteTool(entered, receipts).handle(
+            _invocation("project_delete", path="README.md")
+        )
+        assert result.error is None
+        assert ProjectDeleteTool(entered, receipts).spec().risk == "destructive"
+
+    async def test_deleting_what_is_not_there_is_not_found(
+        self, entered: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        result = await ProjectDeleteTool(entered, receipts).handle(
+            _invocation("project_delete", path="ghost.md")
+        )
+        assert result.error is not None
+        assert result.error.code == "not_found"
+
+    async def test_deleting_a_directory_is_refused(
+        self, entered: ProjectFileScope, project: Path, receipts: ReadReceipts
+    ) -> None:
+        # The store refuses to be recursive and the tool inherits that: a
+        # directory named to a verb that removes one file stays where it is.
+        result = await ProjectDeleteTool(entered, receipts).handle(
+            _invocation("project_delete", path="src")
+        )
+        assert result.error is not None
+        assert (project / "src" / "main.py").exists()
+
+    async def test_moving_renames_the_file_and_names_both_ends(
+        self, entered: ProjectFileScope, project: Path, receipts: ReadReceipts
+    ) -> None:
+        result = await ProjectMoveTool(entered, receipts).handle(
+            _invocation("project_move", path="src/main.py", new_path="app/entry.py")
+        )
+        assert result.error is None
+        assert not (project / "src" / "main.py").exists()
+        assert (project / "app" / "entry.py").read_text() == "print('hi')\n"
+        assert result.project_writes == ("src/main.py", "app/entry.py")
+        assert ProjectMoveTool(entered, receipts).spec().risk == "write"
+
+    async def test_a_receipt_travels_with_the_moved_file(
+        self, entered: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        # Read it whole, move it, write it under the new name: the write gate
+        # (ADR-0078) has to see that the model read every byte of what it is
+        # replacing, under whichever name the file now has.
+        await ProjectReadTool(entered, receipts).handle(
+            _invocation("project_read", path="README.md")
+        )
+        moved = await ProjectMoveTool(entered, receipts).handle(
+            _invocation("project_move", path="README.md", new_path="docs/README.md")
+        )
+        assert moved.error is None
+        written = await ProjectWriteTool(entered, receipts).handle(
+            _invocation("project_write", path="docs/README.md", content="# beta\n")
+        )
+        assert written.error is None, written.error
+
+    async def test_moving_onto_an_existing_file_is_refused(
+        self, entered: ProjectFileScope, project: Path, receipts: ReadReceipts
+    ) -> None:
+        # A move that landed would be a delete of the target that no read
+        # receipt ever covered.
+        result = await ProjectMoveTool(entered, receipts).handle(
+            _invocation("project_move", path="README.md", new_path="src/main.py")
+        )
+        assert result.error is not None
+        assert result.error.code == "invalid_tool_input"
+        assert "already exists" in result.error.message
+        assert (project / "README.md").exists()
+        assert (project / "src" / "main.py").read_text() == "print('hi')\n"
+
+    async def test_moving_a_missing_file_is_not_found(
+        self, entered: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        result = await ProjectMoveTool(entered, receipts).handle(
+            _invocation("project_move", path="ghost.md", new_path="b.md")
+        )
+        assert result.error is not None
+        assert result.error.code == "not_found"
+
+    async def test_neither_verb_leaves_the_root(
+        self, entered: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        deleted = await ProjectDeleteTool(entered, receipts).handle(
+            _invocation("project_delete", path="../outside.txt")
+        )
+        moved = await ProjectMoveTool(entered, receipts).handle(
+            _invocation("project_move", path="README.md", new_path="../escaped.md")
+        )
+        assert deleted.error is not None
+        assert deleted.error.code == "invalid_tool_input"
+        assert moved.error is not None
+        assert moved.error.code == "invalid_tool_input"

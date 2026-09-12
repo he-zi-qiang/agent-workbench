@@ -137,7 +137,10 @@ class AskRequest(BaseModel):
     #: envelope -- `mode` the tool list, this the risks that stop -- and a
     #: single field would have to be taken apart again at the one place both
     #: are read. `application/code_session.py`'s `CodeApprovals` carries the
-    #: rest of that argument, including why there is no "ask me about nothing".
+    #: rest of that argument, including why "ask me about nothing" --
+    #: ``"unattended"`` -- exists only where commands run in the runner
+    #: container (ADR-0116); asked of any other deployment it is a 422, and
+    #: `GET .../tools` says in advance whether it will be.
     approvals: CodeApprovals = "standard"
     #: Which of the tools `GET .../tools` offered this turn keeps (ADR-096).
     #: ``None`` -- the default, and what every caller written before this
@@ -241,6 +244,13 @@ class CodeToolsResponse(BaseModel):
     #: on top of these; the console computes that itself, because it is the
     #: control that offers it.
     approval_required_risks: tuple[ToolRisk, ...]
+    #: Whether this deployment offers `approvals="unattended"` (ADR-0116):
+    #: true only where commands run in the runner container rather than on
+    #: the machine the API runs on. A fact about the process, carried on the
+    #: session's offer because the composer that shows the fourth position
+    #: is the one reading this response, and a control that is sometimes a
+    #: 422 teaches the reader the wrong rule.
+    unattended_available: bool
     #: The offer, in the order the envelope would list it, and **unnarrowed**.
     #: Neither `mode` nor a selection has been applied: a console needs the
     #: whole list to render the difference between them, and a reader who
@@ -444,6 +454,7 @@ async def tools(session_id: str, request: Request) -> CodeToolsResponse:
     return CodeToolsResponse(
         surface=offer.surface,
         approval_required_risks=offer.approval_required_risks,
+        unattended_available=offer.unattended_available,
         tools=tuple(
             CodeToolView(
                 name=spec.name,

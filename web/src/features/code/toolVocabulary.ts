@@ -20,5 +20,12 @@ export const RISK_LABELS: Readonly<Record<string, string>> = {
   destructive: "不可撤销",
 };
 
-/** 一次批准之后不该被复用的那几档：第二次发生和第一次一样值得问。 */
-export const UNREPEATABLE = new Set(["external", "destructive"]);
+/**
+ * 一次批准之后不该被复用的那几档：第二次发生和第一次一样值得问。
+ *
+ * 只剩 `external`。`destructive` 在这里待到 2026-09-13（ADR-0116）：服务端的
+ * 长期规则本来就按参数摘要记，所以「本会话都允许」给一条命令的，只是**这一条**
+ * 命令——改一处、跑一次 `pytest`、再改一处、再跑一次，这正是 Claude Code 审批框上
+ * 那颗「不再问这条」按钮的用处，也是有人一晚上点了十次同一张卡之后该有的答案。
+ */
+export const UNREPEATABLE = new Set(["external"]);

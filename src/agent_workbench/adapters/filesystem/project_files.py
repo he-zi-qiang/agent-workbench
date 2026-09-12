@@ -24,7 +24,10 @@ from agent_workbench.adapters.concurrency.call_runner import (
     BlockingCallRunner,
     offload,
 )
-from agent_workbench.adapters.filesystem.sandbox import ProjectSandbox
+from agent_workbench.adapters.filesystem.sandbox import (
+    ProjectSandbox,
+    ProjectSandboxError,
+)
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.project_files import (
     ProjectFileChangedError,
@@ -328,6 +331,29 @@ class FilesystemProjectFileStore:
             return True
 
         return await offload(self._runner, work, name="project_files.delete")
+
+    async def move(self, path: str, new_path: str) -> ProjectFileEntry:
+        def work() -> ProjectFileEntry:
+            try:
+                self._sandbox.rename(path, new_path)
+            except FileNotFoundError:
+                raise NotFoundError(f"no such file: {path!r}") from None
+            except FileExistsError:
+                raise ProjectFileExistsError(
+                    f"{new_path} already exists; a move does not replace what is "
+                    "there. Delete it first, or pick another name."
+                ) from None
+            except ProjectSandboxError as error:
+                # "not a file" is the one refusal `rename` phrases as a
+                # sandbox error that this port promises as `NotFoundError`,
+                # the way `delete` answers a directory. The escape and
+                # symlink refusals keep their own class and pass through.
+                if str(error).startswith("not a file"):
+                    raise NotFoundError(str(error)) from None
+                raise
+            return self._entry(self._sandbox.resolve(new_path), new_path)
+
+        return await offload(self._runner, work, name="project_files.move")
 
     async def exists(self, path: str) -> bool:
         def work() -> bool:

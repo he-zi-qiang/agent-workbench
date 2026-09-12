@@ -47,6 +47,7 @@ import {
   Monitor as MonitorIcon,
   PanelLeft,
   PanelRightOpen,
+  Rocket,
   UserCheck,
   Zap,
 } from "lucide-react";
@@ -170,11 +171,14 @@ const ORPHAN_RELOAD_DELAY_MS = 600;
  * 分成两个字段发出去，是因为服务端那两半各自有各自的不变量，而把它们并成一个
  * 四值枚举，只会让唯一读它的那个地方再拆一次。这张表是那次合并唯一存在的位置。
  *
- * 没有第四档。「什么都别问我」要拿掉的是 `destructive`——在这台机器上跑一条
- * 命令，而 ADR-077 说它跑之前要给人看见。这个控件只会往上收紧，收不松：一个
- * 想要比部署配置更少提问的人，要去改部署，不是改这一轮。
+ * 第四档「放手做」是 ADR-0116 加的，而且它没有推翻上一段的道理，是把它的前提
+ * 用尽了：ADR-0115 之后，容器栈上的命令跑在只挂项目文件夹的 runner 容器里，
+ * 「在这台机器上跑一条命令」在那条路上不再成立；而这一档也没有从风险表里拿掉
+ * `destructive`——服务端那张表照旧只加不减——它是把那道门预先答了，除了几种会
+ * 毁掉工作的命令形状。所以它只在目录（`CodeToolsResponse.unattended_available`）
+ * 说提供的时候才画出来：原生路径上的读者看到的仍然是三档，一字不差。
  */
-type CodePermission = "plan" | "ask" | "act";
+type CodePermission = "plan" | "ask" | "act" | "auto";
 
 const TURN_OF: Readonly<
   Record<CodePermission, { mode: CodeTurnMode; approvals: CodeTurnApprovals }>
@@ -182,6 +186,7 @@ const TURN_OF: Readonly<
   plan: { mode: "plan", approvals: "standard" },
   ask: { mode: "act", approvals: "before_write" },
   act: { mode: "act", approvals: "standard" },
+  auto: { mode: "act", approvals: "unattended" },
 };
 
 /**
@@ -210,6 +215,11 @@ const PERMISSIONS: ReadonlyArray<{
     value: "act",
     label: "自动改动",
     hint: "这一轮可以直接改文件；只有不可撤销的操作才会停下来问你",
+  },
+  {
+    value: "auto",
+    label: "放手做",
+    hint: "这一轮不再停下来问你；只有会毁掉工作的几种命令例外，你事后看记录",
   },
 ];
 
@@ -1551,7 +1561,14 @@ export function CodePage() {
           className="aw-segmented aw-code-permission"
           role="group"
         >
-          {PERMISSIONS.map((choice) => (
+          {PERMISSIONS.filter(
+            // 第四档只在部署提供的时候画（ADR-0116）。目录还没取到时也不画：
+            // 一颗在下一帧消失的按钮，和一颗按下去换来 422 的按钮，教给读者的
+            // 都是错的规则。
+            (choice) =>
+              choice.value !== "auto" ||
+              toolOffer.data?.unattended_available === true,
+          ).map((choice) => (
             <button
               aria-pressed={permission === choice.value}
               className={permission === choice.value ? "is-active" : ""}
@@ -1568,6 +1585,7 @@ export function CodePage() {
               ) : null}
               {choice.value === "ask" ? <UserCheck aria-hidden size={13} /> : null}
               {choice.value === "act" ? <Zap aria-hidden size={13} /> : null}
+              {choice.value === "auto" ? <Rocket aria-hidden size={13} /> : null}
               {choice.label}
             </button>
           ))}
@@ -1615,6 +1633,7 @@ export function CodePage() {
           planning={permission === "plan"}
           sessionId={sessionId}
           starters={CODE_STARTERS}
+          unattended={permission === "auto"}
           uploading={uploading}
           writeGate={permission === "ask"}
         />

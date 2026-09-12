@@ -93,6 +93,8 @@ READ_TOOL_NAME = "project_read"
 WRITE_TOOL_NAME = "project_write"
 EDIT_TOOL_NAME = "project_edit"
 GREP_TOOL_NAME = "project_grep"
+DELETE_TOOL_NAME = "project_delete"
+MOVE_TOOL_NAME = "project_move"
 
 #: What one write may accept inline. Same value and same reason as the
 #: workspace tool's: a model that needs to produce more than this is producing
@@ -655,6 +657,170 @@ class ProjectEditTool:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectDeleteTool:
+    """Remove one file from the project directory (ADR-0116).
+
+    The gap this closes was reported in one sentence -- 「文件夹中的文件不能
+    进行删除和改名」-- and it was true on every path. Claude Code deletes
+    with `rm` through Bash; here the shell is `project_run`, which the Windows
+    native launcher does not offer at all and which a model holding five
+    file-shaped tools does not reach for to remove a file. So the file
+    language gets the two verbs it was missing, spelled the way its others
+    are: one path, relative to the root, through the same store and the same
+    sandbox.
+
+    `destructive`, like `project_run`, because there is no undo and the
+    store already refused to make this recursive. Not gated on a read
+    receipt: a receipt is a claim about having *seen* the bytes, and
+    deleting a file is not a statement about its contents -- `rm` has never
+    asked, and a build artefact nobody read is the ordinary thing to remove.
+    What it is gated on is a person, in every turn that is not unattended.
+    """
+
+    scope: ProjectFileScope
+    #: Consulted for nothing and written to for nothing: a deleted file has no
+    #: receipt worth keeping, and a later write to the same path is a
+    #: creation, which the write gate does not ask about. Held so the three
+    #: file-changing tools have one constructor shape.
+    receipts: ReadReceipts
+
+    def binding(self) -> ToolBinding:
+        return ToolBinding(spec=self.spec(), handler=self.handle)
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=DELETE_TOOL_NAME,
+            description=(
+                "Delete one file from this project's directory. Files only: a "
+                "directory is refused rather than removed with everything in "
+                "it. There is no undo -- this removes the user's real file -- "
+                "so say why before you propose it."
+            ),
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path"],
+                "properties": {"path": _PATH_SCHEMA},
+            },
+            concurrency="exclusive",
+            risk="destructive",
+            idempotency="safe",
+            timeout_seconds=60,
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
+        )
+
+    async def handle(self, invocation: ToolInvocation) -> ToolResult:
+        path = str(invocation.call.arguments.get("path", ""))
+        store = _store(self.scope)
+        try:
+            removed = await store.delete(path)
+        except (ProjectPathError, NotFoundError) as error:
+            return _refusal(invocation, error)
+        if not removed:
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="not_found",
+                    message=f"nothing is at {path}, so there is nothing to delete",
+                    retryable=False,
+                ),
+            )
+        return ToolResult.succeeded(
+            invocation.call,
+            content=f"Deleted {path}.",
+            # The path is named as a write for every reader of the field
+            # (ADR-086): the bytes under it are gone, which is a change to
+            # the directory the console shows, and "which paths did this
+            # step change" is the question the field answers.
+            project_writes=(path,),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMoveTool:
+    """Rename one file, or move it to another directory (ADR-0116).
+
+    `write`, not `destructive`: nothing is lost by a move, the bytes are the
+    same bytes under a new name, and the store refuses to land on an existing
+    file so a move can never overwrite one. The read receipt travels with the
+    file -- a model that read `a.py`, moved it to `b.py` and then writes
+    `b.py` has seen every byte of what it is replacing.
+    """
+
+    scope: ProjectFileScope
+    receipts: ReadReceipts
+
+    def binding(self) -> ToolBinding:
+        return ToolBinding(spec=self.spec(), handler=self.handle)
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=MOVE_TOOL_NAME,
+            description=(
+                "Rename one file in this project's directory, or move it to "
+                "another directory under the root; parent directories of the "
+                "new path are created. The new path must be free -- a move "
+                "never replaces a file that is there. Files only."
+            ),
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["path", "new_path"],
+                "properties": {
+                    "path": _PATH_SCHEMA,
+                    "new_path": {
+                        **_PATH_SCHEMA,
+                        "description": (
+                            "Where the file goes, relative to the project root. "
+                            "Refused if something is already there."
+                        ),
+                    },
+                },
+            },
+            concurrency="exclusive",
+            risk="write",
+            idempotency="safe",
+            timeout_seconds=60,
+            permission_scopes=(WORKSPACE_WRITE_SCOPE,),
+        )
+
+    async def handle(self, invocation: ToolInvocation) -> ToolResult:
+        arguments = invocation.call.arguments
+        path = str(arguments.get("path", ""))
+        new_path = str(arguments.get("new_path", ""))
+        store = _store(self.scope)
+        carried = self.receipts.seen(path)
+        try:
+            entry = await store.move(path, new_path)
+        except ProjectFileExistsError as error:
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="invalid_tool_input", message=str(error), retryable=False
+                ),
+            )
+        except (ProjectPathError, NotFoundError) as error:
+            return _refusal(invocation, error)
+        if carried is not None:
+            # The same file, so the same receipt, under the name it now has.
+            # Refreshed from the entry the store returned rather than copied:
+            # a rename keeps the mtime on every filesystem this runs on, and
+            # reading it back off the entry is what makes that a fact here
+            # rather than an assumption.
+            _record_written(
+                self.receipts, entry, covers_whole_file=carried.covers_whole_file
+            )
+        return ToolResult.succeeded(
+            invocation.call,
+            content=f"Moved {path} to {entry.path}.",
+            # Both ends. The old path lost its bytes and the new one gained
+            # them, and a console refreshing what a step changed needs to
+            # hear about each.
+            project_writes=(path, entry.path),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _Corpus:
     """What one search got to read, and the three ways it did not.
 
@@ -1132,18 +1298,22 @@ class ProjectRunTool:
 
 
 __all__ = [
+    "DELETE_TOOL_NAME",
     "EDIT_TOOL_NAME",
     "GREP_TOOL_NAME",
     "LIST_TOOL_NAME",
     "MAX_CAPTURE_BYTES",
     "MAX_INLINE_OUTPUT_CHARS",
+    "MOVE_TOOL_NAME",
     "READ_TOOL_NAME",
     "RUN_TIMEOUT_SECONDS",
     "WRITE_TOOL_NAME",
+    "ProjectDeleteTool",
     "ProjectEditTool",
     "ProjectFilesUnavailableError",
     "ProjectGrepTool",
     "ProjectListTool",
+    "ProjectMoveTool",
     "ProjectReadTool",
     "ProjectRunTool",
     "ProjectWriteTool",

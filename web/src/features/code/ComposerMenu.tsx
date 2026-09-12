@@ -56,9 +56,15 @@ export const TOOLS_SUBMENU = "tools";
 function stopsAtAPerson(
   catalogue: CodeToolsResponse,
   writeGate: boolean,
+  unattended: boolean,
 ): ReadonlySet<ToolRisk> {
   const risks = new Set<ToolRisk>(catalogue.approval_required_risks);
   if (writeGate) risks.add("write");
+  // 「放手做」（ADR-0116）没有从信封的风险表里拿掉 `destructive`——服务端那张表
+  // 照旧只加不减——它是预先把那道门答了，除了 `domain/commands.py` 里那几种会
+  // 毁掉工作的形状。所以这里减掉的是「会先问你」这句话，不是那道门；那几种例外
+  // 由审批卡在真的拦下来的时候再说。
+  if (unattended) risks.delete("destructive");
   return risks;
 }
 
@@ -80,6 +86,7 @@ export function ComposerMenu({
   planning,
   sessionId,
   starters,
+  unattended,
   uploading,
   writeGate,
 }: {
@@ -104,6 +111,8 @@ export function ComposerMenu({
   planning: boolean;
   sessionId: string | undefined;
   starters: readonly ModeStarter[];
+  /** 这一轮是不是「放手做」（ADR-0116）：命令不再先问，除了那几种形状。 */
+  unattended: boolean;
   uploading: boolean;
   /** 这一轮是不是「改前问我」。 */
   writeGate: boolean;
@@ -138,7 +147,7 @@ export function ComposerMenu({
 
   const toolEntries = (): MenuEntry[] => {
     if (catalogue === undefined) return [];
-    const gated = stopsAtAPerson(catalogue, writeGate);
+    const gated = stopsAtAPerson(catalogue, writeGate, unattended);
     const entries: MenuEntry[] = [
       {
         kind: "note",

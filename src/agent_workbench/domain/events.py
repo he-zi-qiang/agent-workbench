@@ -613,6 +613,15 @@ class ToolCompleted(DomainModel):
     tool_call_id: Identifier
     duration_ms: int = Field(ge=0)
     output_bytes: int = Field(ge=0)
+    #: Whether the runtime answered this call from what the same call
+    #: answered earlier in the run, without dispatching it (ADR-0116). A fact
+    #: about who produced the answer, not about the answer, and outside the
+    #: preview gate for the reason `workspace_writes` is: it discloses nothing
+    #: a deployment withholding previews meant to withhold, and it is most
+    #: needed exactly where a reader cannot see the text and would otherwise
+    #: take a repeated row for a repeated dispatch. Defaulted, so every event
+    #: written before the field existed reads as what it was.
+    replayed: bool = False
     #: Which workspace names this call bound to new bytes. Not a preview and
     #: not gated; see the note above.
     workspace_writes: tuple[WorkspaceName, ...] = ()
@@ -647,6 +656,9 @@ class ToolFailed(DomainModel):
     tool_call_id: Identifier
     error: ErrorInfo
     duration_ms: int = Field(ge=0)
+    #: The same fact `ToolCompleted.replayed` carries, for a repeated call
+    #: whose earlier answer was a refusal (ADR-0116).
+    replayed: bool = False
 
 
 class ContextCompacted(DomainModel):

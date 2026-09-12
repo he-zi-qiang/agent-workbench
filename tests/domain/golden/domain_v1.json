@@ -56,7 +56,8 @@
         "shell"
       ],
       "max_tool_risk": "write",
-      "schema_version": 1
+      "schema_version": 1,
+      "unattended": false
     },
     "messages": [
       {
@@ -121,7 +122,8 @@
       "shell"
     ],
     "max_tool_risk": "write",
-    "schema_version": 1
+    "schema_version": 1,
+    "unattended": false
   },
   "ContextPacket": {
     "chunks": [
@@ -226,7 +228,8 @@
         "shell"
       ],
       "max_tool_risk": "write",
-      "schema_version": 1
+      "schema_version": 1,
+      "unattended": false
     },
     "graph_node_id": "node_research_internal",
     "lease_epoch": 7,

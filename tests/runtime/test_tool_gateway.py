@@ -21,6 +21,7 @@ from agent_workbench.domain.events import (
     PermissionRequested,
     ToolApprovalDecided,
     ToolCompleted,
+    ToolFailed,
     ToolProposed,
 )
 from agent_workbench.domain.policies import (
@@ -1300,3 +1301,97 @@ def test_the_word_a_gate_invented_does_not_travel_with_the_refusal() -> None:
 
     assert result.error is not None
     assert "postgres://" not in result.error.message
+
+
+# --- answering a repeat from the record (ADR-0116) ---------------------------
+
+
+def test_a_replay_is_the_earlier_answer_under_the_new_id_and_says_so() -> None:
+    """`replay` re-keys the earlier result and marks the completion."""
+
+    harness = _Harness()
+
+    async def scenario() -> tuple[ToolResult, ToolResult]:
+        first = _call(query="fusion")
+        await harness.gateway.propose(first, sink=harness.sink)
+        prepared = await harness.gateway.prepare(
+            first, context=CONTEXT, sink=harness.sink
+        )
+        assert not isinstance(prepared, ToolResult)
+        earlier = await harness.gateway.invoke(
+            prepared,
+            context=CONTEXT,
+            cancellation=NullCancellationToken(),
+            sink=harness.sink,
+        )
+        again = first.model_copy(update={"tool_call_id": "toolu_2"})
+        await harness.gateway.propose(again, sink=harness.sink)
+        replayed = await harness.gateway.replay(
+            again, earlier, note=" [again]", sink=harness.sink
+        )
+        return earlier, replayed
+
+    earlier, replayed = asyncio.run(scenario())
+
+    assert len(harness.tool.calls) == 1
+    assert replayed.tool_call_id == "toolu_2"
+    assert replayed.status == "ok"
+    assert replayed.content == earlier.content + " [again]"
+    completions = [
+        envelope.payload
+        for envelope in events_of(harness)
+        if isinstance(envelope.payload, ToolCompleted)
+    ]
+    assert [event.replayed for event in completions] == [False, True]
+    assert completions[1].tool_call_id == "toolu_2"
+
+
+def test_a_replayed_write_claims_no_write() -> None:
+    """The writes are facts about bytes bound by *that* step (ADR-086)."""
+
+    harness = _Harness()
+    call = _call(query="fusion")
+    earlier = ToolResult.succeeded(
+        call,
+        content="Wrote notes.md (12 bytes).",
+        workspace_writes=("notes.md",),
+        project_writes=("notes.md",),
+    )
+
+    async def scenario() -> ToolResult:
+        again = call.model_copy(update={"tool_call_id": "toolu_2"})
+        await harness.gateway.propose(again, sink=harness.sink)
+        return await harness.gateway.replay(again, earlier, note="", sink=harness.sink)
+
+    replayed = asyncio.run(scenario())
+
+    assert replayed.workspace_writes == ()
+    assert replayed.project_writes == ()
+    assert replayed.content == earlier.content
+
+
+def test_a_replayed_refusal_keeps_its_code_and_carries_the_note() -> None:
+    harness = _Harness()
+    call = _call(query="fusion")
+    earlier = ToolResult.failed(
+        call, ErrorInfo(code="policy_denied", message="not offered")
+    )
+
+    async def scenario() -> ToolResult:
+        again = call.model_copy(update={"tool_call_id": "toolu_2"})
+        await harness.gateway.propose(again, sink=harness.sink)
+        return await harness.gateway.replay(
+            again, earlier, note=" [again]", sink=harness.sink
+        )
+
+    replayed = asyncio.run(scenario())
+
+    assert replayed.error is not None
+    assert replayed.error.code == "policy_denied"
+    assert replayed.error.message == "not offered [again]"
+    failures = [
+        envelope.payload
+        for envelope in events_of(harness)
+        if isinstance(envelope.payload, ToolFailed)
+    ]
+    assert [event.replayed for event in failures] == [True]

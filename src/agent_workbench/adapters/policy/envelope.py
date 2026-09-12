@@ -15,9 +15,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agent_workbench.domain.commands import arguments_still_ask
 from agent_workbench.domain.policies import ExecutionContext, PolicyDecision
 from agent_workbench.domain.tools import ToolCall
 from agent_workbench.ports.tools import ToolRegistry
+
+#: The reason codes an unattended envelope can produce (ADR-0116), spelled
+#: once so the audit trail and the tests agree on them. `unattended_turn` is
+#: the ordinary answer: the call would have stopped, and the submitter's
+#: standing answer stood in for the click. `command_still_asks` is the
+#: exception, and it names the reason the shape list gave.
+UNATTENDED_REASON = "unattended_turn"
+STILL_ASKS_REASON_PREFIX = "command_still_asks:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +53,26 @@ class EnvelopePolicyEngine:
             # scope is missing is an operator detail, not model-facing content.
             return PolicyDecision.deny("missing_permission_scope")
 
+        requires_approval = context.envelope.requires_approval(binding.spec)
+        if requires_approval and context.envelope.answered_in_advance(binding.spec):
+            # The one place a decision reads the arguments (ADR-0116). The
+            # envelope says the submitter answered yes in advance; the shape
+            # list says which commands that answer was never allowed to
+            # cover. A match keeps the call on the ordinary path -- held for
+            # a person, with the reason on the record -- and no match is the
+            # standing answer applied, recorded as its own reason so a
+            # reader of `PermissionResolved` can tell it from a click.
+            reason = arguments_still_ask(call.arguments)
+            if reason is None:
+                return PolicyDecision.allow(UNATTENDED_REASON, requires_approval=False)
+            return PolicyDecision.allow(
+                f"{STILL_ASKS_REASON_PREFIX}{reason}", requires_approval=True
+            )
+
         return PolicyDecision.allow(
             "within_submitted_envelope",
-            requires_approval=context.envelope.requires_approval(binding.spec),
+            requires_approval=requires_approval,
         )
 
 
-__all__ = ["EnvelopePolicyEngine"]
+__all__ = ["STILL_ASKS_REASON_PREFIX", "UNATTENDED_REASON", "EnvelopePolicyEngine"]

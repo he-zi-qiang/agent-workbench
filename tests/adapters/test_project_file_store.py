@@ -25,6 +25,7 @@ from agent_workbench.adapters.filesystem.sandbox import (
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.project_files import (
     ProjectFileChangedError,
+    ProjectFileExistsError,
     ProjectPathError,
 )
 from agent_workbench.ports.project_files import (
@@ -557,3 +558,89 @@ async def test_a_cjk_path_round_trips(store: FilesystemProjectFileStore) -> None
     await store.write("文档/设计稿.md", "稿子\n")
     assert (await store.read("文档/设计稿.md")).text == "稿子\n"
     assert "文档/设计稿.md" in {e.path for e in (await store.walk()).entries}
+
+
+class TestMove:
+    """`move` (ADR-0116): one file, a new name, nothing replaced."""
+
+    async def test_moving_returns_the_entry_under_its_new_name(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        entry = await store.move("README.md", "docs/README.md")
+        assert entry.path == "docs/README.md"
+        assert entry.kind == "file"
+        assert not (store.working_directory / "README.md").exists()
+        assert (store.working_directory / "docs" / "README.md").read_text() == (
+            "# Project\n"
+        )
+
+    async def test_a_move_keeps_the_version_a_receipt_was_taken_over(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        # The tool layer carries a read receipt across a move and re-records it
+        # from the returned entry; that is only sound if the rename kept the
+        # size and the mtime, which is asserted here rather than assumed.
+        before = await store.read("README.md")
+        entry = await store.move("README.md", "notes/README.md")
+        assert entry.size_bytes == before.size_bytes
+        assert entry.modified_at == before.modified_at
+
+    async def test_landing_on_a_file_is_refused_and_nothing_moves(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(ProjectFileExistsError):
+            await store.move("README.md", "src/main.py")
+        assert (store.working_directory / "README.md").exists()
+        assert (store.working_directory / "src" / "main.py").read_text() == (
+            "print('hi')\n"
+        )
+
+    async def test_a_missing_source_is_not_found(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(NotFoundError):
+            await store.move("ghost.md", "elsewhere.md")
+
+    async def test_a_directory_is_refused(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(NotFoundError):
+            await store.move("src", "lib")
+        assert (store.working_directory / "src" / "main.py").exists()
+
+    async def test_neither_end_may_leave_the_root(
+        self, store: FilesystemProjectFileStore
+    ) -> None:
+        with pytest.raises(ProjectPathError):
+            await store.move("README.md", "../README.md")
+        with pytest.raises(ProjectPathError):
+            await store.move("../etc/passwd", "passwd")
+        assert (store.working_directory / "README.md").exists()
+
+    async def test_a_symlink_at_the_destination_is_refused(
+        self, store: FilesystemProjectFileStore, tmp_path: Path
+    ) -> None:
+        inside = store.working_directory / "link.txt"
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret\n")
+        escaping = store.working_directory / "escape.txt"
+        try:
+            inside.symlink_to(store.working_directory / "src" / "main.py")
+            escaping.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not available here")
+        # `os.rename` onto a symlink replaces the link, not its target -- and
+        # that is still "something is at the path", which a move must refuse.
+        # A link that stays inside the root reaches the exists check; one
+        # that points outside is refused a step earlier, by the same
+        # containment check every path goes through, and either way nothing
+        # moves.
+        with pytest.raises(ProjectFileExistsError):
+            await store.move("README.md", "link.txt")
+        with pytest.raises(ProjectPathError):
+            await store.move("README.md", "escape.txt")
+        assert outside.read_text() == "secret\n"
+        assert (store.working_directory / "src" / "main.py").read_text() == (
+            "print('hi')\n"
+        )
+        assert (store.working_directory / "README.md").exists()

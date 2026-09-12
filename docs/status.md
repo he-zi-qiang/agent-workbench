@@ -27,6 +27,75 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第八十四批）：重复的调用按记录作答、命令的门可以由回合预先答、文件可以删和改名（ADR-0116）
+
+用户睡前贴了一轮的事件记录（`run_3444…3232`，deepseek-chat，23 步 25 次调用）和三句话：
+「老是进入死循环」「已经有自动权限还是来询问我的同意」「文件夹中的文件不能进行删除和改名」，并要求
+按本机 Claude Code 的实现对照检查编码模式。那一轮的后 13 次调用全是 `project_run`，命令只有六条不同的：
+同一条 `python3 -c` 连发四次（三次派发、一次被拒），模型改一句注释再连发四次，第三次被拒之后
+`RunFailed`。每一次派发都停在一张审批卡上——**六条命令，十张卡，三分钟里点了十次「允许一次」**。
+在 runner 容器里把那条命令原样再跑一遍：退出码 0，14 行正确的区段统计。模型重复的是一个正确答案。
+
+### 1. 改了什么（[ADR-0116](./adr/0116-a-repeat-is-answered-from-the-record-and-a-turn-may-run-unattended.md)，§1.1 是 Claude Code 对照表）
+
+- **运行时：同一个调用、中间没派发过任何非只读的东西，第二次按记录作答。** `_RunLedger` 多
+  `world_version` / `answered` / `replayed`；`ToolGateway.replay()` 把上一次的结果换上新的 `tool_call_id`
+  交回去，附一句「这是同一个答案，别再调用」，写入字段不带过去（ADR-086）。同一签名答到第三次时
+  收走工具，下一次请求不带任何工具，这一轮以报告结束（`RunCompleted`）；没有工具还提出调用的才
+  `RunFailed`。拒绝也进记录，`retryable` 的失败不进。删掉了 `MAX_IDENTICAL_CALLS` / `MAX_REPEAT_REFUSALS`
+  与批次末尾那个 `RunFailed`。`ToolCompleted` / `ToolFailed` 各多一个 `replayed`，控制台那一行写
+  「（沿用上次结果）」。同样六条命令：旧机制十张卡、23 步、失败；新机制四张卡、约 14 步、完成。
+- **`approve_for_session` 对 `destructive` 开放**（`UNREPEATABLE_RISKS = {"external"}`）：规则本来就按参数
+  摘要记，答应的是这一条命令。审批卡上「本会话都允许」对命令也画出来了。
+- **第三档 `approvals="unattended"`（界面「放手做」）。** 不从风险表里减——`code_approval_risks` 的
+  「只加不减」原样——信封多一个 `unattended` 字段，`EnvelopePolicyEngine` 对每一次 destructive 调用的
+  参数再问一遍有没有拦它的理由：`domain/commands.py` 六种形状（删整个目录、git 丢掉未提交的工作、
+  改写共享历史、网上下来的东西灌进 shell、伸出项目目录之外、无限 fork）仍然停，其余
+  `allow(reason_code="unattended_turn")`。**只在命令跑进 runner 容器的部署上提供**
+  （`unattended_available = config.runner is not None`，`GET …/tools` 报它，原生路径上 422）；
+  提示词 `with_unattended` 把「每次调用都停下来问用户」那句换掉并把六种形状用人话列一遍。
+- **`project_delete` 与 `project_move`。** 端口多 `move`，沙箱多 `rename`（两端都过 `_checked`，目标必须
+  为空，目录拒绝）；删是 `destructive`、不要回执，移是 `write`、回执随文件走，两者都报 `project_writes`。
+  `CODE_PROJECT_TOOLS` 五件变七件，基础集的风险上限由此变成 `destructive`，计划回合按风险丢掉两件。
+  步骤列表两个动词：删除项目目录文件 / 移动项目目录文件。
+- 事件与信封各多一个带默认值的字段，两份 golden（`tests/domain/golden/domain_v1.json` 多三行
+  `"unattended": false`，`tests/cli/golden/demo_tool_round.jsonl` 多一个键）相应重生成；schema 版本不动。
+- 登记 F-41（同一条命令轮询的第二次不再跑）、F-42（例外清单是静态正则）。`docs/windows-quickstart.md`
+  那句「五件工具」改成七件并说了「放手做」在哪出现。
+
+### 2. 证据
+
+- 后端新增或改写：`test_agent_runtime.py`（按记录作答、写之后重新派发、命令不再问第二次、第三次收走
+  工具且完成、没有工具还提出就失败、拒绝也进记录、参数顺序不买第二次派发）、`test_tool_gateway.py`
+  （`replay` 三条）、`test_commands.py`（78 条形状用例，含 `grep -r sudo .` 不拦、`sh -c "rm -rf ."` 拦）、
+  `test_policy_engine.py`（四条）、`test_code_session.py`（四条）、`test_code_api.py`（三条）、
+  `test_project_file_store.py`（`move` 七条）、`test_project_tools.py`（删与移九条）。前端
+  `CodePage.test.tsx` 四条、`stepGroups.test.ts` 四条。
+- 门禁，**两个平台各跑了一次离线全集**：
+  - Windows 本机（※W）：`3573 passed / 166 failed / 811 skipped`，2 分 36 秒。干净 `main` 在同一台机器上
+    是 153 个失败（本批先量的），多出的 13 条全是本批新增的沙箱相关用例——它们在 Windows 上和那 153 条
+    一样死于同一个地方（`is_within` 比较盘符路径），**逐条都在 Linux 上过了**。
+  - Linux 容器（用 `agent-workbench:local` 镜像挂载检出，`uv sync --group dev` 进 `/tmp/venv`）：
+    `3681 passed / 37 failed / 822 skipped`，2 分 25 秒；37 条全是镜像里没有 `git`（`test_compose.py` 34、
+    `test_no_stray_duplicates.py` 2、`test_architecture_panel.py` 1），`test_evidence_manifest.py` 因挂载里
+    没有那份清单而跳过收集。**本批改到的每一个文件的测试在这一列上都是绿的。**
+  - `ruff format --check`、`ruff check`、`agent-config-check --profile development` 通过；`pyright` 仍是
+    那 14 条 Windows 平台错误（`os.killpg` / `O_NOFOLLOW`），零新增。
+  - 前端：lint、typecheck、954 条 vitest（上一批 946，+8 全是本批的）、build 全过；pnpm 11.9.0 经
+    `corepack` 起（`pnpm` 不在这台机器的 PATH 上）。
+- 复现（runner 容器）：`python3 -c` 那段区段统计原样跑，退出码 0、14 行——见 ADR §1。
+- **没有在控制台真发一轮。** 跑着的 Compose 栈还是旧镜像，重建（`stack.cmd`）与一轮真实的编码会话留给
+  下一轮循环；按能力阶梯，本批的三件事是 Implemented → Tested，Demonstrated 待那一轮。
+
+### 3. 顺带看到、没修
+
+- 这台 Windows 检出上干净 `main` 的 153 个失败全是平台问题（沙箱盘符路径、`bash scripts/dev.sh`
+  子进程、`O_NOFOLLOW`、环境变量大小写），第七十九批 §3 列过来处；本批没动它们，只是量了一次基线，
+  这样「多出来的是不是新回归」有了逐条对照的办法（按测试 id 与 `main` 的 worktree 比）。
+- `PermissionRequested` 的审批卡在「放手做」拦下一条命令时显示的是命令本身；那六种形状的**理由**
+  只在 `PermissionResolved.reason_code` 上（`command_still_asks:<理由>`），卡片上还没画出来。
+
+---
 ## 2026-09-13（第八十三批）：步骤列表里浏览器那六行说中文了，打开页面那一行带上它打开的文件
 
 第八十二批末尾记着「顺带看到、没修」的那一条：Code 页的步骤列表里，浏览器那六件工具显示的是

@@ -26,6 +26,7 @@ from agent_workbench.domain.events import (
     EventEnvelope,
     ModelStarted,
     RunFailed,
+    ToolCompleted,
     ToolFailed,
     ToolProposed,
 )
@@ -1974,14 +1975,28 @@ def test_distinct_ids_in_one_turn_are_unaffected() -> None:
 
 
 def test_the_same_id_across_two_turns_is_not_a_repetition() -> None:
-    """Uniqueness is per turn. Ids only have to be distinguishable among peers."""
+    """Uniqueness is per turn. Ids only have to be distinguishable among peers.
+
+    Different arguments on the two turns, so the only thing the calls share
+    is the id. With identical arguments the second would be answered from
+    the record (ADR-0116) -- correctly, and for a reason that has nothing to
+    do with what this test is about.
+    """
 
     recorder = _Recorder("read_document", risk="read")
     call = ToolCall(tool_call_id="toolu_1", tool_name="read_document")
     model = FakeModel(
         [
-            ScriptedTurn(text="Once.", tool_calls=(call,), usage=USAGE),
-            ScriptedTurn(text="Again.", tool_calls=(call,), usage=USAGE),
+            ScriptedTurn(
+                text="Once.",
+                tool_calls=(call.model_copy(update={"arguments": {"page": 1}}),),
+                usage=USAGE,
+            ),
+            ScriptedTurn(
+                text="Again.",
+                tool_calls=(call.model_copy(update={"arguments": {"page": 2}}),),
+                usage=USAGE,
+            ),
             ScriptedTurn(text="Done.", usage=USAGE),
         ]
     )
@@ -2178,33 +2193,165 @@ def _repeating(times: int) -> FakeModel:
     )
 
 
-def test_reading_the_same_document_twice_is_still_allowed() -> None:
-    """The floor. Asking again is ordinary; only the fourth time is not."""
+def test_reading_the_same_document_twice_is_answered_from_the_record() -> None:
+    """The second identical read runs nothing and returns the same text (ADR-0116).
 
-    recorder = _Recorder("read_document", risk="read")
+    Asking again used to be allowed to *run* again, three times, on the
+    reasoning that re-reading is ordinary. It is -- after a write. With
+    nothing between the two reads, the second is the same question, and the
+    honest answer is the same answer, marked as the same.
+    """
+
+    recorder = _Recorder("read_document", risk="read", content="fusion is Qdrant's")
 
     run = _execute(_repeating(2), bindings=[recorder.binding])
 
-    assert len(recorder.calls) == 2
+    assert len(recorder.calls) == 1
     assert run.outcome.status == "completed"
+    completions = _payloads(run, ToolCompleted)
+    assert [event.replayed for event in completions] == [False, True]
+    # What the model read on the second turn: the first answer, then the
+    # sentence saying it is the first answer.
+    texts = _tool_texts(run.model)
+    assert texts[1].startswith("fusion is Qdrant's")
+    assert "same read_document call as before" in texts[1]
+    assert "Do not call it again" in texts[1]
 
 
-def test_a_fourth_identical_call_is_refused_without_running() -> None:
-    """The observed loop fetched one URL eight times. The tool runs three."""
+def test_a_repeat_after_a_write_is_a_fresh_question() -> None:
+    """The control for the test above: a write between two reads re-runs the read.
+
+    `world_version` is what tells the two apart. The write is not even to the
+    document being read -- the runtime cannot know what a write touched, so
+    anything non-read counts, which is the conservative side to err on.
+    """
+
+    reader = _Recorder("read_document", risk="read")
+    writer = _Recorder("export_artifact", risk="write")
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Read.",
+                tool_calls=(READ_CALL.model_copy(update={"tool_call_id": "toolu_1"}),),
+                usage=USAGE,
+            ),
+            ScriptedTurn(
+                text="Write.",
+                tool_calls=(
+                    ToolCall(tool_call_id="toolu_2", tool_name="export_artifact"),
+                ),
+                usage=USAGE,
+            ),
+            ScriptedTurn(
+                text="Read again.",
+                tool_calls=(READ_CALL.model_copy(update={"tool_call_id": "toolu_3"}),),
+                usage=USAGE,
+            ),
+            ScriptedTurn(text="Done.", usage=USAGE),
+        ]
+    )
+
+    run = _execute(
+        model,
+        request=_request(
+            tool_names=("read_document", "export_artifact"),
+            max_tool_risk="write",
+            approval_required_risks=(),
+        ),
+        bindings=[reader.binding, writer.binding],
+    )
+
+    assert len(reader.calls) == 2
+    assert run.outcome.status == "completed"
+    assert all(not event.replayed for event in _payloads(run, ToolCompleted))
+
+
+def test_an_identical_command_costs_no_second_approval() -> None:
+    """The case that motivated ADR-0116.
+
+    A coding turn proposed one approved command four times in a row, and a
+    person clicked an approval card for each. The second and later proposals
+    are answered from the record, so the gate hears about the command once
+    and the tool runs once.
+    """
+
+    class _CountingGate:
+        def __init__(self) -> None:
+            self.asked = 0
+
+        async def request(self, **kwargs: object) -> tuple[str, str]:
+            self.asked += 1
+            return "approve_once", "human"
+
+    gate = _CountingGate()
+    recorder = _Recorder("export_artifact", risk="write", content="exit code: 0")
+    call = ToolCall(
+        tool_call_id="toolu_0",
+        tool_name="export_artifact",
+        arguments={"command": "python3 -c 'print(1)'"},
+    )
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="",
+                tool_calls=(call.model_copy(update={"tool_call_id": f"toolu_{n}"}),),
+                usage=USAGE,
+            )
+            for n in range(3)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+    run = _execute(
+        model,
+        request=_request(tool_names=("export_artifact",), max_tool_risk="write"),
+        bindings=[recorder.binding],
+        approvals=gate,
+    )
+
+    assert gate.asked == 1
+    assert len(recorder.calls) == 1
+    assert run.outcome.status == "completed"
+    assert run.durable_types.count("PermissionRequested") == 1
+
+
+def test_the_third_repeat_withdraws_the_tools_and_the_run_reports() -> None:
+    """Past `MAX_REPLAYS`, the next request carries no tools (ADR-0116).
+
+    Four identical proposals: one dispatch, two replays, and a third replay
+    that says the tools are gone. The fifth request is the one that matters --
+    it offers nothing, so a model that honours its request can only write --
+    and the run ends completed, holding the report, where it used to end
+    `RunFailed` with ten approval cards behind it.
+    """
 
     recorder = _Recorder("read_document", risk="read")
 
-    _execute(_repeating(6), bindings=[recorder.binding])
+    run = _execute(
+        _repeating(4),
+        request=_request(budget=RunBudget(max_steps=20, max_tool_calls=20)),
+        bindings=[recorder.binding],
+    )
 
-    assert len(recorder.calls) == 3, "the tool must not do the same work again"
+    assert len(recorder.calls) == 1
+    assert run.outcome.status == "completed"
+    assert run.outcome.output_text == "Done."
+    assert isinstance(run.model, FakeModel)
+    offered = [len(request.tools) for request in run.model.requests]
+    assert offered == [1, 1, 1, 1, 0]
+    texts = _tool_texts(run.model)
+    assert "tools are withdrawn" not in texts[2]
+    assert "tools are withdrawn" in texts[3]
 
 
 def test_a_run_that_keeps_repeating_is_stopped_before_its_token_ceiling() -> None:
-    """What this exists for.
+    """What the breaker still exists for.
 
     The research node burned a 120k token budget re-fetching one page it had
-    already read. Ending on the repeats names the cause; ending on the ceiling
-    reports only that the money ran out.
+    already read. A scripted model that goes on proposing after its tools
+    were withdrawn is that run in miniature -- a provider honouring the
+    request cannot do this, a double can -- and it is stopped for the cause
+    rather than for the money.
     """
 
     run = _execute(
@@ -2269,14 +2416,19 @@ def test_argument_key_order_does_not_hide_a_repeat() -> None:
                 ),
                 usage=USAGE,
             )
-            for turn, args in enumerate((first, second, first, second, first, second))
+            for turn, args in enumerate((first, second, first))
         ]
         + [ScriptedTurn(text="Done.", usage=USAGE)]
     )
 
-    _execute(model, bindings=[recorder.binding])
+    run = _execute(model, bindings=[recorder.binding])
 
-    assert len(recorder.calls) == 3, "key order must not buy extra attempts"
+    assert len(recorder.calls) == 1, "key order must not buy a second dispatch"
+    assert [event.replayed for event in _payloads(run, ToolCompleted)] == [
+        False,
+        True,
+        True,
+    ]
 
 
 def test_a_tool_the_task_allows_but_this_run_was_not_offered_is_refused() -> None:
@@ -2466,21 +2618,28 @@ def test_a_tool_that_was_never_offered_still_trips_the_repeat_breaker() -> None:
 
     A refused call costs no dispatch and almost no tokens, so a model that
     keeps proposing the same withheld name pays nothing each time and burns
-    the run's steps. The circuit breaker only works if the bookkeeping happens
-    before any check can skip the rest of the loop -- which is why the count is
-    taken first and the refusals come after it.
+    the run's steps. The record has to hold refusals too (ADR-0116): the
+    second turn's identical proposal is answered from the first turn's
+    refusal, marked as the same, and the fourth turn takes the tools away.
+    Every one of the refusals keeps its real code -- the model is told
+    `policy_denied` each time, never something that reads as its own error.
     """
 
     withheld = _Recorder("text_statistics")
-    calls = tuple(
-        ToolCall(tool_call_id=f"toolu_{index}", tool_name="text_statistics")
-        for index in range(1, 5)
-    )
     model = FakeModel(
         [
-            ScriptedTurn(text="Working.", tool_calls=calls, usage=USAGE),
-            ScriptedTurn(text="Done.", usage=USAGE),
-        ],
+            ScriptedTurn(
+                text="Working.",
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_{index}", tool_name="text_statistics"
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for index in range(1, 5)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)],
     )
 
     run = _execute(
@@ -2488,19 +2647,17 @@ def test_a_tool_that_was_never_offered_still_trips_the_repeat_breaker() -> None:
         request=_request(
             tool_names=("read_document",),
             allowed_tools=("read_document", "text_statistics"),
+            budget=RunBudget(max_steps=20, max_tool_calls=20),
         ),
         bindings=[_Recorder("read_document").binding, withheld.binding],
     )
 
-    codes = [
-        event.payload.error.code
-        for event in run.live
-        if type(event.payload).__name__ == "ToolFailed"
-    ]
-    # Three refusals name the real reason; the fourth is the breaker, which is
-    # the whole point -- without it the model can keep asking forever.
-    assert codes == ["policy_denied"] * 3 + ["invalid_tool_input"]
+    failures = _payloads(run, ToolFailed)
+    assert [event.error.code for event in failures] == ["policy_denied"] * 4
+    assert [event.replayed for event in failures] == [False, True, True, True]
+    assert "tools are withdrawn" in failures[3].error.message
     assert withheld.calls == []
+    assert run.outcome.status == "completed"
 
 
 def test_a_name_this_process_never_registered_is_still_an_unknown_tool() -> None:

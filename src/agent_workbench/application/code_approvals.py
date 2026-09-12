@@ -21,9 +21,14 @@ decides that approval is required from the tool's declared risk and never reads
 the arguments, so "approve `workspace_write` for this session" would let one
 approved write stand for every later one. A rule is therefore keyed by the
 arguments as well, through the digest the gateway already published on
-``ToolProposed`` -- and for a tool whose risk is external or destructive there
-is no standing rule at all, because a blanket yes to an irreversible effect is
-the thing that must be asked every time.
+``ToolProposed``. For a tool whose risk is external there is no standing rule
+at all -- a question that leaves this process is asked every time. A
+destructive tool *may* take one since ADR-0116, and the reason it could not
+before is worth keeping: "a blanket yes to an irreversible effect" was the
+objection, and a rule keyed by the exact arguments is not blanket. It is the
+same command, approved for the session -- `pytest` after every edit -- which is
+the "don't ask again" Claude Code offers on its approval prompt, and the
+answer to a person who clicked the same card ten times in one evening.
 """
 
 from __future__ import annotations
@@ -40,10 +45,13 @@ from agent_workbench.domain.events import (
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.tools import PermissionScope, ProposedToolName, ToolRisk
 
-#: Risks for which ``approve_for_session`` is refused. An external or
-#: destructive effect is exactly the kind whose second occurrence deserves the
-#: same question as its first.
-UNREPEATABLE_RISKS: frozenset[ToolRisk] = frozenset({"external", "destructive"})
+#: Risks for which ``approve_for_session`` is refused. An external effect --
+#: a question put to the open web, a container started -- is the kind whose
+#: second occurrence deserves the same question as its first. `destructive`
+#: was here too until ADR-0116 (see the module docstring for why it left):
+#: the rule is keyed by the arguments, so what a standing yes to a command
+#: permits is that command and nothing wider.
+UNREPEATABLE_RISKS: frozenset[ToolRisk] = frozenset({"external"})
 
 
 class ApprovalNotPendingError(RuntimeError):

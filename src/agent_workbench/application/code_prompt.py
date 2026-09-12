@@ -287,7 +287,9 @@ _PROJECT_DISCIPLINE_1 = """\
 1. Read before you write. `project_list` says what exists, `project_grep` says
    where something is, and `project_read` says what is in a file. Writing a
    file you have not read replaces work you did not look at -- the user's work,
-   on their disk, with nothing to restore it from."""
+   on their disk, with nothing to restore it from. `project_move` renames or
+   relocates a file and keeps what you had read of it; `project_delete`
+   removes one, and there is nothing to get it back from."""
 
 _FLAT_DISCIPLINE_2 = """\
 2. Prefer `workspace_edit` to `workspace_write` when changing part of a file."""
@@ -818,6 +820,57 @@ def with_write_gate(prompt: str) -> str:
     return prompt + _WRITE_GATE
 
 
+#: The claim an unattended turn makes false, in `_HAS_SHELL`'s words. Kept as
+#: an anchor rather than left standing, because a turn told "every call stops
+#: and asks them" plans around a wait that is not coming -- it batches, it
+#: explains each command to a person who is not there, and it treats its
+#: budget as a person's patience.
+_EVERY_CALL_STOPS = """\
+Every
+call stops and asks them before it runs, and they see the command you wrote."""
+
+_RUNS_UNATTENDED = """\
+This
+turn runs them without asking: the user chose to let it, and they read the
+commands afterwards in the transcript rather than one at a time as they run."""
+
+#: What an unattended turn is told (ADR-0116). Appended after the shell
+#: paragraph it corrects, so the model reads "where a command runs" and then
+#: "who is watching it" in that order. It names the shapes that still stop --
+#: the same list `domain/commands.py` holds, in the words a person would use
+#: -- so a turn that proposes one is not surprised by the wait.
+_UNATTENDED = """
+
+Nobody is watching this turn run. Its commands, deletions and edits are
+permitted in advance, and the person who permitted them reads the transcript
+afterwards -- so the report at the end is the whole account, and it has to
+say what ran and what it changed, not only what was concluded. A few shapes
+still stop and wait for a person even here: removing the whole directory or
+everything in it, discarding uncommitted work through git, force-pushing,
+piping something downloaded straight into a shell, and anything that reaches
+past the project directory. Do not plan around them: if the work needs one,
+say so in the report and let the person decide with the transcript in front
+of them."""
+
+
+def with_unattended(prompt: str) -> str:
+    """Correct a prompt for a turn whose destructive calls are permitted in
+    advance (ADR-0116).
+
+    Two operations, and the first is the one that can fail. The shell
+    paragraph says every call stops at a person, which is false here, and it
+    is *replaced* through `_rewrite` so a base prompt that rephrased that
+    sentence fails at import rather than shipping a turn told two
+    contradictory things about the same gate. A turn holding no shell -- a
+    deployment without `shell_tools_enabled`, where `project_delete` is the
+    only destructive tool -- has no such sentence and gets only the append.
+    """
+
+    if _EVERY_CALL_STOPS in prompt:
+        prompt = _rewrite(prompt, _EVERY_CALL_STOPS, _RUNS_UNATTENDED)
+    return prompt + _UNATTENDED
+
+
 #: What a turn is told when it can drive the guarded browser (ADR-0113 §4).
 #:
 #: **An append with no anchor, like `_WRITE_GATE` and unlike `_WEB_SEARCH`, and
@@ -937,6 +990,7 @@ __all__ = [
     "with_host_commands",
     "with_plan_only",
     "with_project_memory",
+    "with_unattended",
     "with_web_search",
     "with_write_gate",
 ]
