@@ -184,7 +184,15 @@ class TestReadWindow:
         assert window.next_offset == 4
         assert not window.stopped_at_char_ceiling
         described = describe_read_window("a.txt", window)
-        assert described == "a.txt: lines 2-3 of 4; pass offset=4 to continue."
+        # It says *which* thing stopped it, and that is the point of the
+        # sentence rather than a flourish. Measured 2026-09-12: told only
+        # "pass offset=4 to continue", a Code turn paged a file it had just
+        # written in 40-line windows, twenty-eight reads deep, and ran out of
+        # steps. The window had been its own `limit` all along.
+        assert described is not None
+        assert described.startswith("a.txt: lines 2-3 of 4; the 'limit' you passed")
+        assert "Omit 'limit'" in described
+        assert "offset=4" in described
 
     def test_the_char_ceiling_bites_before_a_generous_limit(self) -> None:
         # The reason the ceiling could not simply be replaced by a line count:

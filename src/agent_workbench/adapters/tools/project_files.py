@@ -78,6 +78,7 @@ from agent_workbench.ports.project_files import (
     ProjectFileEntry,
     ProjectFileStore,
     ProjectFileVersion,
+    ProjectListing,
 )
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
@@ -294,9 +295,11 @@ class ProjectReadTool:
             name=READ_TOOL_NAME,
             description=(
                 "Read one text file from this project's directory by its path "
-                "relative to the project root. A long file comes back one "
-                "window at a time; the reply says which lines it gave you and "
-                "which offset continues from there."
+                "relative to the project root. Omit 'offset' and 'limit' unless "
+                "you want one specific region: without them a read brings back "
+                "everything up to a large ceiling, and only a file past that "
+                "ceiling comes back as a window. The reply says which lines it "
+                "gave you, why it stopped, and which offset continues."
             ),
             input_schema={
                 "type": "object",
@@ -662,6 +665,34 @@ class _Corpus:
     unread: tuple[str, ...]
 
 
+async def _single_file_listing(
+    store: ProjectFileStore, path: str
+) -> ProjectListing | None:
+    """``path`` as a listing of one file, or ``None`` when it is not one.
+
+    Asked of the parent directory rather than by reading the file, and that is
+    the whole reason this is not two lines inside the handler: the corpus
+    reader downstream needs `size_bytes` to spend its budget, and learning it
+    by reading the file would read every searched file twice -- once to find
+    out how big it is, once to search it.
+
+    ``None`` for everything that is not a plain file in its parent: a missing
+    path, a directory (which `walk` would have handled), a parent that is
+    itself not a directory. The caller then reports the original refusal, so a
+    genuinely wrong path still says so.
+    """
+
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    try:
+        listing = await store.list_directory(parent)
+    except (ProjectPathError, NotFoundError):
+        return None
+    for entry in listing.entries:
+        if entry.path == path and entry.kind == "file":
+            return ProjectListing(path=path, entries=(entry,))
+    return None
+
+
 async def _read_corpus(
     store: ProjectFileStore, candidates: Sequence[ProjectFileEntry]
 ) -> _Corpus:
@@ -791,7 +822,8 @@ class ProjectGrepTool:
             description=(
                 "Search this project's files for lines matching a regular "
                 "expression and return where they are. Give 'path' to search "
-                "one subdirectory instead of the whole project, and 'name_glob' "
+                "one subdirectory -- or one file -- instead of the whole "
+                "project, and 'name_glob' "
                 "to restrict it to matching paths such as '*.py' -- the glob is "
                 "matched against the whole project-relative path, so '*' "
                 "crosses directories. Generated directories (.git, node_modules, "
@@ -847,8 +879,24 @@ class ProjectGrepTool:
 
         try:
             listing = await store.walk(path)
-        except (ProjectPathError, NotFoundError) as error:
+        except ProjectPathError as error:
             return _refusal(invocation, error)
+        except NotFoundError as error:
+            # `path` may name a file rather than a directory, and searching one
+            # file is the most ordinary thing a model does after writing it.
+            # Before this, `walk` answered `not a directory: 'mario.html'` --
+            # a sentence that reads like the file is missing, about a file the
+            # model had written four calls earlier.
+            #
+            # Measured 2026-09-12 on Windows: a turn tried it twice, got that
+            # sentence twice, and fell back to walking the file by hand in
+            # 40-line `project_read` windows -- twenty-eight of them, which is
+            # most of a 60-step budget. Two of those steps were this refusal;
+            # the other twenty-six were what it did instead.
+            single = await _single_file_listing(store, path)
+            if single is None:
+                return _refusal(invocation, error)
+            listing = single
 
         candidates = [
             entry
