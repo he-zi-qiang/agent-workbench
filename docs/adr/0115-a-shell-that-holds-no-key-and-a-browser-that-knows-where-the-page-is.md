@@ -183,7 +183,7 @@ ADR-0058 那个失败。两个世界共享每一句必须说的话——用户�
 - **浏览器仍是 ADR-0113 的那个浏览器**：`internal` 网络、守卫代理。项目页面经 `file://` 打开，
   页面里若引外部资源照旧被守卫判。
 - **`test_computer_consent.py` 在 Windows 上弹真实对话框**（ADR-0114 §4 记的）——本批的全量
-  排除了它，另一段会话正在修。
+  排除了它，另一段会话已修（第八十批）。
 - **schema 抬到 `1.20`**，`config.default.toml` 与三条测试跟着改。`docs/configuration.md` 记行。
 
 ## 5. 证据
@@ -201,4 +201,4 @@ ADR-0058 那个失败。两个世界共享每一句必须说的话——用户�
 - `tests/config/test_compose_profile.py`、`tests/config/test_settings.py`：profile 开了 shell、
   两个开关留给 launcher、两个环境变量能压过 profile、`runner.enabled` 不带 shell 被拒。
 - `tests/application/test_code_session.py`：`_HAS_SHELL` 说出两个地方、`_BROWSER` 说出相对路径。
-- 装配验证记在 status.md 第八十批。
+- 装配验证记在 status.md 第八十一批。
