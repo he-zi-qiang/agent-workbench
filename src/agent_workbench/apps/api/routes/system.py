@@ -414,6 +414,15 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
     code_sandbox = dependencies.serves_code and config.code.sandbox_enabled
     code_host_commands = dependencies.serves_code and config.code.host_commands_enabled
     code_web_search = dependencies.serves_code and config.code.web_search_enabled
+    # ADR-0116. The same fact `CodeSessionService.unattended_available` is
+    # built from in `dependencies.py`: a configured runner means every
+    # command runs in the container that holds only the project folder. A
+    # row here and not only on the per-session tools offer, because the
+    # console's start screen shows the composer *before* a session exists
+    # and has no offer to read -- measured the night this shipped, the fourth
+    # position was missing exactly on the first turn, which is the one people
+    # send.
+    code_unattended = code_host_commands and config.runner is not None
     layout_available = layout_converter() is not None
     switches = _switch_views(dependencies)
     research_held = (
@@ -603,6 +612,33 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
                     "（ADR-077）；Compose 栈上它跑在 runner 容器里——只挂项目"
                     "目录、不持有 key（ADR-0115）。两边都由配置档 [policy] 的 "
                     "shell_tools_enabled 打开。"
+                )
+            ),
+            provision="install",
+        ),
+        Capability(
+            id="code.unattended",
+            title="编码会话的「放手做」（approvals=unattended）",
+            tier="optional",
+            state="available" if code_unattended else "absent",
+            reason=(
+                ""
+                if code_unattended
+                else "Code 会话没装配起来。"
+                if not dependencies.serves_code
+                else "没有 shell，也就没有可以预先答应的命令。"
+                if not code_host_commands
+                else (
+                    "命令跑在这台机器上，不在 runner 容器里：ADR-0077 那句「跑之前"
+                    "先给人看见」原样成立，这一档不提供（ADR-0116）。"
+                )
+            ),
+            remedy=(
+                ""
+                if code_unattended
+                else (
+                    "只有 Compose 栈提供：[runner] 打开、runner 容器起来，命令的爆炸"
+                    "半径才是一个只挂项目目录的容器（ADR-0115）。"
                 )
             ),
             provision="install",

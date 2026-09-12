@@ -241,4 +241,9 @@ Claude Code 的 auto 模式在这个位置放的是一个模型。本仓库没�
   提供时 200）；`tests/adapters/test_project_file_store.py`（`move` 七条）；
   `tests/adapters/test_project_tools.py`（删与移九条）；前端 `CodePage.test.tsx` 四条、
   `stepGroups.test.ts` 四条。
+- 从控制台真发一轮（2026-09-13，重建后的栈，`run_750c…`）：写、改名、同一条 `wc -l mario.html`
+  两次、删——5 次调用、零张审批卡，第一次命令 `PermissionResolved reason_code=unattended_turn`，
+  第二次 `ToolCompleted replayed=true` 且没有任何 `PermissionResolved`，`RunCompleted`。
+  同一次实测发现起始屏（还没有会话）画不出第四档，当夜以能力清单多一行 `code.unattended` 补上
+  （§2.3 的「在哪提供」由此多了一个读者：起始屏）。
 - 门禁数字见 `docs/status.md` 第八十四批。
