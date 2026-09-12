@@ -2927,3 +2927,147 @@ class TestAConversationThatWasShortenedSaysSo:
         assert run.outcome.status == "cancelled"
         assert run.outcome.stop_reason != "context_limit"
         assert [e for e in run.durable if e.payload.kind == "RunCancelled"]
+
+
+def _asking_many(times: int, tool: str = "read_document") -> FakeModel:
+    """A model that asks `tool` a *different* question every turn.
+
+    The complement of `_repeating`: no two calls share a signature, so the
+    identical-call breaker never sees them, which is exactly the loop
+    ADR-0114 is about -- one tool, a fresh pattern each time, in pursuit of an
+    answer that tool cannot give.
+    """
+
+    return FakeModel(
+        [
+            ScriptedTurn(
+                text="Let me narrow it.",
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_{turn}",
+                        tool_name=tool,
+                        arguments={"document_id": f"doc_{turn}"},
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for turn in range(times)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+
+def _tool_texts(model: FakeModel) -> list[str]:
+    """Every tool result the model was shown, in order, as its last request
+    carried them -- which is what the model actually read."""
+
+    return [
+        block.text
+        for message in model.requests[-1].messages
+        for block in message.content
+        if isinstance(block, ToolResultBlock)
+    ]
+
+
+def test_the_twenty_fifth_call_of_one_tool_carries_a_nudge() -> None:
+    """ADR-0114. Measured: 74 `project_grep` calls against one file, each
+    pattern different, bisecting a string's length two calls per step until
+    `max_steps`. Nothing in the loop said anything until the step ceiling did,
+    and a step ceiling reads as the model being incapable."""
+
+    recorder = _Recorder("read_document")
+    model = _asking_many(26)
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=40, max_tool_calls=40)),
+        bindings=[recorder.binding],
+    )
+
+    assert run.outcome.status == "completed"
+    # A nudge, not a refusal: every call still ran.
+    assert len(recorder.calls) == 26
+    texts = _tool_texts(model)
+    assert texts[24].startswith("ok")
+    assert "call 25 of read_document in this run" in texts[24]
+    assert "report what could not be determined" in texts[24]
+    for index, text in enumerate(texts):
+        if index != 24:
+            assert "in this run" not in text, f"result {index} was nudged"
+
+
+def test_a_run_below_the_threshold_is_not_nudged() -> None:
+    """The floor. Twenty-four questions to one tool is a wide exploration,
+    not a loop, and the sentence must not appear in a run that never earned
+    it."""
+
+    model = _asking_many(24)
+
+    _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=40, max_tool_calls=40)),
+        bindings=[_Recorder("read_document").binding],
+    )
+
+    assert all("in this run" not in text for text in _tool_texts(model))
+
+
+def test_two_tools_do_not_add_up_to_one_nudge() -> None:
+    """The count is per tool. A run that reads and searches thirteen times
+    each has asked nobody twenty-five questions."""
+
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="next",
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_{turn}",
+                        tool_name="read_document" if turn % 2 else "grep_document",
+                        arguments={"document_id": f"doc_{turn}"},
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for turn in range(26)
+        ]
+        + [ScriptedTurn(text="Done.", usage=USAGE)]
+    )
+
+    _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=40, max_tool_calls=40),
+            tool_names=("read_document", "grep_document"),
+        ),
+        bindings=[
+            _Recorder("read_document").binding,
+            _Recorder("grep_document").binding,
+        ],
+    )
+
+    assert all("in this run" not in text for text in _tool_texts(model))
+
+
+def test_the_nudge_is_written_to_the_message_and_not_to_the_event() -> None:
+    """`ToolCompleted.output_bytes` describes what the tool answered; the
+    sentence on top is the runtime's, recorded where the runtime writes.
+
+    Asserted so the two cannot drift silently: an operator reading the log
+    sees the tool's own two bytes, and the model read those plus one sentence,
+    and the difference is exactly the nudge."""
+
+    from agent_workbench.domain.events import ToolCompleted
+
+    model = _asking_many(25)
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=40, max_tool_calls=40)),
+        bindings=[_Recorder("read_document").binding],
+    )
+
+    completed = _payloads(run, ToolCompleted)
+    assert len(completed) == 25
+    assert {payload.output_bytes for payload in completed} == {len("ok")}
+    assert len(_tool_texts(model)[24]) > len("ok")

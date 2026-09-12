@@ -505,3 +505,20 @@ class TestAReportIsClippedFromTheEnd:
 
         assert report == "short"
         assert clipped is False
+
+
+def test_the_explorer_is_told_a_search_does_not_measure() -> None:
+    """ADR-0114. The child holds only the read tools, so the sentence its
+    parent gets (`application/code_prompt.py`) matters more here: a question
+    that needs computation has nowhere else to go, and the measured explorer
+    made 114 `project_grep` calls in 45 steps bisecting a string's length with
+    regex quantifiers -- and got it wrong by the quotes around the literal."""
+
+    from agent_workbench.application.sub_agents import EXPLORER
+
+    assert "A search finds; it does not measure." in EXPLORER.system_prompt
+    assert "do not narrow a question with another search" in EXPLORER.system_prompt
+    # Still the tools it always had: the fix is in what it is told, not in
+    # what it holds. Giving it a tool that computes is a capability change
+    # (F-24 / F-37 / F-39) and wants its own ADR.
+    assert EXPLORER.tool_names == ("project_read", "project_grep", "project_list")

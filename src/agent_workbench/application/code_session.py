@@ -53,6 +53,7 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
     PROJECT_MEMORY_FILE,
     with_browser,
+    with_delegation,
     with_host_commands,
     with_plan_only,
     with_project_memory,
@@ -69,6 +70,7 @@ from agent_workbench.application.workspace import (
     WorkspaceSession,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
+from agent_workbench.domain.agents import DELEGATE_TOOL
 from agent_workbench.domain.artifacts import ArtifactRef
 from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import (
@@ -300,23 +302,29 @@ def _assert_every_prompt_combination_resolves() -> None:
         for gated in (False, True):
             for plan_only in (False, True):
                 for browser in (False, True):
-                    # `with_browser` has no anchor and cannot raise, so this
-                    # loop is not what keeps *it* honest. What it covers is the
-                    # order: run after `with_plan_only` the browser paragraph
-                    # would sit below the sentence that narrows the turn, and a
-                    # base prompt that later grew an anchor for it would find
-                    # the wrong one. Evaluating every combination at import is
-                    # cheaper than remembering that.
-                    base = _system_prompt_for(
-                        names,
-                        external_requires_approval=gated,
-                        plan_only=plan_only,
-                        browser=browser,
-                    )
-                    # The search arm is applied to the same base the service
-                    # applies it to, so a rewriter that cannot find its anchor
-                    # raises here rather than on somebody's turn.
-                    with_web_search(base)
+                    for delegation in (False, True):
+                        # `with_browser` and `with_delegation` have no anchor
+                        # and cannot raise, so this loop is not what keeps
+                        # *them* honest. What it covers is the order: run
+                        # after `with_plan_only` either paragraph would sit
+                        # below the sentence that narrows the turn, and a base
+                        # prompt that later grew an anchor for one of them
+                        # would find the wrong one. Evaluating every
+                        # combination at import is cheaper than remembering
+                        # that. Sixty-four evaluations of a pure function over
+                        # string constants.
+                        base = _system_prompt_for(
+                            names,
+                            external_requires_approval=gated,
+                            plan_only=plan_only,
+                            browser=browser,
+                            delegation=delegation,
+                        )
+                        # The search arm is applied to the same base the
+                        # service applies it to, so a rewriter that cannot
+                        # find its anchor raises here rather than on
+                        # somebody's turn.
+                        with_web_search(base)
 
 
 async def _project_memory(store: ProjectFileStore | None) -> str | None:
@@ -365,6 +373,7 @@ def _system_prompt_for(
     plan_only: bool = False,
     write_gate: bool = False,
     browser: bool = False,
+    delegation: bool = False,
     memory: str | None = None,
 ) -> str:
     """What this turn is told about the world it is in.
@@ -416,6 +425,14 @@ def _system_prompt_for(
     # place the naming scheme is written down.
     if browser:
         base = with_browser(base)
+    # The same slot as the browser, for the same reason (ADR-0114). Read off
+    # `tool_names` at the call site rather than off the service's
+    # `delegation_enabled`, because a caller's selection (ADR-096) can untick
+    # `delegate_agent` from a deployment that offers it, and a turn told how to
+    # weigh a tool it is not holding is the failure this function exists to
+    # avoid -- from the cheap side, but the same side.
+    if delegation:
+        base = with_delegation(base)
     if plan_only:
         base = with_plan_only(base)
     # After `with_plan_only`, and only ever without it: a plan turn holds no
@@ -1536,6 +1553,9 @@ class CodeSessionService:
                 # is not holding is the failure `_system_prompt_for` exists
                 # to avoid.
                 browser=any(name in tool_names for name in self.browser_tools()),
+                # Same rule: what the turn holds, not what the deployment
+                # configured. `kept` may have removed it a few lines up.
+                delegation=DELEGATE_TOOL in tool_names,
                 memory=memory,
             ),
             messages=(*history, asked),

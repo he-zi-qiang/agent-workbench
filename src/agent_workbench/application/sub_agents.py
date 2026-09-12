@@ -136,7 +136,20 @@ EXPLORER: Final = SubAgentDefinition(
         "and do not describe a file you did not open -- the run that sent you "
         "is going to act on your answer and cannot tell a read line from a "
         "remembered one. If the directory does not answer the question, say "
-        "which part is unanswered."
+        "which part is unanswered. "
+        # ADR-0114. The same sentence `application/code_prompt.py` gives the
+        # parent, and this child needs it more: it holds *only* the read
+        # tools, so a question that needs computation has nowhere else to go.
+        # Measured 2026-09-12: an explorer asked to audit one file's row
+        # lengths made 114 `project_grep` calls in 45 steps, bisecting a run
+        # length with regex quantifiers, and reported counts that were off by
+        # the quotes and indentation the source line carries around the
+        # literal.
+        "A search finds; it does not measure. `project_grep` matches whole "
+        "source lines, indentation and quotes included, so it cannot tell you "
+        "the length of a string or count anything for you. Read the exact "
+        "lines and reason from them once, say that the answer was read rather "
+        "than computed, and do not narrow a question with another search."
     ),
     tool_names=("project_read", "project_grep", "project_list"),
 )
