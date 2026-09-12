@@ -27,9 +27,11 @@ from agent_workbench.adapters.policy import EnvelopePolicyEngine
 from agent_workbench.adapters.tools import StaticToolRegistry
 from agent_workbench.adapters.tools.delegate import DelegateTool
 from agent_workbench.adapters.tools.project_files import (
+    ProjectDeleteTool,
     ProjectEditTool,
     ProjectGrepTool,
     ProjectListTool,
+    ProjectMoveTool,
     ProjectReadTool,
     ProjectRunTool,
     ProjectWriteTool,
@@ -123,6 +125,8 @@ class _Harness:
                 ProjectWriteTool(self.project_scope, self.receipts).binding(),
                 ProjectEditTool(self.project_scope, self.receipts).binding(),
                 ProjectGrepTool(self.project_scope).binding(),
+                ProjectDeleteTool(self.project_scope, self.receipts).binding(),
+                ProjectMoveTool(self.project_scope, self.receipts).binding(),
                 ProjectRunTool(
                     self.project_scope, self.receipts, environment={}
                 ).binding(),
@@ -1878,3 +1882,140 @@ def test_a_turn_holding_the_browser_is_told_to_open_its_file_by_relative_path() 
     assert "`workspace_path`" in prompt
     assert "not an absolute path" in prompt
     assert "same relative path you" in prompt
+
+
+def test_an_unattended_turn_keeps_its_tools_and_answers_the_gate_in_advance() -> None:
+    """ADR-0116. The third position on ADR-087's axis, and what it does not do.
+
+    Three claims, each the negation of a plausible wrong implementation. The
+    tool list is identical to the standard turn's (it is not a fourth plan
+    mode). `destructive` is still in `approval_required_risks` (the position
+    did not drop the gate; it answered it, and `code_approval_risks` still only
+    adds). And the envelope carries `unattended=True`, which is the one thing
+    that distinguishes the turn -- read by the policy engine, which still
+    holds the shapes in `domain/commands.py`.
+    """
+
+    from agent_workbench.application.code_session import CODE_PROJECT_TOOLS_WITH_RUN
+
+    def observed(approvals: Any) -> Any:
+        harness = _Harness(_writes("notes.md", "hello", "Done."))
+        recording = _Recording()
+        harness.service.executor_for = lambda _scope: recording  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.tool_names = CODE_PROJECT_TOOLS_WITH_RUN  # pyright: ignore[reportAttributeAccessIssue]
+        harness.service.unattended_available = True  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def scenario() -> Any:
+            session_id = await harness.opened()
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id="run_1",
+                    approvals=approvals,
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+            return recording.requests[0]
+
+        return _run(scenario)
+
+    standard = observed("standard")
+    unattended = observed("unattended")
+
+    assert list(unattended.tool_names) == list(standard.tool_names)
+    assert unattended.envelope.max_tool_risk == standard.envelope.max_tool_risk
+    assert "destructive" in unattended.envelope.approval_required_risks
+    assert unattended.envelope.approval_required_risks == (
+        standard.envelope.approval_required_risks
+    )
+    assert standard.envelope.unattended is False
+    assert unattended.envelope.unattended is True
+
+    # The prompt stops claiming a person sees each command first, and says
+    # what still stops -- in words, the same list the engine holds.
+    assert "Every\ncall stops and asks them" in standard.system_prompt
+    assert "Every\ncall stops and asks them" not in unattended.system_prompt
+    assert "Nobody is watching this turn run" in unattended.system_prompt
+    assert "removing the whole directory" in unattended.system_prompt
+    assert "Nobody is watching" not in standard.system_prompt
+
+
+def test_the_unattended_position_is_refused_where_the_shell_is_the_host() -> None:
+    """ADR-0116. Offered only where commands run in the runner container.
+
+    Refused before the transcript is touched: a turn that never started must
+    not leave the instruction standing with no answer under it, which is the
+    duplicate-on-retry shape the route's own refusals avoid.
+    """
+
+    from agent_workbench.application.code_session import (
+        CodeUnattendedNotOfferedError,
+    )
+
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    assert harness.service.unattended_available is False
+
+    async def scenario() -> list[str]:
+        session_id = await harness.opened()
+        with pytest.raises(CodeUnattendedNotOfferedError):
+            await harness.service.ask(
+                CodeRequest(
+                    session_id=session_id,
+                    instruction="add a feature",
+                    principal=WRITER,
+                    run_id="run_1",
+                    approvals="unattended",
+                ),
+                harness.sink(session_id, "run_1"),
+                NullCancellationToken(),
+            )
+        history = await harness.service.history(
+            session_id=session_id, tenant_id=TENANT, principal_id=OWNER
+        )
+        return [message.message.role for message in history]
+
+    assert _run(scenario) == []
+
+
+def test_a_plan_turn_is_never_told_it_runs_unattended() -> None:
+    """A plan turn holds nothing destructive, so nothing was answered in advance."""
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        _system_prompt_for,
+    )
+
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS_WITH_RUN,
+        external_requires_approval=False,
+        plan_only=True,
+        unattended=True,
+    )
+
+    assert "Nobody is watching this turn run" not in prompt
+
+
+def test_the_project_tools_include_the_two_verbs_a_file_was_missing() -> None:
+    """ADR-0116. `project_delete` and `project_move` are on every project turn."""
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        CODE_PROJECT_TOOLS_WITH_RUN,
+    )
+
+    assert "project_delete" in CODE_PROJECT_TOOLS
+    assert "project_move" in CODE_PROJECT_TOOLS
+    assert "project_delete" in CODE_PROJECT_TOOLS_WITH_RUN
+    # And a plan turn loses both, by their own risk rather than by name
+    # (ADR-0079): a delete is destructive, a move writes.
+    harness = _Harness(_writes("notes.md", "hello", "Done."))
+    risks = harness.service._risks()
+    assert risks["project_delete"] == "destructive"
+    assert risks["project_move"] == "write"
+    from agent_workbench.application.code_session import read_only
+
+    assert "project_delete" not in read_only(CODE_PROJECT_TOOLS, risks=risks)
+    assert "project_move" not in read_only(CODE_PROJECT_TOOLS, risks=risks)

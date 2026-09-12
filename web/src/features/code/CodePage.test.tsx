@@ -116,6 +116,8 @@ vi.mock("../../api/client", async () => ({
 const TOOL_OFFER = {
   surface: "project" as const,
   approval_required_risks: ["destructive" as const],
+  // 原生路径的形状：命令跑在这台机器上，「放手做」不提供（ADR-0116）。
+  unattended_available: false,
   tools: [
     {
       name: "project_read",
@@ -3869,6 +3871,98 @@ describe("CodePage 的自动预览", () => {
     await nextFrame();
     expect(
       screen.queryByRole("region", { name: "文件 main.py" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+
+describe("CodePage 的「放手做」", () => {
+  // ADR-0116。第四档只在目录说提供的时候画：原生路径上命令跑在这台机器上，
+  // ADR-077 那句话原样成立，读者看到的仍然是三档。画了又换来 422 的按钮，教给
+  // 读者的是错的规则。
+  it("目录说不提供时，输入框旁边没有这一档", async () => {
+    mounted();
+    await screen.findByRole("button", { name: "自动改动" });
+    expect(
+      screen.queryByRole("button", { name: "放手做" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("目录说提供时画出来，选它就把 unattended 随这一轮发出去", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeTools).mockResolvedValue({
+      ...TOOL_OFFER,
+      unattended_available: true,
+    });
+    vi.mocked(askCode).mockResolvedValue({
+      report: "跑完了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: "放手做" }));
+    await user.type(screen.getByLabelText("要做的事"), "把测试跑绿");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    // 工具清单不收窄（它不是第二个计划模式），只换「谁来拍板」。
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("unattended");
+  });
+
+  it("选了「放手做」，工具清单里的命令不再说「会先问你」", async () => {
+    // 服务端的风险表照旧含 `destructive`；变的是那道门被预先答了。清单上那句
+    // 「会先问你」说的是这一轮的体验，所以随这一档一起消失——例外那几种形状
+    // 由审批卡在真的拦下来的时候再说。
+    const user = userEvent.setup();
+    vi.mocked(getCodeTools).mockResolvedValue({
+      ...TOOL_OFFER,
+      unattended_available: true,
+    });
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: "放手做" }));
+    await user.click(
+      await screen.findByRole("button", { name: "添加文件、文件夹与工具" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: /工具/ }));
+    expect(
+      await screen.findByRole("menuitemcheckbox", { name: /project_run/ }),
+    ).not.toHaveTextContent("会先问你");
+  });
+
+  it("不可撤销的调用也能「本会话都允许」了", async () => {
+    // ADR-0116：长期规则按参数摘要记，所以答应的是这一条命令，不是这件工具。
+    // 有人一晚上点了十次同一张卡之后，这就是那颗该有的按钮。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockImplementation(() => new Promise(() => undefined));
+    vi.mocked(getCodeApprovals).mockResolvedValue({
+      approvals: [
+        {
+          approval_id: "apr_run",
+          tool_name: "project_run",
+          argument_digest: "c".repeat(64),
+          approval_preview: '{"command":"pytest -q"}',
+          risk: "destructive",
+        },
+      ],
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "run the tests");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const held = await screen.findByRole("region", { name: "待批准的调用" });
+    expect(
+      within(held).getByRole("button", { name: "本会话都允许" }),
+    ).toBeInTheDocument();
+    expect(
+      within(held).queryByText("这一类调用每次都要单独问，不能一次答应整个会话。"),
     ).not.toBeInTheDocument();
   });
 });

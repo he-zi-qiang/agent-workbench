@@ -40,6 +40,7 @@ from agent_workbench.application.code_session import (
     CodeRunRefusedError,
     CodeRunUnavailableError,
     CodeTurnBusyError,
+    CodeUnattendedNotOfferedError,
 )
 from agent_workbench.application.tasks import TimelineUnavailableError
 from agent_workbench.application.uploads import UploadVerificationError
@@ -131,6 +132,12 @@ ERROR_STATUS: Mapping[type[Exception], int] = {
     CitationSourceUnavailableError: 503,
     CodeRunNotPermittedError: 403,
     CodeRunRefusedError: 409,
+    # A request body this deployment cannot build a turn from (ADR-0116):
+    # the unattended position, asked of a process whose shell is the host.
+    # 422 like `ToolInputInvalidError`, because that is what it is -- the
+    # body named a value the process does not accept -- and unlike the 503
+    # two lines up, because nothing here is waiting to be turned on.
+    CodeUnattendedNotOfferedError: 422,
     # A request that named something this endpoint has nothing to do
     # with -- a `.md` handed to the runner. The runtime catches this
     # class on the tool path, so mapping it here reaches only the

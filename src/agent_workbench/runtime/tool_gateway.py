@@ -1115,22 +1115,93 @@ class ToolGateway:
         return None
 
     def _risk_of(self, call: ToolCall) -> ToolRisk | None:
-        binding = self._registry.get(call.tool_name)
+        return self.risk_of(call.tool_name)
+
+    def risk_of(self, name: str) -> ToolRisk | None:
+        """A registered tool's declared risk, or ``None`` for a name not here.
+
+        Public for one caller (ADR-0116): the runtime's repeat rule needs to
+        know whether a batch dispatched anything that could have changed what
+        a later call would answer, and "could have" is exactly what a tool's
+        risk declares. Read from the registry rather than from the run's
+        advertised specs, because a call the run was never offered still
+        reaches the batch and still has a risk.
+        """
+
+        binding = self._registry.get(name)
         return binding.spec.risk if binding is not None else None
 
-    async def _record(self, result: ToolResult, *, sink: EventSink) -> None:
+    async def replay(
+        self,
+        call: ToolCall,
+        earlier: ToolResult,
+        *,
+        note: str,
+        sink: EventSink,
+    ) -> ToolResult:
+        """Answer a repeated call from what the same call answered before.
+
+        The result is the earlier one re-keyed to this call's id, carrying
+        `note` where the model will read it -- appended to the content of a
+        success, folded into the message of a failure, because
+        `ToolResultBlock.from_tool_result` renders an error's text only when
+        the content is empty and a note appended there would replace the
+        refusal it was meant to annotate.
+
+        **What is not carried is the writes.** `workspace_writes`,
+        `workspace_write_refs` and `project_writes` are facts about what a
+        step bound to new bytes (ADR-063, ADR-086), and this step bound
+        nothing: a console that refetched a file on the strength of a replayed
+        write would be reporting a write that did not happen. The artifact
+        reference and the truncation flag *are* carried -- they describe the
+        answer, and the answer is the same.
+
+        The event says so. `replayed=True` on the completion is what lets a
+        reader of the stream tell a step that ran from one the runtime
+        answered on the tool's behalf; without it the two are one row apart
+        and identical, and the person who watched ten approval cards for one
+        command would have no way to see that the eleventh cost nobody
+        anything.
+        """
+
+        if earlier.error is not None:
+            result = ToolResult.failed(
+                call,
+                earlier.error.model_copy(
+                    update={"message": earlier.error.message + note}
+                ),
+                content=earlier.content,
+                duration_ms=0,
+                truncated=earlier.truncated,
+            )
+        else:
+            result = ToolResult.succeeded(
+                call,
+                content=earlier.content + note,
+                artifact=earlier.artifact,
+                duration_ms=0,
+                truncated=earlier.truncated,
+            )
+        await self._record(result, sink=sink, replayed=True)
+        return result
+
+    async def _record(
+        self, result: ToolResult, *, sink: EventSink, replayed: bool = False
+    ) -> None:
         if result.status == "error" and result.error is not None:
             await sink.emit(
                 ToolFailed(
                     tool_call_id=result.tool_call_id,
                     error=result.error,
                     duration_ms=result.duration_ms or 0,
+                    replayed=replayed,
                 )
             )
             return
         await sink.emit(
             ToolCompleted(
                 tool_call_id=result.tool_call_id,
+                replayed=replayed,
                 duration_ms=result.duration_ms or 0,
                 output_bytes=len(result.content.encode("utf-8")),
                 # Behind the same flag as `argument_preview` in `propose`

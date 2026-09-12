@@ -72,9 +72,11 @@ from agent_workbench.adapters.tools.knowledge_search import (
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
 from agent_workbench.adapters.tools.mcp_workspace import bind_results_into_workspace
 from agent_workbench.adapters.tools.project_files import (
+    ProjectDeleteTool,
     ProjectEditTool,
     ProjectGrepTool,
     ProjectListTool,
+    ProjectMoveTool,
     ProjectReadTool,
     ProjectRunTool,
     ProjectWriteTool,
@@ -1629,6 +1631,11 @@ def _assemble_chat(
         ProjectWriteTool(code_project_scope, code_read_receipts).binding(),
         ProjectEditTool(code_project_scope, code_read_receipts).binding(),
         ProjectGrepTool(code_project_scope).binding(),
+        # The two verbs the file language was missing (ADR-0116): a file that
+        # could be written and read but not renamed or removed was a
+        # directory the model could only ever add to.
+        ProjectDeleteTool(code_project_scope, code_read_receipts).binding(),
+        ProjectMoveTool(code_project_scope, code_read_receipts).binding(),
         # Registered whatever the policy says, like every other binding here.
         # What `policy.shell_tools_enabled` decides is whether the name reaches
         # a turn's `allowed_tools`; registration only says this process knows
@@ -1919,6 +1926,13 @@ def _assemble_chat(
                 *((DELEGATE_TOOL,) if _code_delegate_spec_binding else ()),
             ),
             external_requires_approval=config.code.external_requires_approval,
+            # ADR-0116. The same fact `ProjectRunTool` above was built from:
+            # a configured runner means every command runs in the container
+            # that holds only the project folder, which is the condition the
+            # unattended position was argued from. Read off the projection
+            # rather than off the slot, because the slot is empty until
+            # `startup` and this is assembled before it.
+            unattended_available=config.runner is not None,
             # ADR-085. Projected as "the flag is on **and** a provider is
             # configured" (`bootstrap/projections.py`), so this cannot offer a
             # name the registry above has no binding for.

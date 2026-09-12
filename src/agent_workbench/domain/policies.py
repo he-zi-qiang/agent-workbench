@@ -78,6 +78,22 @@ class AuthorizationEnvelope(VersionedModel):
         "external",
         "destructive",
     )
+    #: Whether a destructive call this envelope would stop at a person is
+    #: instead permitted by the submitter's own standing answer (ADR-0116).
+    #:
+    #: A second field rather than `destructive` leaving
+    #: `approval_required_risks`, and the difference is what it lets the
+    #: policy engine say. With the risk removed, every command would be
+    #: permitted and nothing could be held back; with the risk kept and this
+    #: set, the engine asks one more question of the *arguments* --
+    #: `domain/commands.py` -- and the shapes that would cost the user their
+    #: work still stop. So "unattended" is exact: the same gate, answered
+    #: in advance for every call it cannot name a reason to hold.
+    #:
+    #: It says nothing about `external`. A question that leaves this process
+    #: is the deployment's to gate (ADR-058), and a submitter who wants no
+    #: questions about the network is asking the deployment, not the run.
+    unattended: bool = False
 
     @field_validator("allowed_tools", "denied_tools")
     @classmethod
@@ -105,6 +121,17 @@ class AuthorizationEnvelope(VersionedModel):
 
     def requires_approval(self, spec: ToolSpec) -> bool:
         return spec.risk in self.approval_required_risks
+
+    def answered_in_advance(self, spec: ToolSpec) -> bool:
+        """Whether this envelope's submitter already said yes to calls of ``spec``.
+
+        True only for a destructive tool under an unattended envelope. The
+        arguments are not this method's to read -- it is a statement about
+        the envelope, and the shape check that can still hold a call back is
+        the policy engine's, which has the call.
+        """
+
+        return self.unattended and spec.risk == "destructive"
 
 
 class ExecutionContext(VersionedModel):

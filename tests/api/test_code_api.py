@@ -57,6 +57,7 @@ from agent_workbench.application.code_session import (
     CodeRunUnavailableError,
     CodeSessionService,
     CodeTurnBusyError,
+    CodeUnattendedNotOfferedError,
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.apps.api.dependencies import build_dependencies
@@ -235,6 +236,7 @@ class _World:
         principal: object | None = None,
         serves_code: bool = True,
         sandbox: object | None = None,
+        unattended_available: bool = False,
     ) -> None:
         self.conversations = InMemoryConversationStore()
         # Held rather than built inline: an executor that writes files has to
@@ -252,6 +254,10 @@ class _World:
             turn_timeout_seconds=60,
             max_concurrent_turns=max_concurrent_turns,
             clock=lambda: datetime.now(UTC),
+            # ADR-0116. Off by default, the way the service defaults it: a
+            # harness whose shell is nowhere is a deployment whose shell is
+            # the host, and the route has to refuse the position there.
+            unattended_available=unattended_available,
             # The five workspace tools, which is what this harness's fake
             # executor stands in for. Read for the envelope's ceiling and for
             # plan mode's narrowing (ADR-0079), both of which come from the
@@ -312,6 +318,7 @@ class _World:
             CodeRunNotPermittedError,
             CodeRunRefusedError,
             CodeRunUnavailableError,
+            CodeUnattendedNotOfferedError,
             ApprovalNotPendingError,
             StandingApprovalRefusedError,
         ):
@@ -740,6 +747,7 @@ def test_the_status_codes_come_from_the_application_table() -> None:
     assert ERROR_STATUS[CodeTurnBusyError] == 409
     assert ERROR_STATUS[CodeCapacityError] == 429
     assert ERROR_STATUS[StandingApprovalRefusedError] == 422
+    assert ERROR_STATUS[CodeUnattendedNotOfferedError] == 422
     assert cast(int, ERROR_STATUS[NotFoundError]) == 404
 
 
@@ -1982,3 +1990,105 @@ def test_the_same_selection_without_plan_mode_still_runs() -> None:
 
     assert answered.status_code == 200
     assert answered.json()["allowed_tools"] == ["workspace_edit", "workspace_write"]
+
+
+# --- the unattended position and the standing yes for a command (ADR-0116) ---
+
+
+def test_a_standing_yes_is_accepted_for_a_destructive_tool() -> None:
+    """The rule is keyed by the arguments, so a yes to a command is a yes to
+    that command -- `pytest` after every edit -- and not to the tool."""
+
+    world = _World()
+    scope = ApprovalScope(tenant_id=TENANT, session_id="ses_code_1", principal_id=OWNER)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, tuple[str, str]]:
+        gate = world.approvals.gate_for(scope)
+        held = asyncio.ensure_future(
+            gate.request(
+                approval_id="apr_1",
+                tool_call_id="toolu_1",
+                tool_name="project_run",
+                argument_digest="c" * 64,
+                approval_preview='{"command":"pytest -q"}',
+                risk="destructive",
+                required_scopes=(),
+                timeout_seconds=5.0,
+            )
+        )
+        await asyncio.sleep(0)
+        standing = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/ses_code_1/approvals/apr_1",
+            headers=HEADERS,
+            json={"decision": "approve_for_session"},
+        )
+        decided = await asyncio.wait_for(held, timeout=5.0)
+        return standing.status_code, decided
+
+    standing, decided = _run(world, scenario)
+
+    assert standing == 200
+    assert decided == ("approve_for_session", "human")
+    # And the next identical command is answered by the rule, without a card.
+    assert world.approvals.has_standing_rule(scope, "project_run", "c" * 64)
+    assert not world.approvals.has_standing_rule(scope, "project_run", "d" * 64)
+
+
+def test_the_unattended_position_is_a_422_where_the_shell_is_the_host() -> None:
+    """The refusal lands before the transcript is touched, so a retry is not
+    a duplicate; and `GET .../tools` said in advance that it would land."""
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bool, int, int]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        catalogue = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/tools",
+            headers=HEADERS,
+        )
+        refused = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers={**HEADERS, "Idempotency-Key": "turn-1"},
+            json={"instruction": "clean up", "approvals": "unattended"},
+        )
+        transcript = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers=HEADERS,
+        )
+        return (
+            refused.status_code,
+            catalogue.json()["unattended_available"],
+            len(transcript.json()["messages"]),
+            world.executor.runs,
+        )
+
+    status, offered, messages, runs = _run(world, scenario)
+
+    assert status == 422
+    assert offered is False
+    assert messages == 0
+    assert runs == 0
+
+
+def test_the_unattended_position_is_accepted_where_the_catalogue_offers_it() -> None:
+    world = _World(unattended_available=True)
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[int, bool]:
+        created = await _opened(client)
+        session_id = created.json()["session_id"]
+        catalogue = await client.get(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/tools",
+            headers=HEADERS,
+        )
+        answered = await client.post(
+            f"{code_route.CODE_PREFIX}/sessions/{session_id}/messages",
+            headers={**HEADERS, "Idempotency-Key": "turn-1"},
+            json={"instruction": "clean up", "approvals": "unattended"},
+        )
+        return answered.status_code, catalogue.json()["unattended_available"]
+
+    status, offered = _run(world, scenario)
+
+    assert status == 200
+    assert offered is True

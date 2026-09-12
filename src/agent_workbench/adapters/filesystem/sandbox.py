@@ -246,6 +246,36 @@ class ProjectSandbox:
                 os.unlink(temporary)
             raise
 
+    def rename(self, relative: str, new_relative: str) -> None:
+        """Move one file to a new name inside the root, refusing to land on anything.
+
+        Both ends are checked the way a write's leaf is: the source is renamed
+        by its literal path, so a symlink moves as a link rather than as the
+        file it points at, and the destination must be empty -- ``os.rename``
+        on POSIX silently replaces an existing target, which would make "move
+        a over b" a way to lose b with no read of it anywhere in the turn. The
+        window between the check and the rename is the same one ``write``'s
+        ``create_only`` has and is named rather than closed (ADR-0078): a
+        process-external save into that window is somebody else at work on
+        the same directory.
+
+        Files only, for the reason ``FilesystemProjectFileStore.delete`` gives:
+        a directory move is a recursive effect behind a method named for a
+        single file, and the read receipts the tool layer carries across a
+        move are per file.
+        """
+
+        source, _ = self._checked(relative)
+        target, _ = self._checked(new_relative)
+        if source.is_dir() and not source.is_symlink():
+            raise ProjectSandboxError(f"not a file: {relative!r}")
+        if not source.is_symlink() and not source.exists():
+            raise FileNotFoundError(relative)
+        if target.is_symlink() or target.exists():
+            raise FileExistsError(new_relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source, target)
+
     def open_for_read(self, relative: str) -> BinaryIO:
         """A handle on a file, with the leaf link refused before it is opened.
 

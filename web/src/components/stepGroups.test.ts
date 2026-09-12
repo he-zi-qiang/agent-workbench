@@ -500,3 +500,65 @@ describe("浏览器的六个工具各有自己的中文说法", () => {
     expect(result[0]?.subject).toBe("http://127.0.0.1:5173/");
   });
 });
+
+
+describe("项目目录的两个新动词，和沿用上次结果的那一行（ADR-0116）", () => {
+  it.each([
+    ["project_delete", "删除项目目录文件"],
+    ["project_move", "移动项目目录文件"],
+  ])("%s 那一行叫「%s」", (toolName, title) => {
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: toolName,
+        argument_preview: '{"path":"old.md"}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+    ]);
+
+    expect(result[0]?.title).toBe(title);
+    expect(result[0]?.subject).toBe("old.md");
+  });
+
+  it("运行时替工具作答的那一次，标题上说沿用了上次结果", () => {
+    // 一条和上一次一模一样、中间什么也没跑的调用，运行时直接把上一次的结果再给
+    // 一遍。不说的话，读者看见的是两行一样的「在本机执行命令」，而第二行其实谁也
+    // 没打扰——这正是点过十张审批卡的人最想一眼看出来的差别。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "project_run",
+        argument_preview: '{"command":"pytest -q"}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+      event("ToolProposed", {
+        tool_call_id: "call_2",
+        tool_name: "project_run",
+        argument_preview: '{"command":"pytest -q"}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_2", replayed: true }),
+    ]);
+
+    expect(result[0]?.title).toBe("在本机执行命令");
+    expect(result[1]?.title).toBe("在本机执行命令（沿用上次结果）");
+    expect(result[1]?.outcome).toBe("ok");
+  });
+
+  it("沿用的如果是一次拒绝，那一行也说沿用，并且还是失败", () => {
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_2",
+        tool_name: "project_grep",
+        argument_preview: '{"query":"x"}',
+      }),
+      event("ToolFailed", {
+        tool_call_id: "call_2",
+        replayed: true,
+        error: { code: "policy_denied", message: "not offered" },
+      }),
+    ]);
+
+    expect(result[0]?.title).toBe("搜索项目目录（沿用上次结果）");
+    expect(result[0]?.outcome).toBe("failed");
+  });
+});

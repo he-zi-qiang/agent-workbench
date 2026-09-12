@@ -57,6 +57,7 @@ from agent_workbench.application.code_prompt import (
     with_host_commands,
     with_plan_only,
     with_project_memory,
+    with_unattended,
     with_write_gate,
 )
 from agent_workbench.application.file_read_receipts import ReadReceipts
@@ -150,9 +151,11 @@ CODE_TOOLS: tuple[ToolName, ...] = (
 #: search, on every reply including "No matches" -- that sentence is the
 #: feature, and the matching is the part that was already written.
 CODE_PROJECT_TOOLS: tuple[ToolName, ...] = (
+    "project_delete",
     "project_edit",
     "project_grep",
     "project_list",
+    "project_move",
     "project_read",
     "project_write",
 )
@@ -325,6 +328,21 @@ def _assert_every_prompt_combination_resolves() -> None:
                         # find its anchor raises here rather than on
                         # somebody's turn.
                         with_web_search(base)
+                        # And the unattended arm (ADR-0116), which has an
+                        # anchor of its own inside the shell paragraph and
+                        # so can drift the way the search arm can. Evaluated
+                        # with the search arm on top, in the order the
+                        # service composes them.
+                        with_web_search(
+                            _system_prompt_for(
+                                names,
+                                external_requires_approval=gated,
+                                plan_only=plan_only,
+                                unattended=True,
+                                browser=browser,
+                                delegation=delegation,
+                            )
+                        )
 
 
 async def _project_memory(store: ProjectFileStore | None) -> str | None:
@@ -372,6 +390,7 @@ def _system_prompt_for(
     external_requires_approval: bool,
     plan_only: bool = False,
     write_gate: bool = False,
+    unattended: bool = False,
     browser: bool = False,
     delegation: bool = False,
     memory: str | None = None,
@@ -443,6 +462,14 @@ def _system_prompt_for(
     # makes that true of this function on its own.
     if write_gate and not plan_only:
         base = with_write_gate(base)
+    # The other end of the same axis (ADR-0116), excluded from a plan turn
+    # by the same `and`: a turn holding nothing destructive has nothing to
+    # be told is permitted in advance. Mutually exclusive with the write
+    # gate at the call site -- one `CodeApprovals` value per turn -- and the
+    # two `if`s here cannot both fire because the flags are derived from
+    # that one value.
+    if unattended and not plan_only:
+        base = with_unattended(base)
     # Last, and only on the project branch. The note is the user's own words
     # about their own directory, and every paragraph above it is this system's
     # description of the world the turn is in -- so a preference that disagrees
@@ -546,9 +573,15 @@ def code_approval_risks(
     base: tuple[ToolRisk, ...] = (
         ("external", "destructive") if external_requires_approval else ("destructive",)
     )
-    if approvals == "standard":
-        return base
-    return ("write", *base)
+    # `unattended` returns `base` unchanged (ADR-0116): it neither adds a
+    # risk nor removes one, because it is not a change to *which* calls stop
+    # -- it is a standing answer to the ones that would, carried on
+    # `AuthorizationEnvelope.unattended` instead. Written as the positive
+    # case rather than as `!= "standard"`, so a fourth value added later
+    # lands here as "the deployment's floor" and not as "the write gate".
+    if approvals == "before_write":
+        return ("write", *base)
+    return base
 
 
 def code_risk_ceiling(
@@ -619,6 +652,17 @@ class CodeRunRefusedError(RuntimeError):
     """
 
 
+class CodeUnattendedNotOfferedError(RuntimeError):
+    """``approvals="unattended"`` was asked of a deployment whose shell is the host.
+
+    Refused rather than downgraded to `standard`, because the difference is
+    the one the person chose: a turn that silently asked ten questions after
+    being told it would ask none has not honoured the request, it has
+    ignored it. 422, like every other request body this process cannot build
+    a turn from.
+    """
+
+
 class CodeRunNotPermittedError(RuntimeError):
     """The caller does not hold the scope that running code needs.
 
@@ -653,14 +697,22 @@ CodeMode = Literal["act", "plan"]
 #: apart again at the one place it is used, and the two halves would then be
 #: derived from one value that names neither of them.
 #:
-#: There is no third position, and the missing one is the interesting one.
-#: "Ask me about nothing" would have to drop `destructive`, and `destructive`
-#: is `project_run` -- a command on the user's own machine, which ADR-077 says
-#: is shown before it is run. So this axis may only **add** to what the
-#: deployment already gates, never subtract, exactly as plan mode may only
-#: narrow the tool list. A person who wants fewer questions than the ceiling
-#: allows is asking the deployment, not the session.
-CodeApprovals = Literal["standard", "before_write"]
+#: The third position, `unattended`, was refused here until ADR-0116, and the
+#: refusal is worth keeping in the record because the new position honours
+#: it. "Ask me about nothing" would have to drop `destructive`, and
+#: `destructive` was `project_run` -- a command on the user's own machine,
+#: which ADR-077 says is shown before it is run. Two things changed. ADR-0115
+#: put the command in a container that mounts the project folder and holds
+#: nothing else, so on that path "the user's own machine" stopped being what
+#: the sentence protects; and `unattended` does not drop `destructive` from
+#: `approval_required_risks` at all -- `code_approval_risks` still only adds.
+#: It sets `AuthorizationEnvelope.unattended`, which lets the policy engine
+#: answer the same gate in advance for every call whose arguments give it no
+#: reason to hold (`domain/commands.py` is the list of reasons). The position
+#: is offered only where the shell is that container
+#: (`CodeSessionService.unattended_available`); on the native launcher the
+#: axis is the two-position one ADR-087 argued for, verbatim.
+CodeApprovals = Literal["standard", "before_write", "unattended"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -748,6 +800,11 @@ class CodeToolOffer:
     #: asks for `before_write` gets `write` on top of these, and the console
     #: computes that itself because it is the control that offers it.
     approval_required_risks: tuple[ToolRisk, ...]
+    #: Whether `approvals="unattended"` is a position this deployment offers
+    #: (ADR-0116). Carried here because the composer that shows the position
+    #: reads the offer, and a position it shows and the turn then refuses is
+    #: the 422-shaped button the approval card was careful not to have.
+    unattended_available: bool
 
 
 @dataclass(slots=True)
@@ -801,6 +858,17 @@ class CodeSessionService:
     #: to the settings default rather than contradicting it; the assembly in
     #: `apps/api/dependencies.py` always passes the configured value.
     external_requires_approval: bool = False
+    #: Whether a turn may ask for ``approvals="unattended"`` (ADR-0116).
+    #:
+    #: True only where `project_run` executes in the runner container
+    #: (`config.runner` is set, so `ProjectRunTool` holds a `RunnerSlot`),
+    #: which is the condition the position was argued from: the command's
+    #: reach is one mounted folder with no key, no database and no artifact
+    #: volume beside it. On the native launcher the command is the user's
+    #: own machine, ADR-077's sentence holds in full, and the position is
+    #: not offered -- refused with `CodeUnattendedNotOfferedError` if asked
+    #: for anyway. Defaults to false because absent is the safe reading.
+    unattended_available: bool = False
     #: Whether this session may search the live web (ADR-0085).
     #:
     #: A flag rather than a fifth tuple, and that is the decision rather than a
@@ -1157,6 +1225,19 @@ class CodeSessionService:
     ) -> CodeTurn:
         """Run one turn: append what was asked, work, append the report."""
 
+        # Before admission, because it is about the request and not about the
+        # process's load: a position this deployment does not offer is a
+        # request that cannot become a turn here, whatever else is running
+        # (ADR-0116). Here rather than in `_run`, for the reason the route
+        # gives about its own refusals -- `_run` appends the instruction to
+        # the transcript before it builds anything, and a refusal after that
+        # leaves a question standing with no answer under it.
+        if request.approvals == "unattended" and not self.unattended_available:
+            raise CodeUnattendedNotOfferedError(
+                "this deployment runs commands on the machine the API runs "
+                "on, so an unattended turn is not offered here; it is "
+                "offered where commands run in the runner container"
+            )
         # Admission first, and both checks are fail-fast with no await between
         # test and claim -- which is what makes them atomic here.
         if self._turns >= self.max_concurrent_turns:
@@ -1445,6 +1526,7 @@ class CodeSessionService:
                 "standard",
                 external_requires_approval=self.external_requires_approval,
             ),
+            unattended_available=self.unattended_available,
         )
 
     def _risks(self) -> Mapping[ToolName, ToolRisk]:
@@ -1530,6 +1612,13 @@ class CodeSessionService:
                     request.approvals,
                     external_requires_approval=self.external_requires_approval,
                 ),
+                # The third position (ADR-0116), on its own field rather than
+                # as a subtraction from the tuple above: the risks still say
+                # what *would* stop, and this says the submitter answered
+                # in advance. `ask` has already refused the position where
+                # the deployment does not offer it, so by here it is true
+                # only of a turn whose commands run in the runner container.
+                unattended=request.approvals == "unattended",
             ),
             budget=self.budget.model_copy(
                 update={
@@ -1547,6 +1636,7 @@ class CodeSessionService:
                 external_requires_approval=self.external_requires_approval,
                 plan_only=request.mode == "plan",
                 write_gate=request.approvals == "before_write",
+                unattended=request.approvals == "unattended",
                 # Read off what this turn was actually offered, not off the
                 # service's configuration: a plan turn has had its list
                 # narrowed by risk, and a turn told it can open a browser it
@@ -1600,6 +1690,7 @@ __all__ = [
     "CodeSessionService",
     "CodeTurn",
     "CodeTurnBusyError",
+    "CodeUnattendedNotOfferedError",
     "code_approval_risks",
     "code_risk_ceiling",
     "new_code_session_id",

@@ -126,15 +126,19 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   // a nullable label that also tags conversations and tasks, so 项目文件 would
   // name something that exists with no directory behind it.
   //
-  // Five now, not four. The comment here used to say there is no
-  // `project_grep`, and that stopped being true when one was written --
-  // `CODE_PROJECT_TOOLS` has five entries. A stale absence claim is worse than
-  // a missing phrase: it tells the next reader not to look.
+  // Seven now. The comment here used to say there is no `project_grep`, and
+  // that stopped being true when one was written; then it said five, and
+  // ADR-0116 added the two verbs the file language was missing -- a file
+  // could be written and read but not renamed or removed. `CODE_PROJECT_TOOLS`
+  // is the list to count. A stale absence claim is worse than a missing
+  // phrase: it tells the next reader not to look.
   project_read: "读取项目目录",
   project_write: "写入项目目录",
   project_edit: "修改项目目录文件",
   project_list: "查看项目目录",
   project_grep: "搜索项目目录",
+  project_delete: "删除项目目录文件",
+  project_move: "移动项目目录文件",
   // ADR-082. Without a phrase here the busiest row of a delegating Task read
   // `delegate_agent ×6` -- the raw identifier, in a line whose every other
   // entry was Chinese, naming the one action that makes the Task multi-agent.
@@ -372,12 +376,29 @@ function saidSubject(said: string | null): string | null {
   return line === undefined ? null : fit(line);
 }
 
+/**
+ * 运行时替工具作答的那一次，标题上说出来（ADR-0116）。
+ *
+ * 一条和上一次一模一样、中间什么也没跑的调用，运行时直接把上一次的结果再给一遍，
+ * 不再派发、不再问人。事件上是 `ToolCompleted.replayed`（或 `ToolFailed.replayed`）。
+ * 不说的话，读者看见的是两行一样的「在本机执行命令」，而第二行其实谁也没打扰——
+ * 这正是有人在一晚上点了十张审批卡之后最想一眼看出来的差别。
+ */
+const REPLAYED_SUFFIX = "（沿用上次结果）";
+
+function replayedIn(group: Building): boolean {
+  return group.events.some(
+    (event) => (event.payload as Record<string, unknown>).replayed === true,
+  );
+}
+
 function titleOf(
   group: Building,
   titleFor?: (event: EventEnvelope) => string,
 ): string {
   if (group.toolName !== null) {
-    return TOOL_VERBS[group.toolName] ?? group.toolName;
+    const verb = TOOL_VERBS[group.toolName] ?? group.toolName;
+    return replayedIn(group) ? verb + REPLAYED_SUFFIX : verb;
   }
   if (group.modelText !== null) return "模型作答";
   const first = group.events[0];

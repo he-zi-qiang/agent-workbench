@@ -250,10 +250,13 @@ export type CodeTurnMode = "act" | "plan";
  * 这个收紧「哪些风险要停在人面前」。合成一个四档的值，读起来更像一条梯子，
  * 但在唯一用到它的地方还得再拆回两半。
  *
- * 没有第三档。「什么都别问我」要拿掉的是 `destructive`，而那是 `project_run`
- * ——在这台机器上跑一条命令，ADR-077 说它跑之前要给人看见。这一档只加不减。
+ * 第三档 `unattended` 是 ADR-0116 加的，而且它没有拿掉 `destructive`：风险表
+ * 照旧只加不减，另开一个字段说「提交的人已经预先答应了」，由策略引擎对每一次
+ * 调用的参数再问一遍「有没有理由拦」（`domain/commands.py` 是理由清单）。只在
+ * 命令跑在 runner 容器里的部署上提供——`CodeToolsResponse.unattended_available`
+ * 说的就是这件事；原生路径上 ADR-077 那句话原样成立，这一档不出现。
  */
-export type CodeTurnApprovals = "standard" | "before_write";
+export type CodeTurnApprovals = "standard" | "before_write" | "unattended";
 
 export interface CodeAskResponse {
   report: string;
@@ -325,6 +328,14 @@ export interface CodeToolsResponse {
    * 就是提供那个控件的地方。
    */
   approval_required_risks: ToolRisk[];
+  /**
+   * 这个部署提不提供「放手做」（`approvals: "unattended"`，ADR-0116）。
+   *
+   * 只在命令跑进 runner 容器的部署上为真。放在 offer 上而不是能力清单上，是因为
+   * 读它的就是画那第四档的输入框——一个有时会换来 422 的按钮，教给读者的是错的
+   * 规则。
+   */
+  unattended_available: boolean;
   /** offer 本身，**没有收窄过**：`mode` 与勾选都还没应用。 */
   tools: CodeToolView[];
 }
