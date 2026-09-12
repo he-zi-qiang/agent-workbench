@@ -27,6 +27,38 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第八十三批）：步骤列表里浏览器那六行说中文了，打开页面那一行带上它打开的文件
+
+第八十二批末尾记着「顺带看到、没修」的那一条：Code 页的步骤列表里，浏览器那六件工具显示的是
+原名——`mcp_browser_browser_open`、`mcp_browser_browser_eval`……夹在一列中文之间。名字里 `browser`
+出现两次不是笔误：别名是 `browser`（`domain/browser.py`），六个远端名也都以 `browser_` 起头，
+`adapters/mcp/naming.py` 拼成 `mcp_<别名>_<远端名>`。`TOOL_VERBS` 查不到就回退到原名，回退不报错，
+所以这六行一直露着。
+
+### 1. 改了什么
+
+- `web/src/components/stepGroups.ts` 的 `TOOL_VERBS` 加六条，按 ADR-0113 §3.4 的次序：打开页面 /
+  读取页面结构 / 在页面里求值 / 操作页面 / 页面截图 / 读取页面诊断。通篇用「页面」不用「网页」：
+  「读取网页」是 `mcp_web_fetch_page` 的话，说的是 `web` 服务隔着 HTTP 拉一个地址的正文，没有浏览器；
+  这六件动的是一个**已经在 Chromium 里打开**的页面，而项目回合打开的是 `workspace_path`——它刚写的
+  文件，根本不是网页。旁边那块面板（`BrowserFrame`）本来就说「还没打开过页面」。「读取」而不是
+  「读」，跟表里已有的读取网页 / 读取工作区 / 读取项目目录一个口径。
+- `SUBJECT_KEYS` 加 `workspace_path`，放在 `path` 旁边。`browser_open` 的两种写法二选一
+  （`contract.py` 两个都给或都不给都拒），项目回合只能发 `workspace_path`（ADR-0115 §1.4）——此前这一行
+  只剩「打开页面」四个字，偏偏是读者最想知道「哪一页」的那一步。现在读作「打开页面 mario.html」。
+- 后端一个字没动。
+
+### 2. 证据
+
+- `stepGroups.test.ts` 新增一个 describe、8 条：六个拼好的本地名各钉一条（钉的是
+  `mcp_browser_browser_open` 这个写法，凭记忆写成 `mcp_browser_open` 的键什么也匹配不上）、
+  `workspace_path` 主语一条、`url` 主语没被挤掉一条。
+- 前端门禁在 `web/` 下：lint、typecheck、946 条 vitest（上一批 938，+8 全是这里的）、build 全过。
+  Node 24.16.0 跑的，`engines` 钉 24.14.0，pnpm 只给一句警告。
+- 没有在浏览器里看：要看到这一行得起整套栈、再让一个编码会话真去调浏览器。测试钉的是从事件到
+  `title` 与 `subject` 的那条路，步骤行画的就是这两个字段。
+
+---
 ## 2026-09-12（第八十二批）：浏览器工具被策略拒了——控制台的身份少一个 scope；runner 拿到 Node
 
 第八十一批起栈之后用户再发一次「请你编写马里奥」。这一轮的形状变了：11 次 `project_run`、只有

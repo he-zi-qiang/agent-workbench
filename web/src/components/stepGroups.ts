@@ -148,10 +148,54 @@ const TOOL_VERBS: Readonly<Record<string, string>> = {
   // have to be tellable apart at a glance, so the phrase names the machine
   // rather than the act.
   project_run: "在本机执行命令",
+  // The guarded browser's six (ADR-0113 §3.4), in the order that ADR lists
+  // them. `browser` appears twice in each key and that is not a typo: the
+  // remote names all start with `browser_`, the alias every profile gives the
+  // server is also `browser` (`domain/browser.py`), and `adapters/mcp/naming.py`
+  // spells a local name `mcp_<alias>_<remote>` -- so the name an event carries
+  // is `mcp_browser_browser_open`, and a key written from memory as
+  // `mcp_browser_open` would match nothing and fail silently into the raw
+  // fallback. That fallback is what the Code page showed on 2026-09-13: six
+  // raw identifiers in a step list where every other row was a Chinese phrase,
+  // for the tools a coding session uses to check the page it just wrote.
+  //
+  // 页面 throughout, and never 网页. 读取网页 is `mcp_web_fetch_page`'s phrase
+  // and describes the `web` server pulling a URL's text over HTTP with no
+  // browser in the loop; these six act on a page that is *open* in a real
+  // Chromium, and the page a project turn opens is a `workspace_path` -- a file
+  // the session wrote a moment ago, which is not a 网页 at all. The panel these
+  // rows sit beside already says 页面 (`BrowserFrame`: 「还没打开过页面」), so
+  // the word is the reader's before it is this table's. 读取 rather than 读,
+  // to match 读取网页 / 读取工作区 / 读取项目目录 above.
+  mcp_browser_browser_open: "打开页面",
+  mcp_browser_browser_snapshot: "读取页面结构",
+  mcp_browser_browser_eval: "在页面里求值",
+  mcp_browser_browser_interact: "操作页面",
+  mcp_browser_browser_screenshot: "页面截图",
+  mcp_browser_browser_diagnostics: "读取页面诊断",
 };
 
-/** The keys that carry a call's subject, in the order they are preferred. */
-const SUBJECT_KEYS = ["query", "url", "name", "path", "question"] as const;
+/**
+ * The keys that carry a call's subject, in the order they are preferred.
+ *
+ * `workspace_path` is `browser_open`'s other spelling of a target. The tool
+ * takes exactly one of `url` or `workspace_path` (`apps/browser_mcp/contract.py`
+ * refuses both and neither), and a project turn looking at the page it just
+ * wrote sends the second -- ADR-0115 §1.4 is the account of why it could not
+ * send anything else. Before this key was here that row read 打开页面 with
+ * nothing after it, in the one step where a reader most wants to know *which*
+ * page. Beside `path` rather than beside `url`, because it is the same kind of
+ * thing as `path` -- a relative name under the session's root, not an address
+ * -- and because the two never compete: no call carries both.
+ */
+const SUBJECT_KEYS = [
+  "query",
+  "url",
+  "name",
+  "path",
+  "workspace_path",
+  "question",
+] as const;
 
 /**
  * The keys whose value is a *list* of subjects; the first one names the call.
