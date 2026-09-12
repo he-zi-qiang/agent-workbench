@@ -831,6 +831,12 @@ class ApiRuntimeConfig:
     #: and nothing has been approved". A console that could not tell those apart
     #: is back at the problem the page refused to have by showing nothing.
     computer_session_url: str
+    #: Where the guarded browser's latest frame is (ADR-0112 §3.6). Carried on
+    #: exactly the terms above: usually not running, and "not running" is a
+    #: different answer from "running, nothing opened yet" -- 503 and 204
+    #: respectively, kept apart because a panel that merged them would show an
+    #: empty box for two opposite reasons.
+    browser_frame_url: str
     max_control_request_body_bytes: int
     #: Where a provider key may be stored, and the tree it may not be stored in
     #: (ADR-101). Both resolved here rather than in the route, because the first
@@ -1328,6 +1334,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
         shutdown_grace_seconds=settings.api.shutdown_grace_seconds,
         sse_heartbeat_seconds=settings.api.sse_heartbeat_seconds,
         computer_session_url=settings.api.computer_session_url,
+        browser_frame_url=settings.api.browser_frame_url,
         max_control_request_body_bytes=settings.api.max_control_request_body_bytes,
         provider_key_file=_provider_key_file(),
         checkout_root=str(CHECKOUT_ROOT) if CHECKOUT_ROOT is not None else None,

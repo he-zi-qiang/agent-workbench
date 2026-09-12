@@ -25,6 +25,8 @@
 #   scripts/dev.sh web-api          # API with explicit web MCP profile
 #   scripts/dev.sh web-worker       # real Worker; requires a model provider key
 #   scripts/dev.sh sandbox-image    # build the sandbox image that can draw a PDF
+#   scripts/dev.sh browser-image    # build the Compose image that carries Chromium
+#   scripts/dev.sh browser-server   # loopback guarded browser MCP server
 #   scripts/dev.sh computer-server  # loopback screen-control MCP server (macOS only)
 #   scripts/dev.sh computer-check   # health + tools/list probe
 #   scripts/dev.sh code-api         # API with Code sessions on; requires a key
@@ -32,7 +34,7 @@
 #   scripts/dev.sh demo-api         # API with Word *and* web *and* Code: the console
 #   scripts/dev.sh demo-worker      # real Worker for that profile; needs both servers
 #   scripts/dev.sh smoke            # drive the whole thing and print what happened
-#   scripts/dev.sh panel            # architecture panel on 127.0.0.1:8770 (offline)
+#   scripts/dev.sh panel            # architecture panel on 127.0.0.1:8773 (offline)
 #
 # This is the one place that knows the local environment. The three DSNs live
 # here rather than in the committed TOML because settings forbids connection
@@ -82,6 +84,10 @@ QDRANT_PORT="${QDRANT_PORT:-6333}"
 # only when `docker image inspect` finds it, so an unbuilt one costs a line of
 # output rather than a broken call.
 SANDBOX_PDF_IMAGE="${SANDBOX_PDF_IMAGE:-agent-workbench-sandbox-pdf:local}"
+# The Compose browser image (ADR-0112). Native `browser-server` does not use
+# it -- it runs Playwright from this checkout's own venv against the browser
+# `playwright install` put in the developer's cache.
+BROWSER_IMAGE="${BROWSER_IMAGE:-agent-workbench-browser:local}"
 # A database of its own, never the test one. Sharing them means the suite
 # truncates your local data, and -- the way this was actually found -- your
 # Worker claims a Task the suite left behind and dies on an artifact that
@@ -158,7 +164,12 @@ TENANT="${TENANT:-tenant_local}"
 PRINCIPAL="${PRINCIPAL:-user_local}"
 API_URL="${API_URL:-http://127.0.0.1:8000}"
 
-usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+# The range ends at the last documented command, and it has been wrong twice:
+# once on 2026-09-02 and once when `browser-image` was added above it, both
+# times silently dropping `panel` -- the entry at the edge. Extend this when
+# a line is added to the header above; `tests/config/test_local_console_profile.py`
+# checks every documented name rather than a sample, for exactly that reason.
+usage() { sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---------------------------------------------------------------------------
 # `up`, and why one command exists on top of the twenty below it.
@@ -400,7 +411,7 @@ _plan() {
   if [ -n "${AW_SECRETS__DEEPSEEK_API_KEY:-}" ]; then
     PLAN_PROFILE="console"
     PLAN_WHY="provider key present: the console profile (Word + web + sandbox + Chat)"
-    PLAN_STEPS=(word-server web-server sandbox-server demo-api ingest demo-worker)
+    PLAN_STEPS=(word-server web-server sandbox-server browser-server demo-api ingest demo-worker)
     # Not len(PLAN_STEPS): the three servers render as one step plus one probe
     # step, and waiting for the API is a step of its own. Kept here beside the
     # steps it counts, and asserted against the `_step_begin` calls the arm
@@ -542,23 +553,28 @@ up)
     # `sandbox-server` is in this list because `demo-api` probes it and will
     # not start without it -- the omission that made the written instructions
     # unfollowable.
-    _step_begin mcp-servers "word 8765 · web 8767 · sandbox 8766"
+    _step_begin mcp-servers "word 8765 · web 8767 · sandbox 8766 · browser 8773"
     _start word-server word-server
     _start web-server web-server
     _start sandbox-server sandbox-server
+    # Fourth since ADR-0112, and in this list for the same reason
+    # `sandbox-server` is: a Worker freezes its MCP catalogue once at start, so
+    # a browser server that comes up afterwards leaves a healthy Worker with no
+    # browser tool and nothing anywhere saying why.
+    _start browser-server browser-server
     _step_end "started"
 
-    _step_begin mcp-probe "all three answer before anything freezes a catalogue"
-    for pair in "word-check:word-server" "web-check:web-server" "sandbox-check:sandbox-server"; do
+    _step_begin mcp-probe "all four answer before anything freezes a catalogue"
+    for pair in "word-check:word-server" "web-check:web-server" "sandbox-check:sandbox-server" "browser-check:browser-server"; do
       if ! "$0" "${pair%%:*}" >/dev/null 2>&1; then
         _step_end "failed"
         echo "  ${pair%%:*} never passed -- read $(_logfile "${pair##*:}")" >&2
         exit 1
       fi
     done
-    _step_end "all three healthy"
+    _step_end "all four healthy"
 
-    _step_begin api "demo-api: Word + web + sandbox + Chat"
+    _step_begin api "demo-api: Word + web + sandbox + browser + Chat"
     _start demo-api demo-api
     _step_end "started"
   else
@@ -621,7 +637,7 @@ down)
   # still belongs to something of ours -- a stale file naming a recycled pid
   # gets deleted here rather than turned into a TERM for a stranger.
   stopped=0
-  for name in demo-worker worker ingest demo-api api sandbox-server web-server word-server; do
+  for name in demo-worker worker ingest demo-api api browser-server sandbox-server web-server word-server; do
     _running "$name" || { rm -f "$(_pidfile "$name")"; continue; }
     pid=$(cat "$(_pidfile "$name")")
     kill -TERM "$pid" 2>/dev/null || true
@@ -648,7 +664,7 @@ down)
 
 status)
   printf '%-16s %-8s %-10s %s\n' NAME PID STATE LOG
-  for name in word-server web-server sandbox-server api demo-api ingest worker demo-worker; do
+  for name in word-server web-server sandbox-server browser-server api demo-api ingest worker demo-worker; do
     file=$(_pidfile "$name")
     [ -f "$file" ] || continue
     pid=$(cat "$file" 2>/dev/null || echo "-")
@@ -668,7 +684,7 @@ logs)
     # Only the names `up` manages. `var/log/` also collects whatever anybody
     # ever redirected into it by hand, and offering those as choices makes
     # this list a worse answer than no list.
-    for name in word-server web-server sandbox-server api demo-api ingest worker demo-worker; do
+    for name in word-server web-server sandbox-server browser-server api demo-api ingest worker demo-worker; do
       [ -f "$(_logfile "$name")" ] && printf '  %s\n' "$name" >&2
     done
     exit 2
@@ -801,6 +817,73 @@ web-check)
     --health-url "http://127.0.0.1:8767/health" \
     --expect-tool fetch_page \
     --expect-tool download_document
+  ;;
+
+browser-server)
+  # The guarded browser (ADR-0112). Natively the destination guard runs inside
+  # this same process -- `--proxy-endpoint` is not passed, so `main.py` starts
+  # its own and Chromium is pointed at it on loopback.
+  #
+  # **What the native path does not have is the container topology.** Under
+  # Compose the browser sits on an `internal: true` network with no default
+  # route, so the guard is not merely the configured way out, it is the only
+  # one. Here the guard is exactly as strict, but a process that ignored the
+  # proxy setting could reach the network directly. That is the same difference
+  # the sandbox has between its two paths, and it is acceptable for the same
+  # reason: this path is for the person writing the code, the other is for a
+  # deployment.
+  #
+  # `--allow-host` is how a dev server in this project is made reachable, and
+  # it is deliberately not defaulted -- naming `127.0.0.1:5173` here would open
+  # every loopback port on the developer's machine to any page the model opens.
+  # The artifact root, not a second spelling of it. `browser_open` with a
+  # `workspace_path` opens what a session produced, and what a session produces
+  # lands where `AW_ARTIFACT_STORE__LOCAL_ROOT` says -- exported at the top of
+  # this script. Writing `./var/artifacts` again here would be a copy that goes
+  # stale the first time somebody points that variable somewhere else.
+  set -- --workspace-root "${AW_BROWSER_WORKSPACE_ROOT:-$AW_ARTIFACT_STORE__LOCAL_ROOT}"
+  for entry in ${AW_BROWSER_ALLOW_HOSTS:-}; do
+    set -- "$@" --allow-host "$entry"
+  done
+  # This machine's own proxy, when it has one. On a fake-IP/TUN proxy every
+  # hostname resolves into 198.18.0.0/15 -- correctly *not* globally routable --
+  # so address judgement refuses every site on the strength of a placeholder
+  # (measured on this machine: `example.com` -> 198.18.0.70, nothing opened).
+  # Passed through so the guard judges the *name* on that branch instead, which
+  # is the rule `adapters/research/address_guard.py` already states for exactly
+  # this case. Deliberately read from the environment rather than defaulted:
+  # naming a proxy that is not there breaks every request in a way that looks
+  # like the browser is broken.
+  BROWSER_UPSTREAM="${AW_BROWSER_UPSTREAM_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"
+  if [ -n "$BROWSER_UPSTREAM" ]; then
+    set -- "$@" --upstream-proxy "$BROWSER_UPSTREAM"
+  fi
+  exec "$PYTHON" -m agent_workbench.apps.browser_mcp.main "$@"
+  ;;
+
+browser-check)
+  exec "$PYTHON" scripts/smoke_mcp_server.py \
+    --label browser \
+    --endpoint "http://127.0.0.1:8773/mcp" \
+    --health-url "http://127.0.0.1:8773/health" \
+    --expect-tool browser_open \
+    --expect-tool browser_eval \
+    --expect-tool browser_diagnostics
+  ;;
+
+browser-image)
+  # The image the `browser` service runs (ADR-0112 §3.5). Separate from the
+  # shared one because Chromium is a few hundred megabytes and seven other
+  # services would carry a browser they never start; separate from a Compose
+  # `build:` because this checkout lives under a CJK path, where `compose
+  # build` fails with an error that never mentions the path -- `docker build`
+  # does not. Several minutes cold, and it needs the base image to exist first:
+  #
+  #   docker build -t agent-workbench:local .
+  #   scripts/dev.sh browser-image
+  exec docker build -t "$BROWSER_IMAGE" \
+    --build-arg "BASE_IMAGE=${BASE_IMAGE:-agent-workbench:local}" \
+    -f docker/browser.Dockerfile .
   ;;
 
 sandbox-image)
@@ -1089,7 +1172,7 @@ demo-worker)
       export AW_RESEARCH__ENABLED=true
     fi
   fi
-  # Both servers, before the Worker rather than after: MCP discovery happens
+  # All three servers, before the Worker rather than after: MCP discovery happens
   # once at startup and never hot-reloads, so a server started late leaves a
   # Worker that is up, healthy, and missing the tool the whole profile is for.
   "$PYTHON" scripts/smoke_mcp_server.py \
@@ -1103,6 +1186,16 @@ demo-worker)
     --health-url "http://127.0.0.1:8767/health" \
     --expect-tool fetch_page \
     --expect-tool download_document >&2
+  # The browser, third since ADR-0112 and probed on exactly the same grounds.
+  # It is the one whose absence is hardest to read from the outside: a Worker
+  # without it looks identical to a Worker with it until a Task tries to check
+  # its own output and finds it has no way to open a page.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label browser \
+    --endpoint "http://127.0.0.1:8773/mcp" \
+    --health-url "http://127.0.0.1:8773/health" \
+    --expect-tool browser_open \
+    --expect-tool browser_eval >&2
   echo "console profile + model provider configured: real graph" >&2
   exec "$PYTHON" -m agent_workbench.apps.task_worker.main
   ;;

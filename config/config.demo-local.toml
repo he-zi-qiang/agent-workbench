@@ -438,3 +438,23 @@ retryable_effects = true
 # and not to the writer (ADR-027 §3.3).
 audience = "research"
 timeout_seconds = 60
+
+[[mcp.servers]]
+alias = "browser"
+transport = "http"
+endpoint = "http://127.0.0.1:8773/mcp"
+tools = [
+  "browser_open",
+  "browser_snapshot",
+  "browser_eval",
+  "browser_interact",
+  "browser_screenshot",
+  "browser_diagnostics",
+]
+# `false`, unlike `word` and `web` above: `browser_interact` clicks things,
+# `browser_eval` can mutate the page it runs in, and `browser_diagnostics`
+# drains its buffers. The declaration is per server and one non-replayable tool
+# makes the server non-replayable (ADR-0112 §3.4, ADR-025 §2.7).
+retryable_effects = false
+audience = "research"
+timeout_seconds = 120

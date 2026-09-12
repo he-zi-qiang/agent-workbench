@@ -53,13 +53,24 @@ def _load_profile(monkeypatch: pytest.MonkeyPatch, path: Path) -> Settings:
     return load_settings(config_file=path)
 
 
-def test_the_console_profile_carries_both_servers(
+def test_the_console_profile_carries_all_three_servers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Three since ADR-0112 added the guarded browser.
+
+    Listed rather than counted: each alias widens every Task submitted under
+    this profile by its own tools, so a rename that kept the count would be a
+    silent change to what every Task may do.
+    """
+
     settings = _load_profile(monkeypatch, DEMO_CONFIG)
 
     assert settings.optional_labs.mcp_adapter is True
-    assert sorted(server.alias for server in settings.mcp.servers) == ["web", "word"]
+    assert sorted(server.alias for server in settings.mcp.servers) == [
+        "browser",
+        "web",
+        "word",
+    ]
 
 
 def test_a_task_from_this_profile_can_reach_the_word_renderer(
@@ -82,7 +93,7 @@ def test_a_task_from_this_profile_can_reach_the_word_renderer(
     assert "mcp_web_download_document" in envelope.allowed_tools
 
 
-def test_the_writer_gets_word_and_the_researcher_gets_the_web(
+def test_the_writer_gets_word_and_the_researcher_gets_the_rest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Audience, not just presence (ADR-027 §3.3).
@@ -95,7 +106,14 @@ def test_the_writer_gets_word_and_the_researcher_gets_the_web(
 
     assert worker.mcp is not None
     audiences = {server.alias: server.audience for server in worker.mcp.servers}
-    assert audiences == {"word": "synthesis", "web": "research"}
+    assert audiences == {
+        "word": "synthesis",
+        "web": "research",
+        # The browser reads the outside world too, and verifying a page is
+        # research about it -- so it goes where the web reader goes rather than
+        # to the node doing the writing (ADR-0112, on ADR-027 §3.3's grounds).
+        "browser": "research",
+    }
 
 
 def test_the_console_profile_names_its_own_chat_shape(
@@ -721,3 +739,65 @@ def test_a_code_sub_agent_never_holds_a_working_set_tool() -> None:
             name in {"project_write", "project_edit", "project_run"}
             for name in definition.tool_names
         )
+
+
+def test_no_two_loopback_services_claim_the_same_port() -> None:
+    """One port, one service -- checked across `dev.sh`, not trusted to review.
+
+    This exists because the collision happened. ADR-0112 gave the browser MCP
+    server 8770, which `scripts/dev.sh panel` had owned since the architecture
+    panel was added -- so `dev.sh up` (which starts the browser server) left
+    `dev.sh panel` unable to bind, and `panel` had a README entry and a Windows
+    launcher pointing at it. Nothing failed at review time: both numbers were
+    correct in isolation, and no test compared them.
+
+    The table is written out rather than derived. A test that scraped the ports
+    out of the script would agree with whatever the script currently says,
+    including a duplicate -- the assertion has to come from somewhere the
+    script cannot move. Adding a service means adding a line here, which is the
+    moment to notice the number is taken.
+    """
+
+    allocation = {
+        8765: "word MCP",
+        8766: "sandbox MCP",
+        8767: "web MCP",
+        8768: "computer MCP",
+        8769: "encoder",
+        8770: "architecture panel",
+        8771: "browser egress proxy",
+        8772: "browser egress control",
+        8773: "browser MCP",
+        8780: "browser MCP, inside the container behind its tunnel",
+    }
+    assert len(set(allocation.values())) == len(allocation), (
+        "two ports describing the same service is how a rename hides a clash"
+    )
+
+    panel = (ROOT / "scripts/architecture_panel.py").read_text(encoding="utf-8")
+    # Both launch paths, because a port can live in either: the native script,
+    # the Compose file, or the container entrypoints that wire the tunnels --
+    # the egress pair (8771/8772) appears only in the last of those.
+    everywhere = "".join(
+        (ROOT / rel).read_text(encoding="utf-8")
+        for rel in (
+            "scripts/dev.sh",
+            "scripts/architecture_panel.py",
+            "compose.yaml",
+            "docker/run-browser-local.sh",
+            "docker/run-browser-egress-local.sh",
+        )
+    )
+
+    for port, service in allocation.items():
+        assert str(port) in everywhere, (
+            f"{port} is recorded here as {service} but appears nowhere -- "
+            "either the service moved and this table did not, or it is gone"
+        )
+
+    # The specific pair that collided, asserted by name so a regression reads as
+    # itself rather than as an arithmetic failure.
+    assert "DEFAULT_PORT = 8770" in panel, "the panel's port is the one that stays"
+    assert "8770" not in (
+        ROOT / "src/agent_workbench/apps/browser_mcp/main.py"
+    ).read_text(encoding="utf-8"), "the browser server must not move back onto 8770"

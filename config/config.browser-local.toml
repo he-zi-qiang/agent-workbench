@@ -1,0 +1,92 @@
+# Explicit local profile for the guarded browser (ADR-0112).
+#
+# Separate from config.web-local.toml, and separate for the reason every other
+# profile here is separate: MCP tool names are frozen into every newly submitted
+# Task envelope, so a profile that enabled both would widen every Task by both.
+# `web` reads a page's text; this one runs it. They are not the same capability
+# and a Task that needs one rarely needs the other.
+#
+# Like config.local.toml, this file is one overlay over config.default.toml. The
+# DSNs and provider key remain environment-only and are exported by
+# scripts/dev.sh / the caller; no credential belongs here.
+#
+# One thing must already be running before this profile does anything:
+#
+#   scripts/dev.sh browser-server     # 127.0.0.1:8773
+#
+# If it is not, the Worker still starts, logs `mcp_connection_failed`, and
+# registers no browser tool. The envelope still names the tools, which is why
+# the profile is widened from what the Worker registered rather than from this
+# file (ADR-025).
+#
+# **What this profile does not decide: where the browser may go.** The
+# destination guard lives in the browser process and is configured on its
+# command line (`--allow-host`), never here -- a profile that could widen the
+# network boundary would make every Task submitted under it wider, silently.
+
+[app]
+environment = "development"
+deployment_scope = "local"
+log_level = "INFO"
+
+[model.main]
+model_id = "deepseek-chat"
+# Same reasoning as config.web-local.toml: forcing an opening tool call is
+# unsafe for an opt-in capability, because a Task without `mcp:browser` would be
+# made to propose a tool it cannot use.
+tool_calling_required = false
+
+[model.compact]
+model_id = "deepseek-chat"
+
+[qdrant]
+url = "http://localhost:6333"
+allow_local_bootstrap = true
+
+[runtime]
+record_step_inputs = true
+
+[event_stream]
+catchup_poll_seconds = 1
+
+[multi_agent]
+# A verification loop is several small results, not one large one: a snapshot is
+# a few thousand tokens, an eval result is a line, a screenshot does not enter
+# the text budget at all. 120000 is the same ceiling config.web-local.toml
+# measured for two or three page reads, and it is generous here rather than
+# tight -- the expensive shape would be screenshot-per-step, which the tool
+# descriptions steer away from on purpose.
+max_tokens_per_agent_invocation = 120000
+
+[optional_labs]
+mcp_adapter = true
+
+[[mcp.servers]]
+alias = "browser"
+transport = "http"
+endpoint = "http://127.0.0.1:8773/mcp"
+tools = [
+  "browser_open",
+  "browser_snapshot",
+  "browser_eval",
+  "browser_interact",
+  "browser_screenshot",
+  "browser_diagnostics",
+]
+# **false, and this is the one place it differs from `word` and `web`.** Those
+# declare `retryable_effects = true` because rendering a document and fetching a
+# URL change nothing on the other side, so a graph-node replay may repeat them.
+# Half of this surface is not like that: `browser_interact` clicks things,
+# `browser_eval` runs code that can mutate the page it runs in, and
+# `browser_diagnostics` drains its buffers, so a replay of it loses entries.
+# The declaration is per server, and one non-replayable tool makes the server
+# non-replayable (ADR-025 §2.7).
+retryable_effects = false
+# Verifying a page is research about the outside world, so these go to
+# `researcher_external` rather than to the writer, on the same grounds ADR-027
+# §3.3 gives for the web reader.
+audience = "research"
+# Longer than `web`'s 60: a page load plus a settle plus a sampling loop is a
+# different shape from one GET, and the per-call ceiling inside the server
+# (`contract.MAX_TIMEOUT_MS`) is 60 seconds on its own.
+timeout_seconds = 120

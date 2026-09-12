@@ -13946,3 +13946,61 @@ TS 接口与 Python 模型字段一致）；`web/src/features/system/ProviderKey
 ADR-101 全篇相同（ADR-044：只绑 loopback、只信请求头），在那个前提下「谁存的」本来就
 答不出来，所以先补一条可以随便署名的审计记录比没有更糟。它与生产身份认证（D-05）绑定，
 顺序不能反。
+
+## 一个模型能自己验证的浏览器，出网只有一条它绕不开的路（ADR-0112）
+
+Code 会话的模型此前手里没有任何能执行 JavaScript 的东西——`sandbox_run` 是
+`python:3.12-slim`、`--network=none`、tmpfs `noexec`。于是它能写出一个页面、把它落到
+工作区，然后**只能等人用眼睛看**。「能跑」和「对不对」之间那一步，没有工具走得过去。
+
+现在有了：`browser_open / browser_snapshot / browser_eval / browser_interact /
+browser_screenshot / browser_diagnostics` 六个工具，Playwright 驱动的 Chromium，
+`agent-browser-mcp` 与 `agent-browser-egress` 两个进程。
+
+**证据（原生路径，本机实跑，非 CI）**：一个已知物理的页面，`browser_eval` 采样 45 帧，
+拿到 `apexHeight 76.5 / framesToLand 34`；解析解是 `v²/2g = 81` 与 `2v/g = 36`，差值
+落在离散积分的截断误差里。**这个结论是算出来的，不是看出来的**——这正是这条 ADR 存在的
+理由。同一轮里 `browser_interact` 点击 `ref_4` 让页面状态 `jumps` 从 0 变 1（可访问性树 →
+backendNodeId → 坐标 → CDP 点击这条链通了），`browser_screenshot` 出图，
+`/v1/browser/frame` 经 API 只读反代拿到 900×563 的 JPEG。
+
+**守卫的两个方向都实测过**：页面自己发起的
+`fetch('http://169.254.169.254/latest/meta-data/')` 被拒，理由出现在
+`browser_diagnostics` 的「Destinations refused by the guard」里而不是消失；
+`https://example.com` 正常加载（标题 `Example Domain`）。`--proxy-bypass-list=<-loopback>`
+确实生效：`http://localhost:8000` 走到了代理并被判 403，没有被 Chromium 直连绕开。
+
+**容器路径（部分）**：在完整硬化条件下——uid 10001、`cap_drop: ALL`、
+`no-new-privileges`、`read_only` + tmpfs、`docker/chromium-seccomp.json`——Chromium
+带自己的沙箱启动、`evaluate` 返回 42、截图 7303 字节。对照组（同样条件，Docker 默认
+seccomp）`Chromium sandboxing failed!`，拒绝启动而不是降级。`internal: true` 的语义
+也单独验过：那侧没有默认路由，公网与 DNS 都不通。
+
+**一个只有容器能发现的缺陷，已修**：ADR-0112 §3.5 的整套论证——生成的 seccomp
+profile、三个刻意开的洞、A/B——此前**在代码里没有落实**。`LAUNCH_FLAGS` 里没有
+`--no-sandbox`，注释还专门解释了它为什么不在；但 Playwright 的 `chromium_sandbox`
+默认 `False`，它自己会加上那个标志。发现它的是一个本来只做装配验证的对照组：在拒绝
+`CLONE_NEWUSER`、因而根本跑不了沙箱化 Chromium 的默认 profile 下，`launch()` 却起来
+并渲染了页面。**什么都没报错**：页面正常、工具正常、测试全绿——一层不存在的防护和一层
+存在的防护看起来完全一样。修法是 `chromium_sandbox=True`，
+`tests/deployment/test_chromium_seccomp.py` 现在钉住这个 opt-in。
+macOS 原生路径跑一百遍也验不出这件事，那边没有 seccomp。
+
+**装配期发现的另外三个**，同样是「测试全绿但那条路不可能跑通」那一类：根 `Dockerfile`
+只装 `--extra embedding`，`browser` 服务却写着 `image: agent-workbench:local`——镜像里既
+没有 playwright 也没有 Chromium（现为 `docker/browser.Dockerfile`，第二个镜像，理由在
+§3.5b）；`scripts/stack.cmd` 完全不知道 browser 的存在，而这两个服务没有 `profiles`，
+等于默认启动，Windows 上 `compose up` 会去拉一个不存在的镜像；browser MCP 原本分到的
+8770 是 `dev.sh panel` 已经占着的端口（还写进了 README 与 `panel.cmd`），现已挪到 8773，
+并由一张手写的端口分配表钉住——从脚本里扒端口的测试会同意脚本当前说的任何话，包括重复。
+
+**开发机上的第三种「谁解析」**：这台 Mac 挂着 fake-IP/TUN 代理，`example.com` 解析到
+`198.18.0.70`，于是 resolve-then-judge 拒绝了每一个站点。`address_guard` 早就写过这个
+情形，实现一开始没有用它给出的分支。补上 `--upstream-proxy` 之后判名字而不判地址，
+代价写在 ADR §3.2b：那条分支上 enforcement boundary 是上游代理，rebinding 不再关着；
+地址字面量仍走地址规则，有测试钉住 `169.254.169.254` 在有代理时照样被拒。容器路径永远
+不走这条分支。
+
+**没做的**：完整的 `compose up` 装配验证。本机磁盘只剩 12 GB，完整 base（6.4 GB）加
+browser 层会再次逼近上限——这一轮已经因此把 Docker 的 containerd 元数据库写坏过一次。
+已登记为 [D-09](./known-gaps.md)。

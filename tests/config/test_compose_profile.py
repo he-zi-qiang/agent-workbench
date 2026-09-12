@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_workbench.apps.browser_mcp.main import DEFAULT_PORT as BROWSER_PORT
 from agent_workbench.apps.web_mcp.main import DEFAULT_PORT as WEB_PORT
 from agent_workbench.apps.word_mcp.main import DEFAULT_PORT as WORD_PORT
 from agent_workbench.bootstrap.projections import project_task_worker
@@ -59,14 +60,19 @@ def test_the_compose_profile_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.optional_labs.mcp_adapter is True
 
 
-def test_the_compose_profile_carries_both_loopback_mcp_servers(
+def test_the_compose_profile_carries_every_loopback_mcp_server(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The endpoints are the sidecars' own defaults, taken from their code.
 
-    `docker/run-task-worker-local.sh` starts both inside the Worker container
-    and passes no `--host`, so the day either default port moves, this fails
-    rather than the Worker coming up healthy with one tool fewer.
+    `docker/run-task-worker-local.sh` starts the first two inside the Worker
+    container and passes no `--host`, so the day either default port moves,
+    this fails rather than the Worker coming up healthy with one tool fewer.
+
+    The browser is not a sidecar -- it is its own service on its own network
+    (ADR-0112 §3.3) -- but the port reaches it the same way: through the
+    loopback tunnel this container opens, which is why it is a 127.0.0.1
+    address here like the other two.
     """
 
     worker = project_task_worker(_load(monkeypatch))
@@ -75,6 +81,7 @@ def test_the_compose_profile_carries_both_loopback_mcp_servers(
     assert endpoints == {
         "word": f"http://127.0.0.1:{WORD_PORT}/mcp",
         "web": f"http://127.0.0.1:{WEB_PORT}/mcp",
+        "browser": f"http://127.0.0.1:{BROWSER_PORT}/mcp",
     }
 
 
