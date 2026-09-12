@@ -697,6 +697,21 @@ class BrowserConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RunnerConfig:
+    """Which command-runner process executes ``project_run`` (ADR-0115).
+
+    Absent when ``runner.enabled`` is false, which is every deployment that
+    ran before ADR-0115 and the native launcher after it: there the command
+    runs in this process and no address is needed. Present, it is the same
+    kind of thing ``SandboxConfig`` and ``BrowserConfig`` are -- one MCP
+    server this process dials at startup and fails fast without.
+    """
+
+    endpoint: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True, slots=True)
 class BlockingCallRunnerConfig:
     """The bound on synchronous adapter work, for whichever process runs it.
 
@@ -955,6 +970,10 @@ class ApiRuntimeConfig:
     #: whenever `code.browser_enabled` is false, so this process never holds
     #: an address for a server none of its turns may call.
     browser: BrowserConfig | None = None
+    #: And for the command runner (ADR-0115). `None` whenever `runner.enabled`
+    #: is false, in which case `project_run` -- if offered at all -- executes
+    #: in this process.
+    runner: RunnerConfig | None = None
     #: ADR-042. How many blocking adapter calls may hold threads at once.
     blocking_calls: BlockingCallRunnerConfig = field(
         default_factory=BlockingCallRunnerConfig
@@ -1555,6 +1574,17 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # therefore no "did anybody configure it" to ask. The grant is the
             # whole of the decision.
             if settings.code.browser_enabled
+            else None
+        ),
+        # ADR-0115. Gated on the runner's own switch only: the root validator
+        # has already refused `runner.enabled` without `shell_tools_enabled`,
+        # so a present config here always describes a tool that is offered.
+        runner=(
+            RunnerConfig(
+                endpoint=settings.runner.endpoint,
+                timeout_seconds=settings.runner.timeout_seconds,
+            )
+            if settings.runner.enabled
             else None
         ),
         evaluation=EvaluationRunsConfig(

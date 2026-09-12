@@ -1126,3 +1126,112 @@ def test_the_callers_of_the_browser_are_on_its_network() -> None:
         # And still on the default one, or they lose the database: a service
         # that names any network is no longer on the implicit one.
         assert "default" in attached, name
+
+
+def test_the_runner_holds_the_project_folder_and_nothing_else() -> None:
+    """ADR-0115 §3.2, the shape F-37 asked for: a container that holds no key
+    and only runs shell commands.
+
+    Every absence is asserted because every absence is the point. The API's
+    container holds a provider key, a database address and every workspace;
+    ADR-0109 §3.3 refused a shell there for exactly that reason. This one
+    holds the host folder the API mounts -- read-write, because `project_run`
+    runs the project's own formatter and tests -- and nothing else.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    runner = services["runner"]
+    assert "run-runner-local.sh" in " ".join(runner["command"])
+    environment = runner.get("environment") or {}
+    assert "AW_CONFIG_FILE" not in environment
+    assert "AW_DATABASE__DSN" not in environment
+    assert "AW_KEY_FILE" not in environment
+    assert _mounts(runner, "/var/lib/agent-workbench/provider-key") == []
+    assert _mounts(runner, "/var/lib/agent-workbench/artifacts") == []
+    assert _mounts(runner, SOCKET) == []
+    assert "ports" not in runner
+    assert runner.get("read_only") is True
+    assert "ALL" in runner["cap_drop"]
+
+    projects = _mounts(runner, "/projects")
+    assert len(projects) == 1, projects
+    assert projects[0].get("read_only") is not True
+    # The same host folder the API writes, or `cwd` would name a directory
+    # that exists on one side and not the other.
+    assert projects[0]["source"] == _mounts(services["api"], "/projects")[0]["source"]
+
+
+def test_only_the_api_shares_the_runners_network() -> None:
+    """Who else is reachable from a command the model wrote: the API's console
+    proxy, as a shell on the host could reach 127.0.0.1:8000 -- and not
+    PostgreSQL (trust auth, no password), not Qdrant, not the encoder, not the
+    sandbox broker. Not `internal`, on purpose: a command may need the
+    network the way it would on the user's machine, and the runner holds
+    nothing whose theft a missing route would prevent."""
+
+    compose = _compose()
+    services = compose["services"]
+    networks = compose["networks"]
+    assert isinstance(services, dict)
+    assert isinstance(networks, dict)
+    on_runner = sorted(
+        name
+        for name, service in services.items()
+        if "runner" in (service.get("networks") or {})
+    )
+    assert on_runner == ["api", "runner"], on_runner
+    assert sorted((services["runner"].get("networks") or {}).keys()) == ["runner"]
+    assert networks["runner"].get("internal") is not True
+
+
+def test_the_browser_sees_the_projects_folder_read_only_at_the_apis_path() -> None:
+    """ADR-0115 §3.3. The API turns a project turn's `workspace_path` into a
+    `file://` URL under *its* view of the project directory, and the browser
+    opens that URL under *its* view -- so the two mounts must share a source
+    and a target, and the browser's must not be able to write."""
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    projects = _mounts(services["browser"], "/projects")
+    assert len(projects) == 1, projects
+    assert projects[0].get("read_only") is True
+    assert projects[0]["source"] == _mounts(services["api"], "/projects")[0]["source"]
+
+
+def test_the_api_launcher_decides_the_runner_and_the_browser_by_probing() -> None:
+    """Both slots are fail-fast, so neither switch is set in the profile;
+    the launcher tunnels to each container, probes it with the Task Worker's
+    own MCP smoke test, and exports the switch only when the tool is
+    advertised. Tunnel before probe before `agent-api`, and an operator's
+    explicit value left alone -- the sandbox's arrangement, twice more."""
+
+    text = "\n".join(
+        line
+        for line in (ROOT / "docker" / "run-api-local.sh")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    started = text.index("agent-api --web-dir")
+    for upstream, tool, switch in (
+        ("browser", "browser_open", "AW_CODE__BROWSER_ENABLED"),
+        ("runner", "run_command", "AW_RUNNER__ENABLED"),
+    ):
+        tunnel = text.index(
+            f'LOCAL_PROXY_UPSTREAM_HOST="${{{upstream.upper()}_UPSTREAM_HOST:-{upstream}}}"'
+        )
+        probe = text.index(f"--expect-tool {tool}")
+        assert tunnel < probe < started, upstream
+        assert f'if [ -z "${{{switch}:-}}" ]' in text, switch
+        assert f"{switch}=true" in text, switch
+        assert text.index(f"--expect-tool {tool}") < text.index(f"{switch}=true"), (
+            switch
+        )
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    assert services["api"]["environment"]["AW_RUNNER__ENABLED"] == ""
+    assert services["api"]["environment"]["AW_CODE__BROWSER_ENABLED"] == ""
+    assert services["api"]["depends_on"]["runner"]["condition"] == "service_healthy"
+    assert services["api"]["depends_on"]["browser"]["condition"] == "service_healthy"

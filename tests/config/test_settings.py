@@ -919,7 +919,7 @@ def test_the_configuration_schema_version_is_pinned() -> None:
     decision rather than a chore around it.
     """
 
-    assert Settings(**valid_payload()).app.config_schema_version == "1.19"
+    assert Settings(**valid_payload()).app.config_schema_version == "1.20"
 
 
 def test_external_search_stays_outside_the_task_envelope_by_default() -> None:
@@ -1047,3 +1047,30 @@ def test_a_config_written_before_code_existed_still_loads() -> None:
 
     assert settings.code.enabled is False
     assert settings.code.execution_locality == "in_api_process"
+
+
+def test_a_runner_without_the_shell_tool_is_refused() -> None:
+    """ADR-0115. A `[runner]` is where `project_run` executes; with the tool
+    not offered it is an address nothing dials, and a section that reads as a
+    capability and does nothing is the shape known-gaps files as 口径不实."""
+
+    payload = valid_payload()
+    payload["runner"] = {"enabled": True}
+    with pytest.raises(ValidationError, match=r"runner.enabled requires"):
+        Settings(**payload)
+
+    payload["policy"]["shell_tools_enabled"] = True
+    settings = Settings(**payload)
+    assert settings.runner.enabled is True
+    assert settings.runner.endpoint == "http://127.0.0.1:8774/mcp"
+
+
+def test_the_runner_endpoint_is_judged_like_every_other_service_url() -> None:
+    payload = valid_payload()
+    payload["policy"]["shell_tools_enabled"] = True
+    payload["runner"] = {
+        "enabled": True,
+        "endpoint": "http://user:pw@127.0.0.1:8774/mcp",
+    }
+    with pytest.raises(ValidationError, match="userinfo"):
+        Settings(**payload)

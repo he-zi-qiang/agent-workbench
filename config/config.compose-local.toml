@@ -92,6 +92,30 @@ sandbox_enabled = false
 # leave it unset: there the process runs as the user on the user's machine,
 # and the home directory is the right answer.
 projects_root = "/projects"
+# `browser_enabled` is deliberately absent here and therefore `false` in this
+# file -- the same arrangement as `sandbox_enabled` above, for the same
+# reason (ADR-0115): `BrowserSlot` is fail-fast at boot, the browser is a
+# container that takes its time to become healthy, and `docker/run-api-local.sh`
+# probes it through the 8773 tunnel and exports `AW_CODE__BROWSER_ENABLED=true`
+# when it advertises `browser_open`. Until 2026-09-12 that tunnel did not
+# exist, `api.browser_frame_url` named a port nothing listened on, and F-39
+# recorded the browser as "wired but switched off" -- which was half true.
+
+[runner]
+# Where `project_run` executes under Compose (ADR-0115): not in this process
+# but in the `runner` service -- a container that mounts the same `/projects`
+# and holds no key, no database address and no artifact volume. `enabled`
+# is deliberately absent here and therefore `false` in this file, decided
+# per start like the sandbox and the browser: `docker/run-api-local.sh`
+# probes the runner through the 8774 tunnel and exports
+# `AW_RUNNER__ENABLED=true` when it advertises `run_command`. A start whose
+# runner never answers keeps `project_run` in this process, which is what
+# the native launcher does -- and what F-37 refused for this container,
+# so the launcher says so on stderr when it happens.
+#
+# `endpoint` stays at the default `http://127.0.0.1:8774/mcp`: loopback,
+# behind the tunnel, so the settings validator sees what it was written to
+# admit (ADR-0107 §3.4).
 
 [multi_agent]
 delegation_enabled = true
@@ -103,6 +127,21 @@ delegation_enabled = true
 # the tool and the launcher decides whether the deployment can honour it --
 # rather than this file promising something a keyless stack cannot deliver.
 search_tools_enabled = true
+# ADR-0115. The second profile in `config/` to turn this on, and the sentence
+# that made `code-local` "the one" still holds -- "the only arrangement where
+# 'run a command on this machine' is a thing the operator is asking for" --
+# because here the command does *not* run on this machine's API process. It
+# runs in the `runner` service (`[runner]` above), a container that mounts
+# `/projects` and holds no key, no database address and no artifact volume:
+# the shape F-37 named when it refused a shell in the API's own container.
+# What this line grants is unchanged in every other respect: `project_run`,
+# `destructive` risk, one command per call in the project root, stdin
+# closed, killed at 120 seconds, and every call stops at a human who is shown
+# the command. Should a start find no runner, the launcher says so and
+# `project_run` executes in the API container for that start -- the
+# arrangement ADR-0109 §3.3 argued against, kept for one start rather than
+# made permanent, and visible on the System page's `code.host_commands` row.
+shell_tools_enabled = true
 
 # `[sandbox]` is deliberately absent, and its `enabled` is decided the way
 # `code.sandbox_enabled` is: `docker/run-api-local.sh` and

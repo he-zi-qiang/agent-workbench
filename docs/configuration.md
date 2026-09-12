@@ -37,6 +37,7 @@
 | `1.15` → `1.16` | **又一次方向相反的**：`code.shell_enabled` 改名为 `code.sandbox_enabled` 并从冻结 `Literal[False]` 解冻成 `bool`。停止加载的是 1.15 那份文件——设置拒绝未知的 `AW_*` 与未知键，所以写着 `shell_enabled` 的配置在 1.16 下不再加载。改名不是措辞问题：那个字段的注释把「给一个 shell」和「授予 `sandbox_run`」当成同一件事，而 ADR-029 的沙箱是一次调用建一个断网容器、文件进文件出、调用之间无状态的纯函数。解冻的理由是原冻结理由（"设了也拿不到东西"）已被接线消除。`execution_locality` 与 `coordination` **继续冻结** | [ADR-057](./adr/0057-a-pure-function-is-not-a-shell.md) |
 | `1.16` → `1.17` | **删除死配置**：`workflow.node_retry_max_attempts` 与 `node_timeout_seconds` 被校验、从未被消费——LangGraph 适配器没有 RetryPolicy 也没有每节点时钟，读到它们的人以为节点会重试而它们不会。停止加载的是写着这两个键的 1.16 文件（严格设置拒绝未知键）。重试从此住在 Task 层：`coordination.max_attempts` 同时管租约回收与可重试的执行失败。同一版把两处实测过的预算写回默认（`runtime.max_steps` 12→40、`multi_agent.max_tokens_per_agent_invocation` 16000→120000）——加性改动本不抬版，搭删除的车 | [ADR-059](./adr/0059-a-retryable-failure-is-released-not-settled.md) |
 | `1.17` → `1.18` | **方向和 `1.15` → `1.16` 相同，补的是那次留下的洞**：`policy.shell_tools_enabled` 从冻结 `Literal[False]` 解冻成 `bool`。ADR-057 当年把 `code.shell_enabled` 改名成 `code.sandbox_enabled`，理由是那个字段把「给一个 shell」和「授予 `sandbox_run`」当成了同一件事——而ADR-029 的沙箱是纯函数。改名退掉了**不是** shell 的那个面的名字，却始终没有人去做**是** shell 的那个面。`project_run` 是它，而这个字段是它的闸门。解冻的理由和上次同构：原冻结理由是「设了也拿不到东西」，它有九个 schema 版本之久**在 `src/` 里没有任何消费者**，是配置对自己说的一句没人校验的话。它落在 `[policy]` 而不是 `[code]`，因为 `policy_fingerprint` 会哈希这一段的每个字段：翻动它就改变 `policy_identity`，此后每一次运行都记着自己跑在哪个答案下。默认仍是 `false`，`config/` 里只有 `code-local` 打开它 | [ADR-077](./adr/0077-a-command-on-this-machine-is-shown-before-it-is-run.md) |
+| `1.19` → `1.20` | **新增 `[runner]` 段**：`project_run` 在哪里执行（[ADR-0115](./adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md)）。加性、默认关；开启它不改变 `project_run` 的名字、风险与审批门，只把命令交给一个只挂项目目录、不持有 key 的 `agent-runner-mcp`。根校验器拒绝 `runner.enabled` 而 `policy.shell_tools_enabled` 为假的组合——一个读起来像能力、什么都不做的段是「口径不实」的形状。同一版 `config.compose-local.toml` 打开 `policy.shell_tools_enabled`，`runner.enabled` 与 `code.browser_enabled` 由 `docker/run-api-local.sh` 逐次启动探针决定 | [ADR-0115](./adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md) |
 | `1.18` → `1.19` | **一次改名，因为旧名字承诺了类型做不到的事**：`code.sandbox_requires_approval` → `code.external_requires_approval`。这个字段实际产出的是 `approval_required_risks`，而那个元组是**按风险档**取值的、不是按工具——ADR-0085 给编码会话加了第二件 `external` 工具（`web_search`）之后，一个信封无法武装其中一件而放过另一件，旧名字就成了一句办不到的承诺。停止加载的是写着旧键的 1.18 文件（严格设置拒绝未知键）；`config/` 里没有任何 profile 显式设过它，所以本仓自身零改动。同一版新增 `policy.search_tools_enabled`（既有段下带默认值的新叶子，本不抬版，搭改名的车）。默认值 `false` 的论证同时被重写：原先第一条理由（ADR-054「哈希没法被同意」）已被 ADR-077 推翻——`tool_gateway` 现在无条件把规范化后的**真实参数**写进 `PermissionRequested.approval_preview` | [ADR-0085](./adr/0085-a-search-is-also-a-leaving.md) |
 
 [ADR-021](./adr/0021-chat-web-search.md) 把 `[research]` 从 Task 扩到 Chat 的兜底
@@ -899,6 +900,29 @@ service_url = "http://encoder:8769"
 它曾经是「设了就拒绝启动」——那道守卫在 Compose 这台唯一的部署上必然触发（五个进程读一份文件），
 并且会拖垮整栈（另外四个都等它 healthy），评审在它跑起来之前抓到了。Compose profile
 （`config.compose-local.toml`）设了这两片；十个原生 profile 没设。
+
+### 9.4 命令执行器（`[runner]`）
+
+`[runner]` 由 [ADR-0115](./adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md)
+引入，默认关闭。它不是一件新工具：编码会话握着的仍然是 `project_run`（ADR-0077），同名、
+同一个 `destructive` 风险、每次调用停在人面前。它回答的只有一个问题——**那条命令在哪里跑**。
+
+```toml
+[runner]
+enabled = false                              # 关：命令在本进程跑（原生启动器：用户自己的机器）
+endpoint = "http://127.0.0.1:8774/mcp"      # 开：交给 agent-runner-mcp；回环，Compose 里在隧道之后
+timeout_seconds = 180                        # 整个调用；命令本身在 120 秒被 runner 杀掉
+```
+
+- `enabled = true` 要求 `policy.shell_tools_enabled = true`，否则根校验器拒绝加载：没有工具的
+  执行器是一个什么都不做的段。
+- `endpoint` 过与其他服务地址相同的校验（不许 userinfo、必须 HTTP(S)）。
+- 环境变量 `AW_RUNNER__ENABLED=true` 可以压过文件——这正是 `docker/run-api-local.sh` 的用法：
+  探到 `runner` 容器广告了 `run_command` 才导出它，探不到就在 stderr 说明并让 `project_run`
+  在本进程跑这一次。
+- 什么不在这里：runner 容器能碰到什么。那是 `compose.yaml` 的拓扑（只挂 `/projects`、没有 key
+  卷、没有数据库地址、只在 `runner` 网络上），故意不是配置项——与 `[sandbox]` 不描述隔离
+  标志是同一个理由。
 
 ## 10. 外部检索
 

@@ -64,6 +64,7 @@ from agent_workbench.adapters.persistence.usage import PostgresUsageReader
 from agent_workbench.adapters.policy.envelope import EnvelopePolicyEngine
 from agent_workbench.adapters.research import DeepSeekWebSearch
 from agent_workbench.adapters.tools import StaticToolRegistry
+from agent_workbench.adapters.tools.browser import open_within_project
 from agent_workbench.adapters.tools.delegate import DelegateTool
 from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
@@ -77,6 +78,10 @@ from agent_workbench.adapters.tools.project_files import (
     ProjectReadTool,
     ProjectRunTool,
     ProjectWriteTool,
+)
+from agent_workbench.adapters.tools.runner import (
+    RemoteCommandRunner,
+    RunnerUnavailableError,
 )
 from agent_workbench.adapters.tools.sandbox import SandboxRunTool, WorkspaceSandbox
 from agent_workbench.adapters.tools.web_search import (
@@ -160,6 +165,7 @@ from agent_workbench.bootstrap.projections import (
     ApiRuntimeConfig,
     BrowserConfig,
     ResearchConfig,
+    RunnerConfig,
     SandboxConfig,
 )
 from agent_workbench.bootstrap.qdrant_startup import verify_qdrant_startup
@@ -178,12 +184,14 @@ from agent_workbench.bootstrap.telemetry_factory import (
 )
 from agent_workbench.domain.agents import DELEGATE_TOOL
 from agent_workbench.domain.browser import BROWSER_ALIAS, BROWSER_REMOTE_TOOLS
+from agent_workbench.domain.runner import RUNNER_REMOTE_TOOL
 from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.approval_gate import InteractiveApprovalGate
 from agent_workbench.ports.artifact_store import ArtifactStore
+from agent_workbench.ports.commands import CommandOutcome
 from agent_workbench.ports.delegation import DelegationChannel
 from agent_workbench.ports.documents import DocumentStore
 from agent_workbench.ports.event_log import EventLogPort, EventScope, EventSink
@@ -315,6 +323,90 @@ class SandboxSlot:
 
 
 @dataclass(slots=True)
+class RunnerSlot:
+    """The command-runner connection, opened after the rest is built (ADR-0115).
+
+    The same lifecycle as ``SandboxSlot`` above, for the same reason, and with
+    one difference in what it hands out. The sandbox slot *adds* a tool to
+    the registry once it is open; this slot is what an already-registered
+    tool holds. ``ProjectRunTool`` is built at assembly with ``runner=`` this
+    object, and this object is a ``CommandRunner`` that forwards to the
+    connection once ``open`` has made one -- so the registry stays frozen at
+    process start (the property every event stream depends on) and the tool
+    still executes somewhere that does not exist until ``startup``.
+
+    **Fail-fast**, like both slots above: ``runner.enabled`` is a deployment
+    saying that `project_run` executes in the runner, and a process that
+    started without one would run every approved command in *this* container
+    -- the arrangement ADR-0109 §3.3 refused -- while the System page said
+    otherwise. The launcher keeps this from being a boot failure in the
+    ordinary case by probing before it sets the switch
+    (``docker/run-api-local.sh``).
+    """
+
+    config: RunnerConfig | None
+    #: The connection, once opened. Empty exactly while `_resources` is.
+    remote: RemoteCommandRunner | None = None
+    _resources: AsyncExitStack | None = None
+
+    async def run(
+        self, command: str, *, cwd: str, timeout_seconds: float
+    ) -> CommandOutcome:
+        """The ``CommandRunner`` the tool holds; refuses until opened.
+
+        The refusal is a sentence rather than an `AttributeError`, because
+        the model is the reader: `ErrorInfo.from_exception` passes a message
+        through only for this project's own errors.
+        """
+
+        if self.remote is None:
+            raise RunnerUnavailableError(
+                "runner.enabled is on and the runner connection is not open; "
+                "this process's startup did not reach it"
+            )
+        return await self.remote.run(command, cwd=cwd, timeout_seconds=timeout_seconds)
+
+    async def open(self) -> None:
+        """Connect, check the tool is advertised, and keep the connection."""
+
+        if self.config is None:
+            return
+        resources = AsyncExitStack()
+        try:
+            async with asyncio.timeout(self.config.timeout_seconds):
+                client = await resources.enter_async_context(
+                    connect_mcp_client(
+                        self.config.endpoint,
+                        timeout_seconds=self.config.timeout_seconds,
+                    )
+                )
+                page = await client.list_tools_page(None)
+        except Exception as error:
+            await resources.aclose()
+            raise RunnerUnavailableError(
+                f"runner.enabled is on and the command runner at "
+                f"{self.config.endpoint} did not answer "
+                f"({type(error).__name__}); under Compose the `runner` service "
+                "should be healthy, or turn the setting off"
+            ) from error
+        if all(tool.name != RUNNER_REMOTE_TOOL for tool in page.tools):
+            await resources.aclose()
+            raise RunnerUnavailableError(
+                f"the server at {self.config.endpoint} answered but does not "
+                f"offer {RUNNER_REMOTE_TOOL}; is it the agent-runner-mcp from "
+                "this checkout?"
+            )
+        self._resources = resources
+        self.remote = RemoteCommandRunner(client=client)
+
+    async def aclose(self) -> None:
+        if self._resources is not None:
+            await self._resources.aclose()
+            self._resources = None
+        self.remote = None
+
+
+@dataclass(slots=True)
 class BrowserSlot:
     """The browser connection, opened after the rest of the process is built.
 
@@ -345,6 +437,12 @@ class BrowserSlot:
 
     config: BrowserConfig | None
     bindings: list[ToolBinding] = field(default_factory=list[ToolBinding])
+    #: The project scope a turn enters, so `browser_open` can resolve a
+    #: `workspace_path` against the project directory rather than the
+    #: server's own root (`adapters/tools/browser.py`). `None` on a build
+    #: without the project capability, where every session is a flat
+    #: workspace and the server's root is the right one.
+    project_scope: ProjectFileScope | None = None
     _resources: AsyncExitStack | None = None
 
     @property
@@ -410,9 +508,16 @@ class BrowserSlot:
         # Wrapped exactly as the Worker wraps them: a screenshot is bytes the
         # turn should be able to name afterwards, and the workspace is where
         # every other tool in this session leaves one.
-        self.bindings.extend(
-            bind_results_into_workspace(binding, scope) for binding in discovered
-        )
+        bound = [bind_results_into_workspace(binding, scope) for binding in discovered]
+        if self.project_scope is not None:
+            # After the workspace wrapper, so the order of the two wrappers is
+            # the order of the two concerns: the outer one rewrites what goes
+            # *in* to `browser_open` for a project turn, the inner one binds
+            # what comes *out* of every call into the workspace.
+            bound = [
+                open_within_project(binding, self.project_scope) for binding in bound
+            ]
+        self.bindings.extend(bound)
 
     async def aclose(self) -> None:
         if self._resources is not None:
@@ -521,6 +626,10 @@ class ApiDependencies:
     #: independently -- a deployment can have a sandbox and no browser -- and
     #: the message each raises names a different command.
     code_browser: BrowserSlot | None = None
+    #: The command-runner connection (ADR-0115), on the same terms. A third
+    #: slot rather than a flag on the first: it fails independently, and the
+    #: message it raises names a third command.
+    code_runner: RunnerSlot | None = None
     #: The workspace `SandboxSlot.open` binds the tool to, and the one
     #: `BrowserSlot.open` binds a screenshot into.
     code_scope: WorkspaceScope | None = None
@@ -652,6 +761,8 @@ class ApiDependencies:
             await self.code_sandbox.aclose()
         if self.code_browser is not None:
             await self.code_browser.aclose()
+        if self.code_runner is not None:
+            await self.code_runner.aclose()
         if self.http is not None:
             await self.http.aclose()
         if self.qdrant is not None:
@@ -676,6 +787,11 @@ class ApiDependencies:
             await self.code_browser.open(
                 scope=self.code_scope, artifacts=self.artifacts
             )
+        # Third, same grounds (ADR-0115). A deployment that said `project_run`
+        # executes in the runner and cannot reach one hears so here, before
+        # any command a person approves would have run in the wrong place.
+        if self.code_runner is not None:
+            await self.code_runner.open()
         if self.qdrant is not None:
             await verify_qdrant_startup(
                 self.qdrant,
@@ -883,6 +999,7 @@ def build_dependencies(
     code_approvals = assembled.code_approvals
     code_sandbox = assembled.code_sandbox
     code_browser = assembled.code_browser
+    code_runner = assembled.code_runner
     code_scope = assembled.code_scope
     unavailable = assembled.chat_unavailable
     http = assembled.http
@@ -969,6 +1086,7 @@ def build_dependencies(
         code_approvals=code_approvals,
         code_sandbox=code_sandbox,
         code_browser=code_browser,
+        code_runner=code_runner,
         code_scope=code_scope,
         # Built unconditionally. The launcher is harmless until asked to start
         # something, and `runs_enabled` is what decides whether it ever is --
@@ -1036,6 +1154,8 @@ class _AssembledChat:
     code_sandbox: SandboxSlot | None = None
     #: Filled by `startup`, not here. See `BrowserSlot`.
     code_browser: BrowserSlot | None = None
+    #: Filled by `startup`, not here. See `RunnerSlot`.
+    code_runner: RunnerSlot | None = None
     #: The workspace the sandbox tool reads inputs from and writes outputs to.
     #: Carried alongside the slot because `open` needs it and the slot is
     #: created before anything has a workspace to give it.
@@ -1494,6 +1614,10 @@ def _assemble_chat(
     # -- so exclusivity is enforced by the envelope's `allowed_tools`, per turn,
     # and by which scope that turn enters. A tool whose scope was not entered
     # refuses even if something put its name in an envelope.
+    # Built before the bindings because `ProjectRunTool` holds it (ADR-0115):
+    # the slot is the tool's runner, empty until `startup` opens it, so the
+    # registry can stay frozen while the connection does not exist yet.
+    code_runner = RunnerSlot(config=config.runner)
     code_workspace_bindings = [
         WorkspaceListTool(code_scope).binding(),
         WorkspaceReadTool(code_scope).binding(),
@@ -1516,6 +1640,11 @@ def _assemble_chat(
             code_project_scope,
             code_read_receipts,
             environment=command_environment(),
+            # `None` -- run in this process -- unless the deployment named a
+            # runner (ADR-0115). Decided off `config.runner` rather than
+            # handed the slot unconditionally, so a deployment without one
+            # keeps the exact tool it had before and never sees a slot refuse.
+            runner=code_runner if config.runner is not None else None,
         ).binding(),
     ]
     # The one thing about a coding session that cannot be decided here.
@@ -1528,7 +1657,9 @@ def _assemble_chat(
     # The browser on identical terms (ADR-0113 §4): an MCP connection this
     # process cannot make synchronously, so an empty slot now and a filled one
     # before the first request.
-    code_browser = BrowserSlot(config=config.browser)
+    # `project_scope` beside the config (ADR-0115 §3.3): the one browser tool
+    # that takes a path needs to know which directory a project turn is in.
+    code_browser = BrowserSlot(config=config.browser, project_scope=code_project_scope)
 
     # Code's own journal and its own binding, not the two built above for chat
     # (ADR-085). The journal is the reason they cannot be shared: chat *drains*
@@ -1817,6 +1948,7 @@ def _assemble_chat(
         code_approvals=code_approvals if code is not None else None,
         code_sandbox=code_sandbox if code is not None else None,
         code_browser=code_browser if code is not None else None,
+        code_runner=code_runner if code is not None else None,
         code_scope=code_scope if code is not None else None,
         http=client,
         qdrant=qdrant,

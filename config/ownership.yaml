@@ -594,6 +594,16 @@
       ]
     },
     {
+      "owner": "adapters.tools.runner",
+      "lifecycle": "startup",
+      "fields": [
+        "runner.enabled",
+        "runner.transport",
+        "runner.endpoint",
+        "runner.timeout_seconds"
+      ]
+    },
+    {
       "owner": "adapters.telemetry.otel",
       "lifecycle": "startup",
       "fields": [

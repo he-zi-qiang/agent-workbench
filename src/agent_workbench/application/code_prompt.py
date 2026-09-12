@@ -416,18 +416,27 @@ _NO_SHELL_CLAIMS: Final[tuple[str, ...]] = (
 #: person who sees the command first.
 _HAS_SHELL = """\
 `project_run` runs a shell command in the project directory. There is no
-sandbox around it and no undo: it is the user's own machine, their files, their
-installed tools. Every call stops and asks them before it runs, and they see
-the command you wrote.
+sandbox around the files and no undo: they are the user's own files. Every
+call stops and asks them before it runs, and they see the command you wrote.
 
-The command inherits that machine's own environment -- its PATH, its toolchain,
-its credentials -- so whatever the machine itself can reach, a command can
-reach, the network included. That is a description of where the command runs,
-not a capability this session is promising you: an offline machine runs an
-offline command, and the way to find out is to propose one and read what it
-says. Do not tell the user you have no way to reach the network or to produce a
-file format you have no tool for; say which command would do it, and let them
-decide whether to allow it."""
+Where the command executes is one of two places, and the difference is whose
+tools are there. On the native launcher it is the user's own machine, with
+their toolchain and their environment. Under the container stack it is a Linux
+container built from this project's image: Python 3.12 and the ordinary Unix
+tools -- sh, coreutils, grep, awk -- and no Node, no compilers, none of the
+user's own installs; the project directory is the same files, mounted. Either
+way the command inherits that place's environment and network, so whatever
+the place itself can reach, a command can reach. That is a description of
+where the command runs, not a capability this session is promising you: an
+offline machine runs an offline command, and the way to find out is to
+propose one and read what it says. Do not tell the user you have no way to
+reach the network or to produce a file format you have no tool for; say which
+command would do it, and let them decide whether to allow it.
+
+A command is also the instrument a search is not. Anything that needs
+counting, measuring, parsing or running -- how long a line is, whether a file
+parses, what a script prints -- is one `python -c` or one `wc` away, and one
+approved command beats twenty searches that cannot answer."""
 
 _HOST_COMMANDS_GUIDANCE = """\
 
@@ -587,12 +596,14 @@ _NETWORK_CLAIMS: Final[tuple[tuple[str, str], ...]] = (
         "There is no shell here. The one way out is `web_search`, and it only\nreads.",
     ),
     (
-        "its credentials -- so whatever the machine itself can reach, a command "
-        "can\nreach, the network included.",
-        "its credentials -- so whatever the machine itself can reach, a command "
-        "can\nreach, the network included. You also hold `web_search`, which "
-        "reaches the\nweb without asking anybody -- prefer it for reading, and "
-        "spend a command on\nthe network only when a search cannot answer.",
+        # ADR-0115 reworded `_HAS_SHELL` for the two places a command can
+        # run, and this anchor moved with it: it is the sentence that says
+        # the network is reachable, whichever place that is.
+        "the place itself can reach, a command can reach.",
+        "the place itself can reach, a command can reach. You also hold "
+        "`web_search`,\nwhich reaches the web without asking anybody -- prefer "
+        "it for reading, and\nspend a command on the network only when a search "
+        "cannot answer.",
     ),
 )
 
@@ -825,8 +836,10 @@ def with_write_gate(prompt: str) -> str:
 #: on most of them.
 _BROWSER = """
 You can open a page in a real browser and watch it run. `browser_open` loads a
-URL -- including a `file://` path to something you just wrote -- and the others
-work on whatever is open: `browser_snapshot` for the accessibility tree,
+URL, or a file you wrote: give `workspace_path` the same relative path you
+would give the read tool -- `mario.html`, not an absolute path -- and it opens
+from this session's own directory, project or workspace. The others work on
+whatever is open: `browser_snapshot` for the accessibility tree,
 `browser_eval` to evaluate an expression in the page, `browser_interact` to
 click and type, `browser_screenshot` for a picture, `browser_diagnostics` for
 the console and network errors it collected.

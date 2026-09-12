@@ -226,7 +226,7 @@ class AppSettings(StrictModel):
     deployment_scope: Literal["local", "remote"] = "local"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     debug: bool = False
-    config_schema_version: Literal["1.19"] = "1.19"
+    config_schema_version: Literal["1.20"] = "1.20"
     architecture_baseline: Literal["1.3"] = "1.3"
 
 
@@ -1650,6 +1650,37 @@ class SandboxSettings(StrictModel):
     timeout_seconds: int = Field(default=180, ge=1, le=600)
 
 
+class RunnerSettings(StrictModel):
+    """Where ``project_run`` executes when not in this process (ADR-0115).
+
+    Off by default, and off means what it always meant: a coding session that
+    holds `project_run` runs the command itself, in the process's own world --
+    the user's machine on the native launcher. On, this section names the
+    command-runner MCP server (`apps/runner_mcp`) that runs it instead, in a
+    container that mounts the project directory and holds nothing else.
+
+    Only meaningful beside `policy.shell_tools_enabled`; the root validator
+    refuses the pair on/off. Like `[sandbox]`, nothing here describes what the
+    container may reach -- that is `compose.yaml`'s topology (no key volume,
+    no database address, its own network) and is deliberately not a setting.
+    """
+
+    enabled: bool = False
+    transport: Literal["http"] = "http"
+    #: Loopback, always: under Compose a tunnel in the API container puts the
+    #: runner behind this address (ADR-0107 §3.4's shape), so the validator
+    #: below sees the same loopback address it was written to admit.
+    endpoint: str = Field(default="http://127.0.0.1:8774/mcp", min_length=1)
+    #: The whole call, and a command may run for `RUN_TIMEOUT_SECONDS` (120)
+    #: before the runner kills it; 180 leaves the transport a minute on top.
+    timeout_seconds: int = Field(default=180, ge=1, le=600)
+
+    @field_validator("endpoint")
+    @classmethod
+    def _validate_endpoint(cls, value: str) -> str:
+        return _validate_service_endpoint(value, field_name="runner.endpoint")
+
+
 class SecretsSettings(StrictModel):
     deepseek_api_key: SecretStr | None = None
     qdrant_api_key: SecretStr | None = None
@@ -1688,6 +1719,7 @@ class Settings(BaseSettings):
     research: ResearchSettings = Field(default_factory=ResearchSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
+    runner: RunnerSettings = Field(default_factory=RunnerSettings)
     observability: ObservabilitySettings
     evaluation: EvaluationSettings
     testing: TestingSettings
@@ -1905,6 +1937,17 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "enabled evaluation judge requires a pinned model_revision"
                 )
+
+        # ADR-0115. A runner is *where* `project_run` executes; without the
+        # tool it is an address nothing dials. Refused rather than ignored,
+        # for the reason every other cross-section rule here is: a section
+        # that reads as a capability and does nothing is the shape
+        # `docs/known-gaps.md` files under 口径不实.
+        if self.runner.enabled and not self.policy.shell_tools_enabled:
+            raise ValueError(
+                "runner.enabled requires policy.shell_tools_enabled: the runner "
+                "is where project_run executes, and project_run is not offered"
+            )
 
         if self.app.environment == "production":
             self._validate_production()

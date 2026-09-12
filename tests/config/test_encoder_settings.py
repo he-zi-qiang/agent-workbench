@@ -40,7 +40,7 @@ def test_a_configuration_written_before_the_leaves_loads_and_loads_locally() -> 
     assert settings.rag.embedding.service_url == ""
     assert settings.rag.reranker.service_url == ""
     # No schema bump for a defaulted leaf (docs/configuration.md §2).
-    assert settings.app.config_schema_version == "1.19"
+    assert settings.app.config_schema_version == "1.20"
 
 
 def test_the_url_reaches_every_process_that_would_otherwise_load_weights() -> None:
