@@ -195,9 +195,12 @@ class WorkspaceReadTool:
             name=READ_TOOL_NAME,
             description=(
                 "Read one file from this task's workspace by name. Use "
-                "workspace_list first if you do not know the name. A long file "
-                "comes back one window at a time; the reply says which lines "
-                "it gave you and which offset continues from there."
+                "workspace_list first if you do not know the name. Omit "
+                "'offset' and 'limit' unless you want one specific region: "
+                "without them a read brings back everything up to a large "
+                "ceiling, and only a file past that ceiling comes back as a "
+                "window. The reply says which lines it gave you, why it "
+                "stopped, and which offset continues."
             ),
             input_schema={
                 "type": "object",

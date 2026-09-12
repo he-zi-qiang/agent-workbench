@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable, Iterator, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -51,7 +52,12 @@ from agent_workbench.domain.policies import (
 from agent_workbench.domain.tools import ToolCall, ToolSpec
 from agent_workbench.domain.workspace import MAX_INLINE_READ_CHARS
 from agent_workbench.ports.cancellation import NullCancellationToken
-from agent_workbench.ports.project_files import ProjectFileStore
+from agent_workbench.ports.project_files import (
+    ProjectFileContent,
+    ProjectFileEntry,
+    ProjectFileStore,
+    ProjectListing,
+)
 from agent_workbench.ports.tools import ToolInvocation
 
 _UNSET: object = object()
@@ -108,6 +114,94 @@ def _invocation(name: str, **arguments: object) -> ToolInvocation:
         cancellation=NullCancellationToken(),
         timeout_seconds=30,
     )
+
+
+class TestSearchingOneFile:
+    """`project_grep` given a file rather than a directory (2026-09-12).
+
+    Driven through a double rather than the real store, and for a reason that
+    is about this test rather than about convenience: what is under test is the
+    handler's fallback, and the double is the only way to say "walk refuses
+    this path, listing shows it as a file" without depending on a filesystem.
+    The real store has its own suite next door.
+    """
+
+    class _Store:
+        """A project with one file at the root, and a `walk` that only walks."""
+
+        def __init__(self, *, path: str, text: str) -> None:
+            self._path = path
+            self._text = text
+            self.read_paths: list[str] = []
+
+        async def walk(self, path: str = "") -> ProjectListing:
+            if path == "":
+                return ProjectListing(path="", entries=(self._entry(),))
+            # What `FilesystemProjectFileStore` answers for a file: the same
+            # sentence, which is what a model was reading four calls after
+            # writing that file.
+            raise NotFoundError(f"not a directory: {path!r}")
+
+        async def list_directory(self, path: str = "") -> ProjectListing:
+            if path != "":
+                raise NotFoundError(f"not a directory: {path!r}")
+            return ProjectListing(path="", entries=(self._entry(),))
+
+        async def read(self, path: str) -> ProjectFileContent:
+            self.read_paths.append(path)
+            return ProjectFileContent(
+                path=path,
+                text=self._text,
+                size_bytes=len(self._text.encode("utf-8")),
+                is_text=True,
+                modified_at=datetime(2026, 9, 12, tzinfo=UTC),
+            )
+
+        def _entry(self) -> ProjectFileEntry:
+            return ProjectFileEntry(
+                path=self._path,
+                kind="file",
+                size_bytes=len(self._text.encode("utf-8")),
+                modified_at=datetime(2026, 9, 12, tzinfo=UTC),
+            )
+
+    async def test_a_file_for_path_searches_that_file(
+        self, scope: ProjectFileScope
+    ) -> None:
+        # The move this restores is the ordinary one: write a file, then search
+        # it to check what you wrote. It used to answer `not a directory:
+        # 'mario.html'` -- which reads like the file is not there -- and the
+        # turn that met it walked the file by hand in twenty-eight reads
+        # instead, spending most of a 60-step budget.
+        store = self._Store(path="mario.html", text="const GRAVITY = 1;\nfoo\n")
+
+        with scope.using(cast(Any, store)):
+            result = await ProjectGrepTool(scope).handle(
+                _invocation("project_grep", pattern="GRAVITY", path="mario.html")
+            )
+
+        assert result.status == "ok"
+        assert "mario.html:1: const GRAVITY = 1;" in result.content
+        # One read, of the named file: the listing supplies the size, so
+        # nothing is read twice to find out how big it is.
+        assert store.read_paths == ["mario.html"]
+
+    async def test_a_path_that_is_neither_still_refuses_as_before(
+        self, scope: ProjectFileScope
+    ) -> None:
+        # The control. The fallback must not turn a wrong path into a search of
+        # nothing that reports "No matches." -- a model told that concludes the
+        # string is not in the project and stops looking.
+        store = self._Store(path="mario.html", text="x\n")
+
+        with scope.using(cast(Any, store)):
+            result = await ProjectGrepTool(scope).handle(
+                _invocation("project_grep", pattern="GRAVITY", path="nope.html")
+            )
+
+        assert result.status == "error"
+        assert result.error is not None
+        assert "not a directory" in result.error.message
 
 
 class TestExclusivity:

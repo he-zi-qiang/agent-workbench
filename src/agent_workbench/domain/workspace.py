@@ -345,7 +345,26 @@ def describe_read_window(label: str, window: ReadWindow) -> str | None:
             f"ceiling; pass offset={window.next_offset} to continue."
         )
     if window.next_offset is not None:
-        return f"{where}; pass offset={window.next_offset} to continue."
+        # Reached only when the *caller's* `limit` stopped the window: the
+        # ceiling sets `stopped_at_char_ceiling` and a long line sets
+        # `line_cut`, and both are answered above. Saying which one stopped it
+        # is the difference between a model that reads the rest in one call and
+        # one that pages.
+        #
+        # Measured 2026-09-12, a Code turn on Windows: the model asked for
+        # 40-line windows of a file it had just written and walked it in
+        # **twenty-eight** consecutive reads, spending the run's 60-step budget
+        # before it could finish. The sentence it was reading each time was
+        # `lines 121-160 of 900; pass offset=161 to continue.` -- true, and an
+        # invitation to do it again. Nothing told it the window had been its
+        # own choice, or that one read without `limit` would have brought the
+        # whole file.
+        return (
+            f"{where}; the 'limit' you passed stopped it there, not a ceiling. "
+            f"Omit 'limit' to take the rest in one read -- up to "
+            f"{MAX_INLINE_READ_CHARS} characters arrive at once -- or pass "
+            f"offset={window.next_offset} to continue from here."
+        )
     return f"{where}."
 
 
