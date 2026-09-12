@@ -1,6 +1,6 @@
 """The control plane forwards one frame from the browser, and only that.
 
-ADR-0112 §3.6 accepted the same cost ADR-095 did, one ADR later: `agent-api`
+ADR-0113 §3.6 accepted the same cost ADR-095 did, one ADR later: `agent-api`
 becomes a client of a process that can drive a browser. What makes that
 acceptable is not the intention but the *narrowness* -- one route, one method,
 one upstream path, and no way from here to anything that acts on a page.
@@ -101,7 +101,7 @@ def test_no_acting_tool_is_named_anywhere_in_the_forward() -> None:
 
 
 def test_the_console_is_never_handed_a_way_to_steer() -> None:
-    """ADR-0112 §4: read-only in the strong sense, not merely the HTTP one.
+    """ADR-0113 §4: read-only in the strong sense, not merely the HTTP one.
 
     The panel has no address bar and no clickable surface because this route
     gives it nothing to call. If a request body ever appears here, that has

@@ -56,7 +56,7 @@ def _load_profile(monkeypatch: pytest.MonkeyPatch, path: Path) -> Settings:
 def test_the_console_profile_carries_all_three_servers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Three since ADR-0112 added the guarded browser.
+    """Three since ADR-0113 added the guarded browser.
 
     Listed rather than counted: each alias widens every Task submitted under
     this profile by its own tools, so a rename that kept the count would be a
@@ -71,6 +71,63 @@ def test_the_console_profile_carries_all_three_servers(
         "web",
         "word",
     ]
+
+
+def test_the_console_profile_gives_its_coding_sessions_the_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of ADR-0113 §4, and the half that was missing.
+
+    The `[[mcp.servers]]` entry the test above counts decides one thing: which
+    tool names are frozen into a Task's authorization envelope. It says nothing
+    about a coding session, which runs inside the API process and reads
+    `code.browser_enabled`. For three days this profile had the first and not
+    the second, and the visible symptom was a model correctly reporting that it
+    had no browser while the console's 浏览器 panel sat beside it.
+
+    Both asserted here, in one test, because the failure was exactly that they
+    can be set independently and one of them was.
+    """
+
+    settings = _load_profile(monkeypatch, DEMO_CONFIG)
+
+    assert "browser" in {server.alias for server in settings.mcp.servers}
+    assert settings.code.enabled is True
+    assert settings.code.browser_enabled is True
+
+
+def test_the_narrow_code_profile_does_not_require_a_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`config.code-local.toml` starts nothing, so it may require nothing.
+
+    `BrowserSlot` is fail-fast: with `code.browser_enabled` on and no browser
+    answering, the API raises rather than serving a session that was promised
+    it can verify pages. `scripts/dev.sh code-api` starts no MCP server and
+    probes none -- that is what makes it the narrow profile -- so turning the
+    browser on there would make the one command this file exists for refuse to
+    boot until somebody had separately run another one.
+
+    The same asymmetry `sandbox_enabled` already has, asserted so the two
+    cannot drift into disagreeing about it.
+    """
+
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    # `config.code-local.toml` turns `research.enabled` on, which refuses to
+    # assemble against a placeholder key -- the same reason the reasoning-effort
+    # test below does not go through `_load_profile` either. Nothing here makes
+    # a call; the value exists only so the profile loads.
+    monkeypatch.setenv("AW_SECRETS__DEEPSEEK_API_KEY", "contract-only-not-a-real-key")
+    settings = load_settings(config_file=CODE_CONFIG)
+
+    assert settings.code.enabled is True
+    assert settings.code.browser_enabled is False
+    assert settings.code.sandbox_enabled is False
+    assert settings.mcp.servers == ()
 
 
 def test_a_task_from_this_profile_can_reach_the_word_renderer(
@@ -111,7 +168,7 @@ def test_the_writer_gets_word_and_the_researcher_gets_the_rest(
         "web": "research",
         # The browser reads the outside world too, and verifying a page is
         # research about it -- so it goes where the web reader goes rather than
-        # to the node doing the writing (ADR-0112, on ADR-027 §3.3's grounds).
+        # to the node doing the writing (ADR-0113, on ADR-027 §3.3's grounds).
         "browser": "research",
     }
 
@@ -744,7 +801,7 @@ def test_a_code_sub_agent_never_holds_a_working_set_tool() -> None:
 def test_no_two_loopback_services_claim_the_same_port() -> None:
     """One port, one service -- checked across `dev.sh`, not trusted to review.
 
-    This exists because the collision happened. ADR-0112 gave the browser MCP
+    This exists because the collision happened. ADR-0113 gave the browser MCP
     server 8770, which `scripts/dev.sh panel` had owned since the architecture
     panel was added -- so `dev.sh up` (which starts the browser server) left
     `dev.sh panel` unable to bind, and `panel` had a README entry and a Windows

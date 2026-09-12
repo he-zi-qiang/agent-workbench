@@ -1,4 +1,4 @@
-"""One browser, driven through CDP, with everything it said kept (ADR-0112).
+"""One browser, driven through CDP, with everything it said kept (ADR-0113).
 
 **Why CDP and not Playwright's own high-level API.** Most of what these tools
 need is one protocol command each -- `Accessibility.getFullAXTree`,
@@ -41,7 +41,7 @@ LOG_WINDOW: Final[int] = 400
 #: One console message, truncated. A page that prints a megabyte per line is
 #: not helped by carrying all of it into a tool result.
 MAX_LOG_CHARS: Final[int] = 2_000
-#: The screencast frame kept for the console panel (ADR-0112 §3.6).
+#: The screencast frame kept for the console panel (ADR-0113 §3.6).
 SCREENCAST_QUALITY: Final[int] = 55
 SCREENCAST_MAX_WIDTH: Final[int] = 900
 
@@ -161,7 +161,7 @@ class PlaywrightSession:
             # cannot run a sandboxed Chromium, `launch()` started one happily.
             # That is only possible unsandboxed.
             #
-            # So the whole of ADR-0112 §3.5 -- the generated seccomp profile,
+            # So the whole of ADR-0113 §3.5 -- the generated seccomp profile,
             # the three deliberate holes, the A/B in that section -- described
             # something this call was opting out of. It cost nothing to write
             # and would have cost the hardest layer in the stack.

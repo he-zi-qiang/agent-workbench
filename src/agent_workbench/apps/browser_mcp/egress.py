@@ -1,6 +1,6 @@
 """The only container that can both be seen by the browser and reach the net.
 
-ADR-0112 §3.3. The browser container has no default route; this one has two
+ADR-0113 §3.3. The browser container has no default route; this one has two
 networks and one job. Chromium's `--proxy-server` points here, so "the browser
 only leaves through the guard" is a property of the topology rather than of a
 flag somebody remembered to pass: switch this service off and the browser does

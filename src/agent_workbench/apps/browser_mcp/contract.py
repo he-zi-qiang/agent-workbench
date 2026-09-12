@@ -1,4 +1,4 @@
-"""Closed, bounded input contracts for the six browser tools (ADR-0112 §3.4).
+"""Closed, bounded input contracts for the six browser tools (ADR-0113 §3.4).
 
 Six tools, not the twenty a general browsing agent gets, because this surface is
 sized by one question: *what does verifying a page once actually need?* The

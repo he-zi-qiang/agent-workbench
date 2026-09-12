@@ -84,7 +84,7 @@ QDRANT_PORT="${QDRANT_PORT:-6333}"
 # only when `docker image inspect` finds it, so an unbuilt one costs a line of
 # output rather than a broken call.
 SANDBOX_PDF_IMAGE="${SANDBOX_PDF_IMAGE:-agent-workbench-sandbox-pdf:local}"
-# The Compose browser image (ADR-0112). Native `browser-server` does not use
+# The Compose browser image (ADR-0113). Native `browser-server` does not use
 # it -- it runs Playwright from this checkout's own venv against the browser
 # `playwright install` put in the developer's cache.
 BROWSER_IMAGE="${BROWSER_IMAGE:-agent-workbench-browser:local}"
@@ -557,7 +557,7 @@ up)
     _start word-server word-server
     _start web-server web-server
     _start sandbox-server sandbox-server
-    # Fourth since ADR-0112, and in this list for the same reason
+    # Fourth since ADR-0113, and in this list for the same reason
     # `sandbox-server` is: a Worker freezes its MCP catalogue once at start, so
     # a browser server that comes up afterwards leaves a healthy Worker with no
     # browser tool and nothing anywhere saying why.
@@ -820,7 +820,7 @@ web-check)
   ;;
 
 browser-server)
-  # The guarded browser (ADR-0112). Natively the destination guard runs inside
+  # The guarded browser (ADR-0113). Natively the destination guard runs inside
   # this same process -- `--proxy-endpoint` is not passed, so `main.py` starts
   # its own and Chromium is pointed at it on loopback.
   #
@@ -872,7 +872,7 @@ browser-check)
   ;;
 
 browser-image)
-  # The image the `browser` service runs (ADR-0112 §3.5). Separate from the
+  # The image the `browser` service runs (ADR-0113 §3.5). Separate from the
   # shared one because Chromium is a few hundred megabytes and seven other
   # services would carry a browser they never start; separate from a Compose
   # `build:` because this checkout lives under a CJK path, where `compose
@@ -1141,10 +1141,21 @@ demo-api)
     --endpoint "http://127.0.0.1:8766/mcp" \
     --health-url "http://127.0.0.1:8766/health" \
     --expect-tool run_python >&2
+  # And the browser, since `config.demo-local.toml` turns `code.browser_enabled`
+  # on: `BrowserSlot` refuses to start for the same reason the sandbox slot
+  # does, and the refusal is worth the same forty seconds here as it is there.
+  # One tool named rather than the six `browser-check` names -- this slot admits
+  # whatever the allowlist matched and fails only on an empty snapshot, so "does
+  # this server answer and is it ours" is the whole question this probe has.
+  "$PYTHON" scripts/smoke_mcp_server.py \
+    --label browser \
+    --endpoint "http://127.0.0.1:8773/mcp" \
+    --health-url "http://127.0.0.1:8773/health" \
+    --expect-tool browser_open >&2
   # Says what was decided rather than promising "chat search": with a stored
   # "off" this start has none, and a banner claiming otherwise is the same
   # lie the System page was built to stop telling.
-  echo "console profile (Word + web + sandbox); key available;" \
+  echo "console profile (Word + web + sandbox + browser); key available;" \
     "research.enabled=${AW_RESEARCH__ENABLED:-<the stored switch decides>}" >&2
   shift
   exec "$PYTHON" -m agent_workbench.apps.api.main "$@"
@@ -1186,7 +1197,7 @@ demo-worker)
     --health-url "http://127.0.0.1:8767/health" \
     --expect-tool fetch_page \
     --expect-tool download_document >&2
-  # The browser, third since ADR-0112 and probed on exactly the same grounds.
+  # The browser, third since ADR-0113 and probed on exactly the same grounds.
   # It is the one whose absence is hardest to read from the outside: a Worker
   # without it looks identical to a Worker with it until a Task tries to check
   # its own output and finds it has no way to open a page.

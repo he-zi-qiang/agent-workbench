@@ -70,7 +70,7 @@ def test_the_compose_profile_carries_every_loopback_mcp_server(
     this fails rather than the Worker coming up healthy with one tool fewer.
 
     The browser is not a sidecar -- it is its own service on its own network
-    (ADR-0112 §3.3) -- but the port reaches it the same way: through the
+    (ADR-0113 §3.3) -- but the port reaches it the same way: through the
     loopback tunnel this container opens, which is why it is a 127.0.0.1
     address here like the other two.
     """

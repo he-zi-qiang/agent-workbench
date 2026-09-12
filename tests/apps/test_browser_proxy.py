@@ -1,4 +1,4 @@
-"""What the browser proxy refuses (ADR-0112 §3.1, §3.2).
+"""What the browser proxy refuses (ADR-0113 §3.1, §3.2).
 
 These are the boundary's tests, not the browser's. Every case here is a
 destination judged without a Chromium anywhere near it, because the guarantee
@@ -296,7 +296,7 @@ def test_an_allowed_connect_opens_a_tunnel_that_carries_bytes() -> None:
             await writer.drain()
             established = await reader.readuntil(b"\r\n\r\n")
             # Opaque from here on: whatever goes in comes out the far end
-            # unread by this process. That is the CONNECT boundary ADR-0112
+            # unread by this process. That is the CONNECT boundary ADR-0113
             # §3.2 states rather than implies.
             writer.write(b"TUNNELLED PAYLOAD\r\n")
             await writer.drain()
@@ -309,7 +309,7 @@ def test_an_allowed_connect_opens_a_tunnel_that_carries_bytes() -> None:
     assert body == b"UPSTREAM-SAW:TUNNELLED PAYLOAD"
 
 
-# -- the branch a developer machine takes (ADR-0112 §3.2) -------------------
+# -- the branch a developer machine takes (ADR-0113 §3.2) -------------------
 #
 # Measured on 2026-09-12: with a fake-IP/TUN proxy in front, `example.com`
 # resolved to 198.18.0.70 and resolve-then-judge refused every site on the

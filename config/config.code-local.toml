@@ -24,6 +24,20 @@
 # left at its `false` default here, because `sandbox_run` needs a sandbox MCP
 # server that this profile does not ask anybody to start. `config.demo-local`
 # turns it on, and `scripts/dev.sh demo-api` probes the server first (ADR-057).
+#
+# The same is true of the browser, and for the same sentence rather than a
+# similar one: `code.browser_enabled` is left at its `false` default because
+# the six browser tools need `scripts/dev.sh browser-server`, which this
+# profile does not ask anybody to start, and `BrowserSlot` is fail-fast
+# (ADR-0113 §4). `scripts/dev.sh code-api` starts nothing and probes nothing --
+# that is what makes this the narrow profile -- so turning the browser on here
+# would make the one command this file exists for refuse to boot on a machine
+# that had not separately run another one.
+#
+# `config.demo-local` turns it on, where `dev.sh up` has already started the
+# browser and `demo-api` probes it. The asymmetry is the same one the sandbox
+# has and it is deliberate: a profile that starts nothing may not require
+# anything.
 
 [app]
 environment = "development"

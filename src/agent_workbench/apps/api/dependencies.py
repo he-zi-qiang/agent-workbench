@@ -45,6 +45,7 @@ from agent_workbench.adapters.filesystem.project_files import (
     FilesystemProjectFileStoreFactory,
 )
 from agent_workbench.adapters.mcp.client import connect_mcp_client
+from agent_workbench.adapters.mcp.registry_source import discover_bindings
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
     PostgresApprovalStore,
@@ -68,6 +69,7 @@ from agent_workbench.adapters.tools.knowledge_search import (
     TOOL_NAME as KNOWLEDGE_SEARCH,
 )
 from agent_workbench.adapters.tools.knowledge_search import KnowledgeSearchTool
+from agent_workbench.adapters.tools.mcp_workspace import bind_results_into_workspace
 from agent_workbench.adapters.tools.project_files import (
     ProjectEditTool,
     ProjectGrepTool,
@@ -156,6 +158,7 @@ from agent_workbench.bootstrap.model_factory import (
 from agent_workbench.bootstrap.network import is_loopback_bind_address
 from agent_workbench.bootstrap.projections import (
     ApiRuntimeConfig,
+    BrowserConfig,
     ResearchConfig,
     SandboxConfig,
 )
@@ -174,6 +177,7 @@ from agent_workbench.bootstrap.telemetry_factory import (
     build_telemetry,
 )
 from agent_workbench.domain.agents import DELEGATE_TOOL
+from agent_workbench.domain.browser import BROWSER_ALIAS, BROWSER_REMOTE_TOOLS
 from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
 from agent_workbench.domain.tools import ToolName, ToolSpec
@@ -201,6 +205,10 @@ class InsecureDeploymentError(RuntimeError):
 
 class SandboxUnavailableError(RuntimeError):
     """Code was configured to run code, and the sandbox did not answer."""
+
+
+class BrowserUnavailableError(RuntimeError):
+    """Code was configured to drive a browser, and no browser answered."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +314,113 @@ class SandboxSlot:
         self.bindings.clear()
 
 
+@dataclass(slots=True)
+class BrowserSlot:
+    """The browser connection, opened after the rest of the process is built.
+
+    The same lifecycle as ``SandboxSlot`` above and for the same reason, so the
+    shape is copied rather than reinvented. What differs is where the tools
+    come from: ``sandbox_run`` is one locally written tool against one named
+    remote contract, and the browser's six arrive through the ordinary MCP
+    discovery ``ADR-025`` specifies -- the same ``discover_bindings`` a Task
+    Worker runs, with the same allowlist, the same freeze at startup, and the
+    same refusal to admit a seventh tool a directory grew overnight.
+
+    **Fail-fast, like the sandbox and unlike the Worker.** ``composition.py``
+    logs ``mcp_connection_failed`` and starts anyway, because a Worker runs
+    unattended and a Task that never needed the browser should still run. This
+    process is the case ADR-057 §3 separated out: it is loopback, interactive,
+    and its coding sessions were told in configuration that they may verify
+    pages. Starting quietly without the tool produces the exact report this
+    slot exists to prevent -- a model saying it has no browser, in a console
+    whose 浏览器 panel is sitting right there showing ``503``.
+
+    Empty discovery is a failure here rather than "zero bindings". That is the
+    one place this deliberately parts from ``discover_bindings``'s own
+    contract, which degrades a broken snapshot to ``()`` so a Worker survives
+    it; on this side the degraded outcome is indistinguishable from the
+    misconfiguration, and only one of the two has a fix the operator can be
+    told.
+    """
+
+    config: BrowserConfig | None
+    bindings: list[ToolBinding] = field(default_factory=list[ToolBinding])
+    _resources: AsyncExitStack | None = None
+
+    @property
+    def tool_names(self) -> tuple[ToolName, ...]:
+        """The local names of what was actually admitted.
+
+        A property read per turn rather than a tuple copied at assembly, for
+        the reason ``_LiveToolRegistry`` above is a factory: this list is
+        empty until ``startup`` runs, and a turn offered a name whose spec
+        the registry cannot find dies before it starts.
+        """
+
+        return tuple(binding.spec.name for binding in self.bindings)
+
+    async def open(self, *, scope: WorkspaceScope, artifacts: ArtifactStore) -> None:
+        """Connect, discover, freeze -- or raise saying why not."""
+
+        if self.config is None:
+            return
+
+        resources = AsyncExitStack()
+        try:
+            # The SDK's read timeout governs established requests but not its
+            # connection negotiation, which is why the Worker wraps this same
+            # call in a timeout too. Cancellation unwinds the half-open client.
+            async with asyncio.timeout(self.config.timeout_seconds):
+                client = await resources.enter_async_context(
+                    connect_mcp_client(
+                        self.config.endpoint,
+                        timeout_seconds=self.config.timeout_seconds,
+                    )
+                )
+            discovered = await discover_bindings(
+                alias=BROWSER_ALIAS,
+                allowed_remote_tools=BROWSER_REMOTE_TOOLS,
+                timeout_seconds=self.config.timeout_seconds,
+                client=client,
+                artifacts=artifacts,
+                artifact_threshold_bytes=self.config.artifact_threshold_bytes,
+                max_result_bytes=self.config.max_result_bytes,
+                max_artifact_bytes=self.config.max_artifact_bytes,
+            )
+        except Exception as error:
+            await resources.aclose()
+            raise BrowserUnavailableError(
+                f"code.browser_enabled is on and the browser at "
+                f"{self.config.endpoint} did not answer "
+                f"({type(error).__name__}); start it with "
+                f"'scripts/dev.sh browser-server', or turn the setting off"
+            ) from error
+        if not discovered:
+            await resources.aclose()
+            # The server answered and offered none of the six. A distinct
+            # message because the fix is a different one: this is a browser
+            # process that is running and is not the one this build expects.
+            raise BrowserUnavailableError(
+                f"the browser at {self.config.endpoint} answered but offered "
+                f"none of {', '.join(BROWSER_REMOTE_TOOLS)}; is it the "
+                f"agent-browser-mcp from this checkout?"
+            )
+
+        self._resources = resources
+        # Wrapped exactly as the Worker wraps them: a screenshot is bytes the
+        # turn should be able to name afterwards, and the workspace is where
+        # every other tool in this session leaves one.
+        self.bindings.extend(
+            bind_results_into_workspace(binding, scope) for binding in discovered
+        )
+
+    async def aclose(self) -> None:
+        if self._resources is not None:
+            await self._resources.aclose()
+            self._resources = None
+        self.bindings.clear()
+
+
 class RerankerRequiredError(RuntimeError):
     """A shape that decides by relevance was configured without a relevance model."""
 
@@ -401,7 +516,13 @@ class ApiDependencies:
     #: The sandbox connection, empty until `startup` fills it. See `SandboxSlot`
     #: for why one mutable object exists among these frozen ones.
     code_sandbox: SandboxSlot | None = None
-    #: The workspace `SandboxSlot.open` binds the tool to.
+    #: The browser connection, on the same terms and for the same reason
+    #: (ADR-0113 §4). Two slots rather than one holding both: they fail
+    #: independently -- a deployment can have a sandbox and no browser -- and
+    #: the message each raises names a different command.
+    code_browser: BrowserSlot | None = None
+    #: The workspace `SandboxSlot.open` binds the tool to, and the one
+    #: `BrowserSlot.open` binds a screenshot into.
     code_scope: WorkspaceScope | None = None
     #: Always present. Reading reports needs nothing this process might lack;
     #: only *starting* a run is gated, and that gate lives inside the service so
@@ -529,6 +650,8 @@ class ApiDependencies:
         # orderly shutdown into a tool error in somebody's transcript.
         if self.code_sandbox is not None:
             await self.code_sandbox.aclose()
+        if self.code_browser is not None:
+            await self.code_browser.aclose()
         if self.http is not None:
             await self.http.aclose()
         if self.qdrant is not None:
@@ -546,6 +669,13 @@ class ApiDependencies:
         # hear so before it spends forty seconds warming encoders.
         if self.code_sandbox is not None and self.code_scope is not None:
             await self.code_sandbox.open(scope=self.code_scope)
+        # Second, on the same grounds and before the same forty seconds. The
+        # order between these two is not load-bearing; being ahead of the
+        # encoders is.
+        if self.code_browser is not None and self.code_scope is not None:
+            await self.code_browser.open(
+                scope=self.code_scope, artifacts=self.artifacts
+            )
         if self.qdrant is not None:
             await verify_qdrant_startup(
                 self.qdrant,
@@ -752,6 +882,7 @@ def build_dependencies(
     code = assembled.code
     code_approvals = assembled.code_approvals
     code_sandbox = assembled.code_sandbox
+    code_browser = assembled.code_browser
     code_scope = assembled.code_scope
     unavailable = assembled.chat_unavailable
     http = assembled.http
@@ -837,6 +968,7 @@ def build_dependencies(
         code=code,
         code_approvals=code_approvals,
         code_sandbox=code_sandbox,
+        code_browser=code_browser,
         code_scope=code_scope,
         # Built unconditionally. The launcher is harmless until asked to start
         # something, and `runs_enabled` is what decides whether it ever is --
@@ -902,6 +1034,8 @@ class _AssembledChat:
     code_approvals: CodeApprovalRegistry | None = None
     #: Filled by `startup`, not here. See `SandboxSlot`.
     code_sandbox: SandboxSlot | None = None
+    #: Filled by `startup`, not here. See `BrowserSlot`.
+    code_browser: BrowserSlot | None = None
     #: The workspace the sandbox tool reads inputs from and writes outputs to.
     #: Carried alongside the slot because `open` needs it and the slot is
     #: created before anything has a workspace to give it.
@@ -1391,6 +1525,10 @@ def _assemble_chat(
     # So the slot is created empty and filled by `startup`, which is async and
     # runs before the first request.
     code_sandbox = SandboxSlot(config=config.sandbox)
+    # The browser on identical terms (ADR-0113 §4): an MCP connection this
+    # process cannot make synchronously, so an empty slot now and a filled one
+    # before the first request.
+    code_browser = BrowserSlot(config=config.browser)
 
     # Code's own journal and its own binding, not the two built above for chat
     # (ADR-085). The journal is the reason they cannot be shared: chat *drains*
@@ -1444,6 +1582,7 @@ def _assemble_chat(
             [
                 *code_workspace_bindings,
                 *code_sandbox.bindings,
+                *code_browser.bindings,
                 *(() if code_web_tool is None else (code_web_tool,)),
                 *delegate_bindings,
             ]
@@ -1653,6 +1792,19 @@ def _assemble_chat(
             # configured" (`bootstrap/projections.py`), so this cannot offer a
             # name the registry above has no binding for.
             web_search_enabled=config.code.web_search_enabled,
+            # ADR-0113 §4. Read through the slot rather than copied from it,
+            # because the slot is empty until `startup` runs -- the same seam
+            # `_LiveToolRegistry` above spans, and the two have to be read at
+            # the same moment or a turn is offered a name whose spec the
+            # registry has not got yet.
+            #
+            # Not `config.code.browser_enabled`. The configuration says a
+            # browser was *asked for*; this says what one *answered with*, and
+            # only the second is safe to put in front of a model. They differ
+            # for exactly as long as it takes `startup` to fail, which it does
+            # loudly -- but the field would be wrong during that window and
+            # wrong is not a thing worth being briefly.
+            browser_tools=lambda: code_browser.tool_names,
         )
         if config.code.enabled
         else None
@@ -1664,6 +1816,7 @@ def _assemble_chat(
         code=code,
         code_approvals=code_approvals if code is not None else None,
         code_sandbox=code_sandbox if code is not None else None,
+        code_browser=code_browser if code is not None else None,
         code_scope=code_scope if code is not None else None,
         http=client,
         qdrant=qdrant,

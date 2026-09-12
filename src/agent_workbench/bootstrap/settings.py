@@ -258,7 +258,7 @@ class ApiSettings(StrictModel):
     computer_session_url: str = "http://127.0.0.1:8768/session"
 
     #: Where the guarded browser's latest screencast frame is, for the console's
-    #: panel to forward (ADR-0112 §3.6).
+    #: panel to forward (ADR-0113 §3.6).
     #:
     #: A defaulted leaf under `[api]`, exactly like `computer_session_url` above
     #: and for the reason stated there: a new table would bump
@@ -273,7 +273,24 @@ class ApiSettings(StrictModel):
     #: exception.
     browser_frame_url: str = "http://127.0.0.1:8773/frame"
 
-    @field_validator("computer_session_url", "browser_frame_url")
+    #: Where the same browser's MCP surface is, for a coding session that may
+    #: drive it (ADR-0113 §4, `code.browser_enabled`).
+    #:
+    #: The second leaf naming one server, and it is deliberately not derived
+    #: from the first. `browser_frame_url` is read by a route in this process;
+    #: this one is dialled by a tool a model calls. They agree on a host and a
+    #: port today and nothing requires them to: under Compose both are near
+    #: ends of the same tunnel, and on a machine running two browsers -- one
+    #: for a Task Worker, one for this console -- they would not be. A
+    #: derivation would make that arrangement unsayable in order to save a
+    #: line here.
+    #:
+    #: Loopback by the same validator, for the same reason: a browser on
+    #: another host is a browser whose page this process cannot see, driven by
+    #: a turn whose identity story is two request headers.
+    browser_mcp_url: str = "http://127.0.0.1:8773/mcp"
+
+    @field_validator("computer_session_url", "browser_frame_url", "browser_mcp_url")
     @classmethod
     def refuse_a_server_on_another_host(cls, value: str) -> str:
         # The same argument as `host` below, from the other side. That one
@@ -432,6 +449,41 @@ class CodeSettings(StrictModel):
     #: default. ``execution_locality`` and ``coordination`` above stay frozen;
     #: this changes what a turn may call, not where it runs.
     sandbox_enabled: bool = False
+
+    #: Whether this session may drive the guarded browser (ADR-0113 §4).
+    #:
+    #: ADR-0113 decided the browser goes to "Code 会话与 Task 图节点" and
+    #: shipped the Task half: `[[mcp.servers]]` puts the six tools into a
+    #: Worker's catalogue and into every Task envelope frozen after it. The
+    #: Code half had no switch to be off, which is a different thing from
+    #: being off -- the console grew a 浏览器 panel that a coding session had
+    #: no way to put a frame in, and the model, asked to check the page it had
+    #: just written, correctly answered that it had no browser.
+    #:
+    #: Named for what it grants, like ``sandbox_enabled`` above and for the
+    #: reason written there. Off by default on the same ground: the tool names
+    #: a session is offered decide its risk ceiling, and a deployment that
+    #: never started a browser must not have its sessions widened by an
+    #: upgrade.
+    #:
+    #: Not ``[[mcp.servers]]``. That array answers a different question -- which
+    #: tools enter a Task's authorization envelope -- and `api.browser_frame_url`
+    #: already states the distinction from the other side. A profile that
+    #: declared the browser there would widen every Task submitted under it,
+    #: which is not what turning it on for one console surface should mean.
+    browser_enabled: bool = False
+
+    #: The budget for one browser call, and for the startup discovery that
+    #: freezes the catalogue (ADR-025).
+    #:
+    #: 120 rather than the sandbox's 180: `config.demo-local.toml` declares the
+    #: same 120 for the Task side of this server, and the two arms calling one
+    #: process on one machine disagreeing about how long it may take would make
+    #: "the browser is slow today" produce different symptoms depending on
+    #: which surface asked. A page load plus a CDP round trip is the shape of
+    #: the wait; a container start, which is what the sandbox is waiting for,
+    #: is not.
+    browser_timeout_seconds: int = Field(default=120, ge=1, le=600)
 
     #: Where the console's folder picker opens, when this process is not on
     #: the machine whose disk it is picking from (ADR-0109).

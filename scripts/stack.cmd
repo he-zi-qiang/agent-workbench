@@ -332,7 +332,7 @@ rem  checkout whose path contains non-ASCII characters, with an error that
 rem  never mentions the path; `docker build` does not.
 rem
 rem  It derives FROM the image built just above, so it must come after it.
-echo Building the browser image (ADR-0112): Chromium on top of the image above.
+echo Building the browser image (ADR-0113): Chromium on top of the image above.
 docker build --build-arg BASE_IMAGE=agent-workbench:local -t agent-workbench-browser:local -f docker\browser.Dockerfile .
 if errorlevel 1 (
     echo stack: browser image build failed -- see the output above. 1>&2

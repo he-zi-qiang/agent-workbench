@@ -452,6 +452,7 @@ class CodeConfig:
     #: tool list the envelope is built from, which is a branch downstream has
     #: to take rather than a constant it can assume.
     sandbox_enabled: bool
+    browser_enabled: bool
     #: Whether each ``sandbox_run`` call waits for a human (ADR-058). Carried
     #: because it decides the envelope's armed risks and which prompt variant
     #: a turn is given -- both downstream branches.
@@ -670,6 +671,32 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserConfig:
+    """Which browser process a coding session will drive (ADR-0113 §4).
+
+    Absent when ``code.browser_enabled`` is false, which is the same condition
+    that keeps the six names out of what a turn is offered -- so this process
+    never connects to a browser no turn could call. The parallel with
+    ``SandboxConfig`` above is exact and deliberate: both describe one MCP
+    server *this* process dials, as opposed to ``MCPConfig``, which describes
+    the servers whose names enter a Task's authorization envelope.
+
+    The three byte limits are carried rather than read where they are used,
+    because ``discover_bindings`` takes them and an adapter that reached for
+    settings would be a second place a deployment's meaning is decided. They
+    are the same three the Task Worker's ``MCPConfig`` carries, from the same
+    two settings leaves -- a result too large for one arm is too large for the
+    other, and the browser is the one server whose results are screenshots.
+    """
+
+    endpoint: str
+    timeout_seconds: int
+    artifact_threshold_bytes: int
+    max_result_bytes: int
+    max_artifact_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class BlockingCallRunnerConfig:
     """The bound on synchronous adapter work, for whichever process runs it.
 
@@ -831,7 +858,7 @@ class ApiRuntimeConfig:
     #: and nothing has been approved". A console that could not tell those apart
     #: is back at the problem the page refused to have by showing nothing.
     computer_session_url: str
-    #: Where the guarded browser's latest frame is (ADR-0112 §3.6). Carried on
+    #: Where the guarded browser's latest frame is (ADR-0113 §3.6). Carried on
     #: exactly the terms above: usually not running, and "not running" is a
     #: different answer from "running, nothing opened yet" -- 503 and 204
     #: respectively, kept apart because a panel that merged them would show an
@@ -924,6 +951,10 @@ class ApiRuntimeConfig:
     #: cannot describe different intentions -- this is the address, that is the
     #: decision, and a deployment only ever sets both or neither.
     sandbox: SandboxConfig | None = None
+    #: The same arrangement for the guarded browser (ADR-0113 §4). `None`
+    #: whenever `code.browser_enabled` is false, so this process never holds
+    #: an address for a server none of its turns may call.
+    browser: BrowserConfig | None = None
     #: ADR-042. How many blocking adapter calls may hold threads at once.
     blocking_calls: BlockingCallRunnerConfig = field(
         default_factory=BlockingCallRunnerConfig
@@ -1463,6 +1494,7 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # on without the other gets the tool-less arrangement rather than a
             # process that starts and then cannot honour what it offered.
             sandbox_enabled=settings.code.sandbox_enabled and settings.sandbox.enabled,
+            browser_enabled=settings.code.browser_enabled,
             external_requires_approval=settings.code.external_requires_approval,
             # Only the policy flag, with no `code` twin to and it with. The
             # sandbox needs two because a server has to be running somewhere;
@@ -1502,6 +1534,27 @@ def project_api(settings: Settings) -> ApiRuntimeConfig:
             # carried by a process whose coding sessions cannot call it is an
             # invitation to connect for no reason.
             if settings.code.sandbox_enabled and settings.sandbox.enabled
+            else None
+        ),
+        browser=(
+            BrowserConfig(
+                endpoint=settings.api.browser_mcp_url,
+                timeout_seconds=settings.code.browser_timeout_seconds,
+                # The same three the Task Worker's `MCPConfig` carries above,
+                # from the same two leaves. Repeated rather than shared because
+                # the two are projected for different processes and a shared
+                # helper would make them look like one decision; they are one
+                # *value* and two decisions to use it.
+                artifact_threshold_bytes=(
+                    settings.runtime.tool_result_artifact_threshold_bytes
+                ),
+                max_result_bytes=settings.policy.max_tool_result_bytes,
+                max_artifact_bytes=settings.artifact_store.max_artifact_bytes,
+            )
+            # One condition, not two: `api.browser_mcp_url` has a default and
+            # therefore no "did anybody configure it" to ask. The grant is the
+            # whole of the decision.
+            if settings.code.browser_enabled
             else None
         ),
         evaluation=EvaluationRunsConfig(

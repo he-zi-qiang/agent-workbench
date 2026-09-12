@@ -1,4 +1,4 @@
-"""MCP surface for the guarded browser (ADR-0112 §3.4).
+"""MCP surface for the guarded browser (ADR-0113 §3.4).
 
 The six tools, and one extra HTTP route that is not a tool: `/frame` hands the
 console the latest screencast frame. It is deliberately outside the MCP surface
@@ -241,7 +241,7 @@ async def _dispatch(
         if judged is None:
             # Distinct from "nothing was refused", and the difference decides
             # whether a quiet answer can be trusted. Under Compose the guard
-            # lives in another container (ADR-0112 §3.3), so this read can fail
+            # lives in another container (ADR-0113 §3.3), so this read can fail
             # on its own; flattening that into an empty list would tell the
             # model its page is fine when nobody checked.
             body.append(

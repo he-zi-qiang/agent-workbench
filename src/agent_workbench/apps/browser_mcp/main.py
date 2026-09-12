@@ -1,4 +1,4 @@
-"""Console entry point for the guarded browser MCP service (ADR-0112).
+"""Console entry point for the guarded browser MCP service (ADR-0113).
 
 Three things share one event loop here, and the order they start in is not
 cosmetic: the proxy must be listening before Chromium launches, because
@@ -57,7 +57,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "Use an external destination guard instead of starting one here -- "
             "under Compose this is the `browser-egress` service, which is the "
             "only container that can both be seen by this one and reach the "
-            "network (ADR-0112 3.3). Omit it and the guard runs in this "
+            "network (ADR-0113 3.3). Omit it and the guard runs in this "
             "process, which is what the native path does."
         ),
     )

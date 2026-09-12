@@ -621,7 +621,7 @@ def test_the_stack_names_the_profile_it_runs() -> None:
     assert [server["alias"] for server in parsed["mcp"]["servers"]] == [
         "word",
         "web",
-        # ADR-0112. Listed rather than counted, because each alias widens every
+        # ADR-0113. Listed rather than counted, because each alias widens every
         # Task submitted under this profile by its own tools, and a test that
         # only counted them would let a rename through.
         "browser",
@@ -941,7 +941,7 @@ def test_the_windows_launcher_builds_the_image_that_can_lay_a_document_out() -> 
 
 
 def test_the_windows_launcher_builds_the_browser_image_in_order() -> None:
-    """The second image, and the order it has to come in (ADR-0112 §3.5b).
+    """The second image, and the order it has to come in (ADR-0113 §3.5b).
 
     `docker/browser.Dockerfile` is `FROM agent-workbench:local`, so building it
     first gets either a stale base or no base at all. Compose cannot enforce
@@ -1019,7 +1019,7 @@ def test_the_api_alone_can_write_one_host_folder_and_the_picker_opens_there() ->
     assert "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects" in text
 
 
-# --- The browser's way out is a shape, not a flag (ADR-0112 §3.3) ----------
+# --- The browser's way out is a shape, not a flag (ADR-0113 §3.3) ----------
 
 
 def test_the_browser_container_has_no_default_route() -> None:
@@ -1063,7 +1063,7 @@ def test_the_guard_is_the_only_way_from_that_network_to_the_outside() -> None:
 
 
 def test_the_browser_keeps_its_own_sandbox() -> None:
-    """ADR-0112 §3.5: the hardening stays, and the seccomp profile is what moves.
+    """ADR-0113 §3.5: the hardening stays, and the seccomp profile is what moves.
 
     If this profile is ever dropped, Chromium aborts at start rather than
     running unsandboxed -- but it would abort in a container whose `cap_drop`
