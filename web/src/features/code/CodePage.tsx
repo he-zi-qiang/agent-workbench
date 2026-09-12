@@ -1150,16 +1150,19 @@ export function CodePage() {
   // 3. **只对「这个标签页刚跑完的那一轮自己打开的页面」生效。** 读者从文件夹里点开
   //    一个历史页面不该触发任何模型调用。
   //
-  // 关得掉，而且关掉这件事记得住：`aw.code.autofix.v1`。
+  // **没有开关，这是被要求的，而且那三道闸就是它的全部刹车。** 曾经有一颗「自动验证」
+  // 摆在权限选择器旁边，理由是「它会花钱，一个花钱的行为不该只在代码里存在」。用户
+  // 看过之后要求去掉它。留下的约束是硬的而不是自觉的：一轮最多两次额外调用，同一组
+  // 错误一次，且只对自动弹出来的那张页面——所以「它会不会一直烧下去」这个问题在这里
+  // 有一个上界，而不是一个态度。
   const AUTO_ROUNDS = 2;
-  const [autoVerify, setAutoVerify] = useStoredState("aw.code.autofix.v1", true);
   // 这一轮的自动修到第几轮了，以及上一次交出去的是哪一组错误。按会话记，换会话清零。
   const autoPass = useRef<{ session: string | null; rounds: number; sent: string }>(
     { session: null, rounds: 0, sent: "" },
   );
   const onFaults = useCallback(
     (list: readonly string[], name: string) => {
-      if (!autoVerify || running || sessionId === undefined) return;
+      if (running || sessionId === undefined) return;
       // 只认自动弹出来的那一张：`shownPage` 是那段效果记下的「这一轮产出的页面」。
       if (autoShown.current !== name) return;
       const signature = [...list].sort().join("|");
@@ -1182,7 +1185,7 @@ export function CodePage() {
           list.map((fault) => `- ${fault}`).join("\n"),
       );
     },
-    [autoVerify, permission, running, send, sessionId],
+    [permission, running, send, sessionId],
   );
 
   const decide = useCallback(
@@ -1569,25 +1572,6 @@ export function CodePage() {
             </button>
           ))}
         </div>
-        {/* 一个开关，不是一档权限：它不改这一轮能做什么，只决定「页面报错之后
-            要不要自己再发一轮」。放在权限选择器旁边，因为这两个是读者在按发送
-            之前唯一要想的两件事，而它会花钱——一个花钱的行为不该只在代码里
-            存在。 */}
-        <button
-          aria-pressed={autoVerify}
-          className={`aw-button aw-code-autofix ${autoVerify ? "is-active" : ""}`}
-          onClick={() => {
-            setAutoVerify(!autoVerify);
-          }}
-          title={
-            autoVerify
-              ? `写出的页面在预览里报错时，自动把错误交回去修，最多 ${String(AUTO_ROUNDS)} 轮`
-              : "页面报错时只显示出来，要不要交回去由你决定"
-          }
-          type="button"
-        >
-          自动验证
-        </button>
         <ComposerMenu
           catalogue={toolOffer.data}
           catalogueFailed={toolOffer.isError}

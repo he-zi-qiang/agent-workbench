@@ -1,4 +1,4 @@
-# Explicit local profile for the guarded browser (ADR-0112).
+# Explicit local profile for the guarded browser (ADR-0113).
 #
 # Separate from config.web-local.toml, and separate for the reason every other
 # profile here is separate: MCP tool names are frozen into every newly submitted

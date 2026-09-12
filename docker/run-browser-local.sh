@@ -2,14 +2,14 @@
 # The browser container: Chromium and the MCP server, and no way out.
 #
 # This container is on an `internal: true` network, so it has no default route
-# (ADR-0112 §3.3). It cannot reach the internet at all; what it can reach is
+# (ADR-0113 §3.3). It cannot reach the internet at all; what it can reach is
 # `browser-egress`, which holds the destination guard and is the only thing in
 # this topology that is both visible from here and able to leave. That is why
 # "the browser only leaves through the guard" is not a flag somebody has to
 # remember: turn the guard off and this container reaches nothing.
 #
 # Chromium keeps its own sandbox here. `--no-sandbox` is deliberately absent --
-# ADR-0112 §3.5 measured that the namespace sandbox works under `cap_drop: ALL`
+# ADR-0113 §3.5 measured that the namespace sandbox works under `cap_drop: ALL`
 # once `docker/chromium-seccomp.json` stops refusing `CLONE_NEWUSER`, and the
 # A/B is in that section. If the profile is ever dropped from `compose.yaml`,
 # Chromium aborts at start rather than quietly running unsandboxed, which is the

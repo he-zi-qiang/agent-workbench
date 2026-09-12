@@ -1706,7 +1706,7 @@ Identity Adapter 只信请求头。在那个前提下「谁存的」这个问题
 
 ### D-09 浏览器那条容器路径没有被完整装配验证过
 
-**是什么**：ADR-0112 的 Compose 拓扑——`browser` 服务在 `internal: true` 网络上、
+**是什么**：ADR-0113 的 Compose 拓扑——`browser` 服务在 `internal: true` 网络上、
 `browser-egress` 持有守卫、两条回环隧道、只读挂进去的工作区卷——**从来没有作为一个整体
 `compose up` 起来过**。
 
@@ -2804,6 +2804,12 @@ Code 起始屏那行「这里能碰到」（[CodeReach.tsx](../web/src/features/
 **做完的判据**：不适用。要改，先推翻 ADR-0109 §3.3——那意味着回答「容器里的 shell 是谁的
 shell」，以及一个不持有 key 的、只跑 shell 的容器该长什么样。
 
+**2026-09-12 补一句：上面「浏览器」那半句仍然准确，但它描述的需求已经有了别的答案。**
+这一条说的是「经 `project_run` 跑 `open https://…` 去开**这台机器**的浏览器」，那条拒绝
+一个字不改。ADR-0113 的受控浏览器是另一件东西：它自己住在一个容器里、够不着网络、只经一个
+它寻址不到的守卫出网，和「谁的桌面」无关。原生路径上编码会话现在能驱动它（第七十八批），
+Compose 路径上还不能，那一条单独记在 F-39。
+
 ### F-38 一轮改写过的工作区文件，正文缓存只对被自动打开的那一个失效 —— 已知代价
 
 **现状**：工作区文件的正文缓存按「前缀 + 身份 + 会话 + 文件名」键，`staleTime: Infinity`
@@ -2825,6 +2831,32 @@ shell」，以及一个不持有 key 的、只跑 shell 的容器该长什么样
 
 **做完的判据**：一轮改写 `a.py` 与 `b.py`、读者在这一轮之前预览过两者，turn 结束后点开
 任意一个，看到的都是新正文；一条前端用例钉住它。
+
+### F-39 Compose 栈里的编码会话仍然驱动不了那个受控浏览器 —— 未接线
+
+**证据**：[config.compose-local.toml](../config/config.compose-local.toml) 里
+`[code] browser_enabled` 没有出现，因此取默认的 `false`
+（[settings.py](../src/agent_workbench/bootstrap/settings.py) `CodeSettings`）。
+同一个文件里的 `[[mcp.servers]]` **有** `browser` 那一项——那是 Task 那一侧，它决定哪些
+工具名冻进 Task 的授权信封，与一个 Code 回合能不能调它是两个问题（ADR-0113 §4，以及
+`api.browser_frame_url` 的注释从另一侧说的同一件事）。
+
+**这是未接线，不是拒绝。** 拒绝的那一半是 F-37，讲的是宿主浏览器；这一个不同：浏览器就在
+这套拓扑里（ADR-0113 §3.3 的 `browser` + `browser-egress` 两个服务），API 容器也已经有一条
+`docker/loopback_proxy.py` 的隧道通向它的 `8773`——`api.browser_frame_url` 正是靠那条隧道读到
+帧的。缺的只是打开开关，以及先确认 `BrowserSlot` 的**启动期**连接在那条隧道上成立。
+
+**没有顺手打开的理由**：`BrowserSlot` 是 fail-fast（与 `SandboxSession.open` 同理由，
+ADR-0057 §3）。在 compose 档里打开它，等于让 API 容器的启动依赖那条隧道在**启动的那一刻**
+已经通——而帧那条路是**请求期**才用的，两者不是同一个时刻。这个差别正是
+`config.compose-local.toml` 至今不开沙箱的原因（「`SandboxSession.open` 是 fail-fast，而
+`cap_drop: ALL` 的拓扑里没有东西能应答它的探针」），所以它值得一次真实的 compose 起栈验证，
+而不是一行配置加上乐观。
+
+**做完的判据**：`config.compose-local.toml` 里 `[code] browser_enabled = true`；
+`docker compose --profile demo up -d --wait` 之后 API 容器不因浏览器探测而退出；控制台在
+Compose 栈里开一个编码会话，让它 `browser_open` 一个刚写出来的页面，浏览器面板出现那一帧。
+`tests/deployment/test_compose.py` 加一条断言把开关与隧道绑在一起。
 
 ## 优先级建议
 

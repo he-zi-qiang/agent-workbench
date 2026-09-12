@@ -52,6 +52,7 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
     PROJECT_MEMORY_FILE,
+    with_browser,
     with_host_commands,
     with_plan_only,
     with_project_memory,
@@ -202,6 +203,20 @@ CODE_PROJECT_TOOLS_WITH_RUN: tuple[ToolName, ...] = (
     PROJECT_RUN_TOOL,
 )
 
+
+def _no_browser_tools() -> tuple[ToolName, ...]:
+    """The default for `CodeSessionService.browser_tools`.
+
+    A named function rather than a lambda so the dataclass field reads as a
+    default and shows up as one in a traceback, and so the docstring has
+    somewhere to live: a deployment that configured no browser and one whose
+    browser offered nothing are the same thing to a turn, and this is where
+    that equivalence is written down.
+    """
+
+    return ()
+
+
 #: The project side as a set, for the two questions asked about it below:
 #: "is this a project turn" and "did a flat-scoped tool leak into one".
 _PROJECT_TOOLS: frozenset[ToolName] = frozenset(CODE_PROJECT_TOOLS)
@@ -284,15 +299,24 @@ def _assert_every_prompt_combination_resolves() -> None:
     for names in tuples:
         for gated in (False, True):
             for plan_only in (False, True):
-                base = _system_prompt_for(
-                    names,
-                    external_requires_approval=gated,
-                    plan_only=plan_only,
-                )
-                # The search arm is applied to the same base the service
-                # applies it to, so a rewriter that cannot find its anchor
-                # raises here rather than on somebody's turn.
-                with_web_search(base)
+                for browser in (False, True):
+                    # `with_browser` has no anchor and cannot raise, so this
+                    # loop is not what keeps *it* honest. What it covers is the
+                    # order: run after `with_plan_only` the browser paragraph
+                    # would sit below the sentence that narrows the turn, and a
+                    # base prompt that later grew an anchor for it would find
+                    # the wrong one. Evaluating every combination at import is
+                    # cheaper than remembering that.
+                    base = _system_prompt_for(
+                        names,
+                        external_requires_approval=gated,
+                        plan_only=plan_only,
+                        browser=browser,
+                    )
+                    # The search arm is applied to the same base the service
+                    # applies it to, so a rewriter that cannot find its anchor
+                    # raises here rather than on somebody's turn.
+                    with_web_search(base)
 
 
 async def _project_memory(store: ProjectFileStore | None) -> str | None:
@@ -340,6 +364,7 @@ def _system_prompt_for(
     external_requires_approval: bool,
     plan_only: bool = False,
     write_gate: bool = False,
+    browser: bool = False,
     memory: str | None = None,
 ) -> str:
     """What this turn is told about the world it is in.
@@ -382,6 +407,15 @@ def _system_prompt_for(
         base = CODER_SYSTEM_PROMPT
     if PROJECT_RUN_TOOL in tool_names:
         base = with_host_commands(base)
+    # Before `with_plan_only` and after `with_host_commands`, which is where
+    # every other orthogonal arm goes. Passed in rather than read off
+    # `tool_names` like the two above it, and that asymmetry is the same one
+    # `plan_only` has: the browser's names are discovered at startup, so
+    # "does this list contain a browser tool" is a question about a prefix
+    # rather than about a constant, and a prefix test here would be a second
+    # place the naming scheme is written down.
+    if browser:
+        base = with_browser(base)
     if plan_only:
         base = with_plan_only(base)
     # After `with_plan_only`, and only ever without it: a plan turn holds no
@@ -764,6 +798,25 @@ class CodeSessionService:
     #: there are fewer names than combinations; a Cartesian product retires
     #: that argument by itself.
     web_search_enabled: bool = False
+    #: The browser tool names this process actually admitted (ADR-0113 §4).
+    #:
+    #: A callable rather than a tuple, and that is the whole reason this field
+    #: is not spelled `browser_enabled: bool` beside the flag above. The names
+    #: are not a constant: they come from one MCP discovery against a real
+    #: server, which `apps/api/dependencies.py` performs in `startup` -- after
+    #: this service has been assembled. A tuple copied here would be the empty
+    #: one, on every deployment that has a browser.
+    #:
+    #: The same shape `_LiveToolRegistry` has on the other side of that seam,
+    #: for the same reason, which is what keeps the two honest with each other:
+    #: the names this returns and the specs that registry answers for are two
+    #: reads of one list. A name offered whose spec the registry cannot find
+    #: raises out of `code_risk_ceiling` and takes the turn with it.
+    #:
+    #: Defaulted to a function returning nothing rather than to `None`, so that
+    #: every read below is one call with no branch -- "no browser" and "a
+    #: browser offering nothing" are the same thing to a turn.
+    browser_tools: Callable[[], tuple[ToolName, ...]] = _no_browser_tools
     _running: set[str] = field(default_factory=set[str], init=False)
     _turns: int = field(default=0, init=False)
 
@@ -1312,6 +1365,12 @@ class CodeSessionService:
         tool_names = self.project_tool_names if project else self.tool_names
         if self.web_search_enabled:
             tool_names = (*tool_names, WEB_SEARCH_TOOL)
+        # The second orthogonal axis, on the argument the first one settled:
+        # the browser enters no scope, is equally true of a flat turn and a
+        # project turn, and would take the four literals to sixteen if it were
+        # written as tuples. Appended after search so the order a turn reads
+        # its tools in matches the order this function is written in.
+        tool_names = (*tool_names, *self.browser_tools())
         return tool_names
 
     async def offer(
@@ -1471,6 +1530,12 @@ class CodeSessionService:
                 external_requires_approval=self.external_requires_approval,
                 plan_only=request.mode == "plan",
                 write_gate=request.approvals == "before_write",
+                # Read off what this turn was actually offered, not off the
+                # service's configuration: a plan turn has had its list
+                # narrowed by risk, and a turn told it can open a browser it
+                # is not holding is the failure `_system_prompt_for` exists
+                # to avoid.
+                browser=any(name in tool_names for name in self.browser_tools()),
                 memory=memory,
             ),
             messages=(*history, asked),

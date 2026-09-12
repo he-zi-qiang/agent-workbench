@@ -27,6 +27,113 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-12（第七十八批）：一个号只指一件事，编码会话拿到它自己的浏览器
+
+起因是一句提问：控制台里的模型说「我没有外壳，也没有浏览器，因此无法运行这款游戏。我的
+验证方式是直接读取源代码并统计字符数量」，而提问的人刚合进 PR #206——那份 ADR 的标题正是
+「模型能自己验证页面对不对」。**模型说的是实话**，而且有三条各自独立成立的原因。查证过程
+本身是这一批的第一份产出。
+
+### 1. 两篇 ADR 同占 0112，改后一篇到 0113
+
+`docs/adr/` 下同时有 `0112-a-page-shows-itself-and-a-project-keeps-its-own-note.md`
+与 `0112-the-browser-reaches-the-network-only-through-a-guard-it-cannot-address.md`。
+两条并行分支各自认领了同一个号，文件名不同，git 因此无话可说，两边都干净合入。
+
+代价不是不整齐。合并之后**三十五个文件**写着 `ADR-0112`，一半指一篇、一半指另一篇：从
+`session.py` 顺着 `ADR-0113 §3.5` 去读的人落进一篇讲 `AGENTS.md` 的 ADR，会断定注释过期；
+从 `status.md` 顺着 `ADR-0112 §5` 去读的人落进一段 seccomp 论证，断定同一件事。注释的推理
+只能靠这个引用承载，而一个指向两份文档的号已经不是引用了。
+
+**先落地的保号**：`git merge-base --is-ancestor` 判定 82cf5b9（页面自己跑起来）在 cc6b2ac
+下先进主线，7ceca74（浏览器守卫）经 PR #206 后到，因此改后者。共重写 **72 处**引用，其中
+`docs/status.md`、`docs/known-gaps.md` 两个文件按句锚定逐条改（它们同时含两篇的引用），
+其余 33 个文件整文件替换。
+
+**并补上一道防线**：`tests/architecture/test_adr_numbers_are_unique.py`。README 的「号段预留
+0047–0059」一节早就点了这个风险（「避免三条并行的线各自认领同一个号」），靠的是人记得预留；
+这份测试是不依赖记性的那一半，在第二个文件被加进来的那一刻失败，而不是在有人顺着引用读错
+之后。四条断言：目录非空、每个文件名带号、没有两篇同号、标题号与文件名号一致。第四条不是
+冗余——「改了文件名没改标题」正是这次修复自己会路过的中间态。
+
+**证据**：`test_adr_numbers_are_unique.py` 4 条通过；造一个 `0113-` 重名文件，
+`test_no_two_adrs_claim_the_same_number` 立刻失败并把两个文件名和修复步骤一起打出来，删掉
+即恢复绿。改号前后对照过一次干净 worktree：`tests/config/test_local_console_profile.py`
+在 HEAD 上本来就有 8 条失败（这台 Windows 机器用 GBK 解 `bash scripts/dev.sh` 的子进程输出），
+失败集合逐条 `diff` 一致——**改号引入零新增失败**。
+
+**一个自己造出来又修掉的事故，值得记**：改号脚本用 `pathlib.write_text` 写回，而 Windows 上
+它按 `os.linesep` 把行尾换成了 CRLF，`scripts/dev.sh` 因此在 bash 下直接返回 2。修的时候又
+过了头——按「HEAD blob 是 LF」把 37 个文件统一成 LF，于是 `scripts/stack.cmd` 触发
+`test_windows_gets_a_launcher_for_the_whole_stack`：批处理必须是 CRLF，`.gitattributes` 为此
+钉了 `*.cmd text eol=crlf`，而那条规则的注释里已经把理由写好了。最终的判据是量出来的而不是
+推出来的：`git diff --numstat` 对同一个文件，LF 给 114/4、CRLF 给 14116/14006——所以除
+`*.cmd`/`*.bat`（`.gitattributes` 钉 CRLF）之外一律 LF。**教训是那条注释先于事故存在，
+而脚本没有读它。**
+
+### 2. ADR-0113 §4 的后一半：编码会话拿到浏览器
+
+查证结论：`adapters/tools/browser.py` 不存在，`dependencies.py` 里没有任何浏览器绑定，六个
+工具名只活在 `apps/browser_mcp/`（server）与 `routes/browser.py`（帧反代）里。
+`application/code_session.py:123-205` 四个元组穷举了一个 Code 回合能拿到的全部工具，**没有
+MCP 臂**，第 424 行的注释把这件事写成了「a future」。
+
+而 ADR-0113 §4 写的是「**只给 Code 会话与 Task 图节点**」。所以这不是一个新的边界决定，
+**是一份已通过的 ADR 只交付了一半**——Task 那一半（`[[mcp.servers]]` → Worker 目录 → Task
+信封）与面板那一半（`BrowserFrame.tsx`）都在，Code 那一半没有。因此这一批不写新 ADR。
+
+**做法照既有先例，一处不发明**：
+
+- **`domain/browser.py`**：别名与六个远端工具名。放 domain 的理由与 `domain/sandbox.py`
+  一样——两个调用方都要命名它，而两个都不许 import `apps/`。
+- **`BrowserSlot`**（`apps/api/dependencies.py`）：与 `SandboxSlot` 同形的第二个槽，因为
+  `build_dependencies` 是同步的而连 MCP 是异步的。差别只在工具从哪来：沙箱是一个本地写的
+  工具打一个具名远端契约，浏览器走 ADR-025 那套 `discover_bindings`——同一个函数、同一份
+  allowlist、同样在启动时冻结一次。**fail-fast**，与沙箱同理由（ADR-057 §3）：一个被配置
+  告知「你可以验证页面」的会话，每次调用才失败一次，正是那条 ADR 拒绝的安排。空目录在这
+  一侧算失败而不算「零个绑定」——Worker 那边降级是对的，这边降级后的样子和配置错了长得
+  一模一样，而只有其中一种有能告诉运维的修复命令。
+- **`CodeSessionService.browser_tools`**：一个**可调用**字段，不是 `bool`。名字来自一次真实
+  发现，而发现发生在 `startup`、在这个服务被装配之后——装配时拷一份元组，在每个真有浏览器的
+  部署上都会是空的。这与 `_LiveToolRegistry` 跨的是同一道缝，必须同时读，否则回合被递给一个
+  registry 还没有 spec 的工具名，`code_risk_ceiling` 会在回合开始前就把它打死。
+- **`_offered` 里一次 append**：照 `web_search` 那条正交轴，不加第五个元组。理由是
+  `CODE_PROJECT_TOOLS_WITH_RUN` 的注释已经论证过的：浏览器不进任何 scope、对平铺和项目两侧
+  同样成立，写成元组会把四个字面量变成十六个。
+- **`with_browser`**（`code_prompt.py`）：**纯 append，没有锚点**，与 `with_web_search` 不同。
+  这处不对称是实质而非省事：`web_search` 必须把基础提示里「你够不到网络」那句取消掉，因为
+  它能把任意问题送上公网；浏览器不能——ADR-0113 的 Chromium 只经一个它寻址不到的代理出网，
+  逐请求过 `address_guard`，回合写什么都改不了它能去哪。那句话仍然是真的，所以它留着。
+
+**配置：`demo-local` 打开，`code-local` 保持关闭。** 后者不是遗漏——`dev.sh code-api` 不启动
+任何 MCP server、也不探测任何一个，那正是它作为窄 profile 的意义；在那里打开 fail-fast 的
+开关，会让这个文件唯一存在的那条命令在没人先跑另一条命令时拒绝启动。这条不对称沙箱已经有
+了，`config.code-local.toml` 的那段注释现在把两者写在同一句里。`demo-api` 在 exec 之前多探
+一次浏览器，与它探沙箱那几行挨着。
+
+**没碰 `compose-local`**：那套拓扑里浏览器经 `loopback_proxy.py` 的隧道到达，打开它需要先确认
+隧道在 API 容器里起得来，那是另一次改动该做的验证。
+
+**证据**：`tests/application/test_code_session_browser.py` 新增 5 条——默认一个都不给；六个名字
+同时到达平铺与项目两侧（正交性那一条，两侧写在同一个测试里，因为要断言的正是它们一致）；
+名字逐回合读而不是装配时拷（用一个测试中途 mutate 的 list 模拟槽自己的行为）；拿到浏览器的
+回合被告知它是用来干什么的；以及 `with_browser` 是纯后缀、不动基础提示里那句网络声明。
+`tests/config/test_local_console_profile.py` 新增 2 条——`demo-local` 两个开关都在（这次的失败
+正是它们可以各开各的，而其中一个没开），`code-local` 两个都不要求。
+`config/ownership.yaml` 补了三个新叶子的归属。
+
+**schema 版本不动**：三个叶子都在既有段下且带默认值（`code.browser_enabled`、
+`code.browser_timeout_seconds`、`api.browser_mcp_url`），`docs/configuration.md` §2 的规则是
+「新 table 抬版，既有段下带默认值的新叶子不抬」——与 ADR-0113 §5 给 `api.browser_frame_url`
+的处置同形。
+
+**顺手发现、没有顺手改的一条**：`with_web_search` 在整个 `src/` 里只有一个调用点，而那个调用
+点在 `_assert_every_prompt_combination_resolves` 里面——也就是说**联网搜索那条提示词臂从未
+应用到任何真实回合上**，只被它自己的导入期断言养活着。`_system_prompt_for` 不接
+`web_search` 参数，而 `_offered` 只往工具名里 append。这是既有缺口、不在本批范围内，记在这里
+而不是顺手补，因为改它会动到每一个开着 `code.web_search_enabled` 的部署的提示词。
+
+---
 ## 2026-09-12（第七十七批）：写出来的页面自己跑起来，项目自己记着它的偏好
 
 用户的原话是两句：「code 模式应该在对 html 文件生成后进行预览」，以及「应该有类似于 agent.md
@@ -190,8 +297,10 @@ opaque origin，`event.origin` 是字符串 `"null"`，认不了任何东西—�
 说明修不动，停）；只对「这个标签页刚跑完的那一轮自己打开的那张页面」生效——读者从文件夹里点开一个
 历史页面不该触发任何模型调用。
 
-关得掉，开关在权限选择器旁边（`aw.code.autofix.v1`，记得住）。放在那儿是因为它会花钱，而一个花钱
-的行为不该只在代码里存在；关掉之后错误照样显示，第 7 条那颗「把这些错误交给它」还在。
+**曾经有一颗开关，同日按用户要求去掉了。** 它摆在权限选择器旁边，理由是「它会花钱，一个花钱的
+行为不该只在代码里存在」。去掉之后，刹车全部是硬的而不是自觉的：一轮最多两次额外调用、同一组错误
+一次、只对自动弹出来的那张页面——「它会不会一直烧下去」因此有一个上界，而不是一个态度。第 7 条那颗
+「把这些错误交给它」还在，它现在是「自动那两轮之后还想再交一次」的那条路。
 
 **证据**：`CodePage.test.tsx`「自动预览」新增 3 条——报错之后自己发了第二轮且那句话里有「自动验证」
 和错误原文；同一组错误不发第三轮；关掉开关之后一轮也不发、按钮仍在。
@@ -13947,7 +14056,7 @@ ADR-101 全篇相同（ADR-044：只绑 loopback、只信请求头），在那�
 答不出来，所以先补一条可以随便署名的审计记录比没有更糟。它与生产身份认证（D-05）绑定，
 顺序不能反。
 
-## 一个模型能自己验证的浏览器，出网只有一条它绕不开的路（ADR-0112）
+## 一个模型能自己验证的浏览器，出网只有一条它绕不开的路（ADR-0113）
 
 Code 会话的模型此前手里没有任何能执行 JavaScript 的东西——`sandbox_run` 是
 `python:3.12-slim`、`--network=none`、tmpfs `noexec`。于是它能写出一个页面、把它落到
@@ -13976,7 +14085,7 @@ backendNodeId → 坐标 → CDP 点击这条链通了），`browser_screenshot`
 seccomp）`Chromium sandboxing failed!`，拒绝启动而不是降级。`internal: true` 的语义
 也单独验过：那侧没有默认路由，公网与 DNS 都不通。
 
-**一个只有容器能发现的缺陷，已修**：ADR-0112 §3.5 的整套论证——生成的 seccomp
+**一个只有容器能发现的缺陷，已修**：ADR-0113 §3.5 的整套论证——生成的 seccomp
 profile、三个刻意开的洞、A/B——此前**在代码里没有落实**。`LAUNCH_FLAGS` 里没有
 `--no-sandbox`，注释还专门解释了它为什么不在；但 Playwright 的 `chromium_sandbox`
 默认 `False`，它自己会加上那个标志。发现它的是一个本来只做装配验证的对照组：在拒绝

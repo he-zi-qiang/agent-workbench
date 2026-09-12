@@ -210,6 +210,24 @@ max_concurrent_turns = 1
 #     that key to true.
 sandbox_enabled = true
 
+# 浏览器给 Code 会话，这是 ADR-0113 §4「只给 Code 会话与 Task 图节点」的后一半
+# ——前一半是本文件末尾那个 `[[mcp.servers]]`，它只管 Task 的授权信封，一个 Code
+# 回合看不见它。两处都写，因为它们回答的是两个问题：那边是「哪些工具名冻进 Task
+# 的信封」，这里是「这个进程里的编码会话能不能调」。
+#
+# 与 `sandbox_enabled` 完全同形，包括代价：
+#
+#   * 打开之后 API 在浏览器不应答时拒绝启动（`BrowserSlot` 是 fail-fast，理由与
+#     ADR-057 §3 给沙箱的那条一样：一个被配置文件告知「你可以验证页面」的会话，
+#     每次调用才失败一次，是那条 ADR 明确拒绝的安排）。`scripts/dev.sh demo-api`
+#     因此在 exec 之前也探它一次，和沙箱那条挨着。
+#   * `dev.sh up` 的启动序里 `browser-server` 排在 `demo-api` 前面，所以走 `up`
+#     这条路不需要额外做什么；单独跑 `dev.sh demo-api` 需要先有 `browser-server`。
+#
+# 这一行买到的东西，是控制台那块「浏览器」面板从 `204`（在跑、没打开过页面）变成
+# 真的有帧：在它之前，面板是给一个没有任何工具能驱动它的浏览器开的窗口。
+browser_enabled = true
+
 # 2026-08-26：上面这一行只对**挂了项目的**会话无效，对扁平会话是活的。上一版注释
 # 在这里写错过一次，写的是"对 Code 会话是死配置"，来源是把
 # `application/code_session.py` 里那句"under config.demo-local.toml, where every
@@ -454,7 +472,7 @@ tools = [
 # `false`, unlike `word` and `web` above: `browser_interact` clicks things,
 # `browser_eval` can mutate the page it runs in, and `browser_diagnostics`
 # drains its buffers. The declaration is per server and one non-replayable tool
-# makes the server non-replayable (ADR-0112 §3.4, ADR-025 §2.7).
+# makes the server non-replayable (ADR-0113 §3.4, ADR-025 §2.7).
 retryable_effects = false
 audience = "research"
 timeout_seconds = 120

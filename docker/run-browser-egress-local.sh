@@ -1,5 +1,5 @@
 #!/bin/sh
-# The destination guard, alone in the one container that can leave (ADR-0112 §3.3).
+# The destination guard, alone in the one container that can leave (ADR-0113 §3.3).
 #
 # It holds nothing: no key, no database, no workspace, no Docker socket, and no
 # browser. What a compromise of this process buys is the ability to make

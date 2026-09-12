@@ -1,4 +1,4 @@
-"""The browser's latest frame, forwarded to the console (ADR-0112 §3.6).
+"""The browser's latest frame, forwarded to the console (ADR-0113 §3.6).
 
 **One route, read-only, and the narrowness is the decision** -- the same
 sentence `routes/computer.py` opens with, and deliberately the same shape. That
@@ -14,7 +14,7 @@ file's reasoning transfers without amendment:
 * the URL is validated as loopback at config load, so this cannot become a way to
   watch a browser on another host.
 
-**Read-only in the strong sense, not merely the HTTP one.** ADR-0112 §4 refuses
+**Read-only in the strong sense, not merely the HTTP one.** ADR-0113 §4 refuses
 to let a person drive this browser from the panel, because two operators on one
 page need an arbitration story and there isn't one. That refusal is enforced
 here by there being nothing to enforce: this router has one GET and it returns

@@ -837,15 +837,15 @@
      "op": "SCMP_CMP_MASKED_EQ"
     }
    ],
-   "comment": "ADR-0112 \u00a73.5 edit 2 -- same mask as clone, not wider."
+   "comment": "ADR-0113 \u00a73.5 edit 2 -- same mask as clone, not wider."
   },
   {
    "names": [
     "chroot"
    ],
    "action": "SCMP_ACT_ALLOW",
-   "comment": "ADR-0112 \u00a73.5 edit 3 -- the zygote holds CAP_SYS_CHROOT inside the namespace it just entered; seccomp does not know that."
+   "comment": "ADR-0113 \u00a73.5 edit 3 -- the zygote holds CAP_SYS_CHROOT inside the namespace it just entered; seccomp does not know that."
   }
  ],
- "_generated_by": "docker/make_chromium_seccomp.py from moby v24.0.9; see ADR-0112 \u00a73.5"
+ "_generated_by": "docker/make_chromium_seccomp.py from moby v24.0.9; see ADR-0113 \u00a73.5"
 }

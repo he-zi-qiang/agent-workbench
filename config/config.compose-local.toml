@@ -153,7 +153,7 @@ transport = "http"
 # in this container -- the browser itself is bound to loopback in its own
 # container, so the settings validator, the SDK's Host check and the
 # server's `--host` choice list all see what they were written to see
-# (ADR-0112 §2.4, the shape ADR-0107 established).
+# (ADR-0113 §2.4, the shape ADR-0107 established).
 endpoint = "http://127.0.0.1:8773/mcp"
 tools = [
   "browser_open",
@@ -166,7 +166,7 @@ tools = [
 # `false`, unlike `word` and `web` above: `browser_interact` clicks things,
 # `browser_eval` can mutate the page it runs in, and `browser_diagnostics`
 # drains its buffers. The declaration is per server and one non-replayable tool
-# makes the server non-replayable (ADR-0112 §3.4, ADR-025 §2.7).
+# makes the server non-replayable (ADR-0113 §3.4, ADR-025 §2.7).
 retryable_effects = false
 audience = "research"
 timeout_seconds = 120

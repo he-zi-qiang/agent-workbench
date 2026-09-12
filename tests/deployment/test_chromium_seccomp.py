@@ -1,6 +1,6 @@
 """The three holes in the browser's seccomp profile, and only those three.
 
-ADR-0112 §3.5 replaced `--no-sandbox` with a profile that is Docker's default
+ADR-0113 §3.5 replaced `--no-sandbox` with a profile that is Docker's default
 with three specific edits. Docker offers no way to say "default, plus this" --
 only whole-profile replacement -- so the artifact in `docker/` is a snapshot
 that can be edited by anyone, at which point nothing would notice a fourth hole.
@@ -104,7 +104,7 @@ def test_the_profile_records_where_it_came_from() -> None:
     generated = _profile().get("_generated_by", "")
     assert "make_chromium_seccomp.py" in generated
     assert "moby" in generated
-    assert "ADR-0112" in generated
+    assert "ADR-0113" in generated
 
 
 def test_the_session_actually_asks_playwright_for_the_sandbox() -> None:
@@ -118,7 +118,7 @@ def test_the_session_actually_asks_playwright_for_the_sandbox() -> None:
     sandboxed Chromium at all, `launch()` started one and rendered a page.
     Only an unsandboxed browser can do that.
 
-    So every part of ADR-0112 §3.5 -- the generated profile, its three holes,
+    So every part of ADR-0113 §3.5 -- the generated profile, its three holes,
     the A/B -- was describing a layer the code had turned off. Nothing failed:
     the pages rendered, the tools worked, the tests passed. A protection that
     is absent looks exactly like one that is present until something attacks

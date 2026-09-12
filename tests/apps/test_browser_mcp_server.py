@@ -123,7 +123,7 @@ def test_the_server_declares_exactly_the_six_tools() -> None:
 
 
 def test_interaction_is_not_declared_replayable() -> None:
-    """A graph node replay must not click a button a second time (ADR-0112 §3.4)."""
+    """A graph node replay must not click a button a second time (ADR-0113 §3.4)."""
 
     async def scenario() -> Any:
         async with Client(
@@ -275,7 +275,7 @@ def test_every_declared_tool_answers(tool: str) -> None:
 
 
 def test_an_unreachable_guard_is_not_reported_as_nothing_refused() -> None:
-    """ADR-0112 §3.3: the two answers mean opposite things to the model.
+    """ADR-0113 §3.3: the two answers mean opposite things to the model.
 
     Under Compose the guard is another container, so this read can fail on its
     own. Flattening that into an empty list would tell a model its page is fine

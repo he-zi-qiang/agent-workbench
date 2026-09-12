@@ -937,18 +937,6 @@ textarea::placeholder {
   color: var(--aw-text);
 }
 
-/* 「自动验证」那颗开关。
- *
- * 它旁边那三档权限是一个 `aw-segmented`——三选一、总有一个亮着。这一颗不是：它是
- * 一个开关，关着的时候就该看起来是关着的，所以按 `aw-button` 的常态画，只在开着
- * 时才借用同一套「被按下」的表面。两者共用那三个变量而不是各写一份颜色。 */
-.aw-code-autofix.is-active {
-  border-color: var(--aw-border-strong, var(--aw-border));
-  background: var(--aw-panel);
-  box-shadow: var(--aw-shadow-sm);
-  color: var(--aw-text);
-}
-
 .aw-result-list {
   display: grid;
   gap: 10px;
@@ -10014,7 +10002,7 @@ p.aw-code-step-thought {
   font-size: 12px;
 }
 
-/* 浏览器面板的那一帧（ADR-0112 §3.6）。
+/* 浏览器面板的那一帧（ADR-0113 §3.6）。
  *
  * `max-width: 100%` 而不是固定宽：截屏来自 1280×800 的视口，而这一栏可能只有
  * 320px 宽，等比缩下来读者仍然看得出「模型现在停在哪一页」——这是这块面要回答

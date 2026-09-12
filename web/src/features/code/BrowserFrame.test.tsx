@@ -29,7 +29,7 @@ afterEach(() => {
   revokeObjectURL.mockReset();
 });
 
-describe("BrowserFrame（ADR-0112 §3.6）", () => {
+describe("BrowserFrame（ADR-0113 §3.6）", () => {
   // 这一组三条是同一个决定的三面：503、204、200 必须画成三种不同的东西。
   // 把前两种合成一个空框，读者就分不清该去启动一个进程还是该等模型动手。
 
@@ -65,7 +65,7 @@ describe("BrowserFrame（ADR-0112 §3.6）", () => {
     expect(
       screen.getByAltText("浏览器当前画面").getAttribute("src"),
     ).toBe("blob:frame-1");
-    // ADR-0112 §4：只读是写在面上的，不是靠读者猜的。
+    // ADR-0113 §4：只读是写在面上的，不是靠读者猜的。
     expect(screen.getByText(/点不动它/)).toBeTruthy();
   });
 

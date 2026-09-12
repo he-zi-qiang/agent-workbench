@@ -1,4 +1,4 @@
-"""The only way out of the browser container (ADR-0112 §3.1, §3.2).
+"""The only way out of the browser container (ADR-0113 §3.1, §3.2).
 
 **Why the guard is here and not in the tool.** The first design checked the URL
 inside ``browser_open`` and handed it to Chromium. That check is worth nothing.
@@ -145,7 +145,7 @@ class Upstream:
 
     **The container path never takes this branch.** Nothing in the Compose
     topology sets a proxy variable, and `browser-egress` reaches the network
-    itself -- so ADR-0112 §3.2's stronger claim holds exactly where it was
+    itself -- so ADR-0113 §3.2's stronger claim holds exactly where it was
     claimed, and this is the developer machine's weaker sibling.
     """
 
@@ -492,7 +492,7 @@ class LocalDecisions:
 
 @dataclass(frozen=True, slots=True)
 class RemoteDecisions:
-    """The proxy is the egress container (ADR-0112 §3.3)."""
+    """The proxy is the egress container (ADR-0113 §3.3)."""
 
     url: str
     timeout_seconds: float = 5.0

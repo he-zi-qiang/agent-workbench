@@ -270,7 +270,7 @@ def create_app(
     # server is not up right now", which are the two states ADR-095 §7 says must
     # stay distinguishable.
     app.include_router(computer.router)
-    # Unconditional for the same reason, one ADR later (ADR-0112 §3.6). The two
+    # Unconditional for the same reason, one ADR later (ADR-0113 §3.6). The two
     # states a console must keep apart are "this deployment has no browser" and
     # "the browser is not up right now", and a router that disappeared would
     # collapse them into one 404.

@@ -1,6 +1,6 @@
 """Generate `chromium-seccomp.json`: Docker's default profile, three holes wider.
 
-**Why this file exists at all.** ADR-0112 §3.5 first said Chromium's own sandbox
+**Why this file exists at all.** ADR-0113 §3.5 first said Chromium's own sandbox
 could not coexist with `cap_drop: ALL`, and chose `--no-sandbox` on that basis.
 That was measured and it was wrong: `CLONE_NEWUSER` needs no capability -- being
 available to the unprivileged is the entire point of an unprivileged user
@@ -91,7 +91,7 @@ def build(profile: dict[str, Any], tag: str) -> dict[str, Any]:
             "args": [
                 {"index": 0, "value": PATCHED_NS_MASK, "op": "SCMP_CMP_MASKED_EQ"}
             ],
-            "comment": "ADR-0112 §3.5 edit 2 -- same mask as clone, not wider.",
+            "comment": "ADR-0113 §3.5 edit 2 -- same mask as clone, not wider.",
         }
     )
     profile["syscalls"].append(
@@ -99,13 +99,13 @@ def build(profile: dict[str, Any], tag: str) -> dict[str, Any]:
             "names": ["chroot"],
             "action": "SCMP_ACT_ALLOW",
             "comment": (
-                "ADR-0112 §3.5 edit 3 -- the zygote holds CAP_SYS_CHROOT inside "
+                "ADR-0113 §3.5 edit 3 -- the zygote holds CAP_SYS_CHROOT inside "
                 "the namespace it just entered; seccomp does not know that."
             ),
         }
     )
     profile["_generated_by"] = (
-        f"docker/make_chromium_seccomp.py from moby {tag}; see ADR-0112 §3.5"
+        f"docker/make_chromium_seccomp.py from moby {tag}; see ADR-0113 §3.5"
     )
     return profile
 
