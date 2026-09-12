@@ -90,9 +90,9 @@ Let me check with anchored regexes.」→「The middle run is at most 96. Let me
 `test_local_*_profile` 18——都是 `subprocess.run(["bash", "scripts/dev.sh", …])`；
 `test_sandbox_bootstrap` 5、`test_provider_key_api` 1、`test_settings` 1（环境变量大小写）。
 另外 5 条是 `tests/apps/test_computer_consent.py`：它只 monkeypatch 了 darwin 那条路，在 Windows
-上会**真的弹出**「屏幕控制批准」对话框，每条等 120 秒超时——一次全量因此拖到 22 分钟。
-`tests/apps/test_browser_mcp_server.py` 也有几条在这台机器上要等到超时才走。三者都是本批之前
-就在的，值得单独登记，本批没有动。
+上会**真的弹出**「屏幕控制批准」对话框，六个、每个等 120 秒超时——一次全量里约 12 分钟是它。
+（第一版这句话把 `test_browser_mcp_server.py` 也算进了慢的原因；对照过三次全量——带它 22:24
+与 22:53，不带它 21:28——那个文件只占一分半，怪错了。）两者都是本批之前就在的，本批没有动。
 
 这一列的数字**不能**跟 HIGHLIGHTS §2 那张表里 macOS 上量的离线数相减：平台不同，跳过集不同。
 
