@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MAX_PREVIEW_BYTES } from "../api/client";
 import { ErrorNotice, LoadingLine } from "./ui";
 
@@ -20,6 +20,47 @@ const PREVIEW_CSP =
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}">`;
 
 /**
+ * The one script this console puts into somebody else's page, and what it buys.
+ *
+ * A page that throws on load paints nothing. So does a page that has not
+ * started drawing yet, and a canvas game whose first frame is black. Three
+ * different situations, one rectangle, and the reader has no way to tell them
+ * apart -- which is the gap this closes. 2026-09-12, the report that prompted
+ * it: a coding turn wrote a 40 KB game, could not run it (this deployment's
+ * project sessions hold no execution tool at all, ADR-0109 §3.3), and said so
+ * honestly -- "all the claims about playability above are from reading the
+ * code, not from watching it". The frame beside that sentence had already run
+ * the page. Nobody was listening to it.
+ *
+ * **It reports, it does not repair.** Three listeners and a `console.error`
+ * wrapper, each forwarding one string to the parent. Nothing here changes what
+ * the page does, and the original `console.error` is still called.
+ *
+ * **`postMessage` is not a hole in the sandbox.** The frame has an opaque
+ * origin (no `allow-same-origin`, see the component), so the message arrives
+ * with `origin: "null"` and the parent cannot use origin to authenticate it --
+ * it compares `event.source` against this frame's own `contentWindow` instead.
+ * What crosses is a string the page wrote, treated as what it is: untrusted
+ * text, capped in length here and in count, rendered as text by React and
+ * never as markup.
+ *
+ * Capture phase on `error`, because resource failures (a missing script, an
+ * image that 404s behind `img-src`) do not bubble; those arrive with no
+ * `message`, which is why there is a fallback sentence for them.
+ */
+const PREVIEW_REPORTER =
+  "<script>(function(){var n=0;function s(t){if(n>=20)return;n++;" +
+  'try{parent.postMessage({awPreviewError:String(t).slice(0,300)},"*")}' +
+  "catch(e){}}" +
+  'addEventListener("error",function(e){s(e&&e.message?e.message:' +
+  '"资源加载失败（脚本、图片或样式没取到）")},true);' +
+  'addEventListener("unhandledrejection",function(e){var r=e&&e.reason;' +
+  's("未处理的 Promise 拒绝："+((r&&r.message)||r))});' +
+  "var c=console.error;console.error=function(){" +
+  'try{s(Array.prototype.map.call(arguments,String).join(" "))}catch(e){}' +
+  "return c.apply(console,arguments)};})();</script>"
+
+/**
  * Place the CSP `<meta>` where the parser will honour it: as early in the
  * head as the document's own markup allows.
  *
@@ -36,7 +77,7 @@ const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_
  * implicit, and after the doctype (or at the start) for fragment-shaped
  * documents -- the parser hoists a leading `<meta>` into the head it creates.
  */
-export function withPreviewCsp(html: string): string {
+function insertEarly(html: string, markup: string): string {
   // `<head(\s…)?>` and not `<head[^>]*>`: the loose form also matches
   // `<header>`, and a page that opens with one -- an ordinary shape for a
   // generated fragment -- would take the head branch and have the meta
@@ -44,19 +85,45 @@ export function withPreviewCsp(html: string): string {
   const head = /<head(\s[^>]*)?>/i.exec(html);
   if (head !== null) {
     const at = head.index + head[0].length;
-    return html.slice(0, at) + CSP_META + html.slice(at);
+    return html.slice(0, at) + markup + html.slice(at);
   }
   const root = /<html(\s[^>]*)?>/i.exec(html);
   if (root !== null) {
     const at = root.index + root[0].length;
-    return html.slice(0, at) + CSP_META + html.slice(at);
+    return html.slice(0, at) + markup + html.slice(at);
   }
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
   if (doctype !== null) {
     const at = doctype.index + doctype[0].length;
-    return html.slice(0, at) + CSP_META + html.slice(at);
+    return html.slice(0, at) + markup + html.slice(at);
   }
-  return CSP_META + html;
+  return markup + html;
+}
+
+
+/**
+ * The CSP alone, which is what this module's oldest tests pin.
+ *
+ * Kept separate from `preparedPreview` rather than folded into it: the
+ * placement rules below are a security argument with its own suite, and a
+ * function that also injected a script would make those tests read as though
+ * they were about the script.
+ */
+export function withPreviewCsp(html: string): string {
+  return insertEarly(html, CSP_META);
+}
+
+/**
+ * What actually goes into the frame: the policy, then the reporter, then the
+ * page.
+ *
+ * One insertion rather than two, and the order inside it is the argument. The
+ * reporter is a script, so it has to be governed by the policy that precedes
+ * it; inserting them separately would put whichever ran last in front, and
+ * "in front" is exactly where the meta has to be.
+ */
+export function preparedPreview(html: string): string {
+  return insertEarly(html, CSP_META + PREVIEW_REPORTER);
 }
 
 
@@ -203,12 +270,33 @@ function useIsFullscreen(element: HTMLElement | null): boolean {
 export function HtmlPreview({
   load,
   name,
+  onFaults,
+  onReport,
   queryKey,
   sizeBytes,
 }: {
   /** Fetches the source; called once and cached under `queryKey`. */
   load: () => Promise<{ text: string; truncated: boolean }>;
   name: string;
+  /**
+   * Hands what the page reported back to whoever can act on it.
+   *
+   * Optional, and absent is the ordinary case: a Task artifact has no next
+   * turn to give it to. Code passes one, and that is what closes the loop the
+   * model cannot close itself -- it wrote the page, this frame ran it, and
+   * until now the only thing between "it throws" and "fix it" was the reader
+   * retyping the error.
+   */
+  onReport?: (report: string) => void;
+  /**
+   * Told what this page has reported about itself, as it arrives.
+   *
+   * Separate from `onReport`, which is one reader's decision to hand it over.
+   * This one is the fact: the page said these things. A caller that wants to
+   * act without being asked reads this; a caller that only draws reads
+   * neither.
+   */
+  onFaults?: (faults: readonly string[], name: string) => void;
   /** Cache identity -- an artifact and a workspace file must never share. */
   queryKey: readonly unknown[];
   sizeBytes: number;
@@ -221,6 +309,27 @@ export function HtmlPreview({
   const [fit, setFit] = useState(true);
   const [boxNode, setBoxNode] = useState<HTMLDivElement | null>(null);
   const [stageNode, setStageNode] = useState<HTMLDivElement | null>(null);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  // What the page reported about itself, and which document reported it.
+  //
+  // The document is carried *with* the list rather than cleared from an effect
+  // when the source changes. Two reasons, and the second is the one that
+  // decided it: clearing from an effect is a `setState` in an effect body,
+  // which this codebase's lint rule rejects wherever it appears; and a stale
+  // list would be worse than none -- errors from the previous version of a
+  // page, printed under the new one, read as the new one's.
+  const [faults, setFaults] = useState<{ doc: string; list: string[] }>({
+    doc: "",
+    list: [],
+  });
+  // The same value, held where the message handler can read it synchronously.
+  //
+  // Not a convenience: the dedup below has to see what the *previous* message
+  // produced, and `onFaults` has to be called with the result -- neither is
+  // available inside a functional `setState` updater, which React is free to
+  // run twice. Reading state in the handler instead would read the value from
+  // the render the listener was created in.
+  const held = useRef<{ doc: string; list: string[] }>({ doc: "", list: [] });
   const fullscreen = useIsFullscreen(stageNode);
   // Entering fullscreen changes the box's size without changing the node, and
   // the observer's delivery is not something to depend on for a transition the
@@ -236,6 +345,51 @@ export function HtmlPreview({
     staleTime: Number.POSITIVE_INFINITY,
     queryFn: load,
   });
+
+  // The source this frame is currently showing, available before the early
+  // returns below so the listener may depend on it. `""` while it loads, which
+  // never matches a real document and so shows nothing.
+  const showing = sourceQuery.data?.text ?? "";
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const frame = frameRef.current;
+      // `event.origin` is `"null"` for an opaque-origin frame and therefore
+      // authenticates nothing. The window identity does: only the frame this
+      // component rendered can be its own `contentWindow`.
+      if (frame === null || event.source !== frame.contentWindow) return;
+      const data: unknown = event.data;
+      const reported =
+        typeof data === "object" &&
+        data !== null &&
+        "awPreviewError" in data &&
+        typeof data.awPreviewError === "string"
+          ? data.awPreviewError
+          : null;
+      if (reported === null) return;
+      const current = held.current;
+      let next: { doc: string; list: string[] };
+      if (current.doc !== showing) {
+        next = { doc: showing, list: [reported] };
+      } else if (
+        // Deduplicated and capped. A game loop that throws draws sixty frames
+        // a second and would otherwise report sixty identical lines a second;
+        // what the reader needs is *that* it throws and what it says, once.
+        current.list.includes(reported) ||
+        current.list.length >= 20
+      ) {
+        return;
+      } else {
+        next = { doc: showing, list: [...current.list, reported] };
+      }
+      held.current = next;
+      setFaults(next);
+      onFaults?.(next.list, name);
+    };
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+    };
+  }, [name, onFaults, showing]);
 
   if (oversized) {
     return (
@@ -401,7 +555,8 @@ export function HtmlPreview({
             <iframe
               referrerPolicy="no-referrer"
               sandbox="allow-scripts"
-              srcDoc={withPreviewCsp(text)}
+              ref={frameRef}
+              srcDoc={preparedPreview(text)}
               // In 适应宽度 the frame is laid out at a logical desktop width and
               // scaled down to the box, so the page sees the viewport it was
               // written for. In 实际大小 nothing is set and the iframe fills the
@@ -418,6 +573,46 @@ export function HtmlPreview({
               title={`${name} 预览`}
             />
           </div>
+          {faults.doc !== text || faults.list.length === 0 ? null : (
+            /* Under the frame, because it is an outcome rather than a warning
+               -- the caution above is about opening the page at all, this is
+               about what happened when it ran. Inside the stage, so it is
+               still there in fullscreen, where a blank canvas is at its most
+               convincing.
+
+               The text is the page's own. Rendered as text by React and never
+               as markup, capped at 20 lines here and 300 characters in the
+               reporter: it is untrusted content that happens to be useful. */
+            <div className="aw-page-note aw-preview-faults" role="status">
+              <strong>
+                这个页面运行时报了 {faults.list.length} 条错误
+              </strong>
+              <ul>
+                {faults.list.map((fault) => (
+                  <li key={fault}>{fault}</li>
+                ))}
+              </ul>
+              {onReport === undefined ? null : (
+                <button
+                  className="aw-button"
+                  onClick={() => {
+                    // Composed here rather than at the call site: this
+                    // component is the only thing that knows both the file's
+                    // name and what it said, and a caller assembling the
+                    // sentence from two props would be a second place the
+                    // wording lives.
+                    onReport(
+                      `预览里运行 ${name} 时报了这些错误，请修掉：\n` +
+                        faults.list.map((fault) => `- ${fault}`).join("\n"),
+                    );
+                  }}
+                  type="button"
+                >
+                  把这些错误交给它
+                </button>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <>

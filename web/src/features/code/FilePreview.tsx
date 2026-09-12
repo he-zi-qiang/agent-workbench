@@ -93,7 +93,9 @@ export function fileKey(
 export function FilePreview({
   files,
   identity,
+  onFaults,
   onOpen,
+  onReport,
   onWrote,
   viewing,
 }: {
@@ -106,6 +108,10 @@ export function FilePreview({
   identity: PrincipalIdentity;
   /** Routes a produced file into the panel. Same optionality as `files`. */
   onOpen?: (name: string) => void;
+  /** Carries what a rendered page reported about itself back to the composer. */
+  onReport?: (report: string) => void;
+  /** The same report, as a fact rather than a decision -- see `HtmlPreview`. */
+  onFaults?: (faults: readonly string[], name: string) => void;
   /**
    * Told when a run put files into the working set, so the page can re-read a
    * listing that is now out of date. Optional because only the Python viewer
@@ -205,6 +211,8 @@ export function FilePreview({
           getCodeWorkspaceFileText(identity, viewing.sessionId, viewing.name)
         }
         name={viewing.name}
+        {...(onFaults === undefined ? {} : { onFaults })}
+        {...(onReport === undefined ? {} : { onReport })}
         queryKey={fileKey("code-file-html", identity, viewing)}
         sizeBytes={viewing.sizeBytes}
       />

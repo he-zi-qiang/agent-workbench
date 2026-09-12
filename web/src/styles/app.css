@@ -937,6 +937,18 @@ textarea::placeholder {
   color: var(--aw-text);
 }
 
+/* 「自动验证」那颗开关。
+ *
+ * 它旁边那三档权限是一个 `aw-segmented`——三选一、总有一个亮着。这一颗不是：它是
+ * 一个开关，关着的时候就该看起来是关着的，所以按 `aw-button` 的常态画，只在开着
+ * 时才借用同一套「被按下」的表面。两者共用那三个变量而不是各写一份颜色。 */
+.aw-code-autofix.is-active {
+  border-color: var(--aw-border-strong, var(--aw-border));
+  background: var(--aw-panel);
+  box-shadow: var(--aw-shadow-sm);
+  color: var(--aw-text);
+}
+
 .aw-result-list {
   display: grid;
   gap: 10px;
@@ -974,6 +986,28 @@ pre {
   margin-top: 18px;
   color: var(--aw-text-muted);
   font-size: 12px;
+}
+
+/* 预览帧自己报回来的运行时错误。
+ *
+ * `aw-page-note` 是横排一行的，而这里是一个标题加一列消息——所以只改方向和对齐，
+ * 颜色不动：这不是一条报错横幅。页面报了错不等于页面没用，读者要的是「它说了什么」
+ * 而不是一块红色。 */
+.aw-preview-faults {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.aw-preview-faults ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.aw-preview-faults li {
+  /* 页面自己写的字，可能很长、可能不带空格（一条 minified 的堆栈）。断开它，
+     免得它把这一栏撑出横向滚动条。 */
+  overflow-wrap: anywhere;
 }
 
 .aw-page-header > .aw-page-note {
