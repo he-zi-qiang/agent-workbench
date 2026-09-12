@@ -48,6 +48,16 @@ const DEFAULT_IDENTITY: PrincipalIdentity = {
     "workspace:write",
     "mcp:web",
     "mcp:word",
+    // The six browser tools a coding session is offered under ADR-0113 §4
+    // arrive through MCP discovery, and discovery gives every tool of a
+    // server the scope `mcp:<alias>` (`adapters/mcp/registry_source.py`).
+    // Missing here until 2026-09-12: the first turn that reached for
+    // `browser_open` after ADR-0115 wired the browser in was refused with
+    // `policy_denied: missing_permission_scope` -- the tool was offered, the
+    // server answered, and the identity the console sends could not use it.
+    // Same cost rule as the two lines above: on a deployment without a
+    // browser this authorises a tool no turn is offered.
+    "mcp:browser",
     // `sandbox_run` (ADR-057). Costs nothing where the deployment did not
     // grant the tool -- the envelope is widened from what the process managed
     // to register, so an unused scope authorises nothing that exists.
@@ -87,12 +97,14 @@ export function IdentityProvider({ children }: PropsWithChildren) {
   // identity editor, which is the opposite of what that editor is for.
   //
   // `v1` predates `external:search`; `v2` predates the workspace and MCP
-  // scopes above; `v3` predates `sandbox:run`; `v4` predates `project:run`.
+  // scopes above; `v3` predates `sandbox:run`; `v4` predates `project:run`;
+  // `v5` predates `mcp:browser` -- the one whose absence was measured as a
+  // `policy_denied` on the first turn that had a browser to open (ADR-0115).
   // All left unread rather than migrated: an identity is seven short strings,
   // and re-deriving it costs a reader less than a merge rule that can
   // resurrect a scope they removed.
   const [identity, setIdentity] = useStoredState(
-    "aw.identity.v5",
+    "aw.identity.v6",
     DEFAULT_IDENTITY,
   );
   const [editorOpen, setEditorOpen] = useState(false);

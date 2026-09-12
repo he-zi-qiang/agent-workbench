@@ -67,6 +67,7 @@ describe("stored identity", () => {
         "workspace:write",
         "mcp:web",
         "mcp:word",
+        "mcp:browser",
         "sandbox:run",
       ]),
     );
@@ -79,7 +80,7 @@ describe("stored identity", () => {
     // on the next reload. The stale sets had to stop being read; reading stored
     // identity did not.
     localStorage.setItem(
-      "aw.identity.v5",
+      "aw.identity.v6",
       JSON.stringify({
         tenantId: "tenant_other",
         principalId: "user_other",

@@ -104,7 +104,7 @@ tunnel」，隧道本身没有写。本 ADR 补上，并把 F-39 那句话改掉
 
 5. **提示词说清命令跑在两个地方中的哪一种。** `_HAS_SHELL` 不再说「it is the user's own machine,
    their installed tools」；它说：原生启动器上是用户的机器和工具链，容器栈上是「一个用本项目
-   镜像建的 Linux 容器：Python 3.12 和常规 Unix 工具，没有 Node、没有用户自己装的东西，项目目录
+   镜像建的 Linux 容器：Python 3.12、不带 npm 的 Node 和常规 Unix 工具，没有编译器、没有用户自己装的东西，项目目录
    是同一份文件」。并补上 ADR-0114 写不出来的那一句：**需要数、量、解析、跑的事，一条
    `python -c` 或 `wc` 就是答案，一条批准的命令胜过二十次答不了的搜索。** `project_run` 的工具
    描述同步从「the user's real machine」改成「the process this session's commands run in」。
@@ -178,8 +178,11 @@ ADR-0058 那个失败。两个世界共享每一句必须说的话——用户�
   反对的安排，保留一次启动而不是永久，launcher 在 stderr 上明说，System 页 `code.host_commands`
   那一行可见。选择回落而不是去掉工具，是因为另一种失败（一条正常的启动因为 runner 慢了几秒
   而没有 shell）更常见也更难解释。要收紧就把 `AW_RUNNER__ENABLED=false` 显式给 launcher。
-- **runner 里没有 Node。** 用户那个 `check_level.js` 在这里仍然跑不了；`python -c` 能做同样的事。
-  给镜像装 Node 是几百 MB，留给下一个真需要它的场景。
+- **runner 里的 Node 不带 npm。** 第一版这里写「没有 Node，留给下一个真需要它的场景」——那个场景当天
+  就来了：拿到 runner 的第一轮在 `/usr/bin` 里找 `node/deno/bun/qjs/d8`，一个没有，报告说跑不了项目
+  自己的 `check_level.js`。于是共享镜像从 `web-build` 阶段拷进 node 二进制（126 MB，同一个钉住的
+  镜像，不拉新东西）；npm 故意不带——只读容器、tmpfs 家目录，`npm install` 是把一轮花在审批人
+  读不懂的失败上。
 - **浏览器仍是 ADR-0113 的那个浏览器**：`internal` 网络、守卫代理。项目页面经 `file://` 打开，
   页面里若引外部资源照旧被守卫判。
 - **`test_computer_consent.py` 在 Windows 上弹真实对话框**（ADR-0114 §4 记的）——本批的全量

@@ -47,7 +47,7 @@ vi.mock("../api/client", () => ({
 
 beforeEach(() => {
   queryClient.clear();
-  localStorage.removeItem("aw.identity.v5");
+  localStorage.removeItem("aw.identity.v6");
   localStorage.removeItem("agent-workbench:workspace-sidebar-collapsed-v2");
 });
 

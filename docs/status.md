@@ -27,6 +27,51 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-12（第八十二批）：浏览器工具被策略拒了——控制台的身份少一个 scope；runner 拿到 Node
+
+第八十一批起栈之后用户再发一次「请你编写马里奥」。这一轮的形状变了：11 次 `project_run`、只有
+3 次 `project_grep`——尺子起作用了，模型用 `python3` 算几何而不是拿 grep 二分。但报告说：
+「`browser_open` 被拒（policy_denied: missing_permission_scope），本机也没有 node 或任何 JS 引擎
+（/usr/bin 里没有 node/deno/bun/qjs/d8），所以我无法执行游戏代码……上面所有关于『能跑』的判断，
+都来自读代码 + 用 python3 算几何，不是来自运行。」用户：「还是不行」。
+
+### 1. 两处各自查实
+
+- **scope**：MCP 发现给一个 server 的每件工具都挂 `mcp:<alias>` 这个权限 scope
+  （`adapters/mcp/registry_source.py`），浏览器那六件要 `mcp:browser`；控制台 `DEFAULT_IDENTITY`
+  送的是 `mcp:web`、`mcp:word`、`sandbox:run`、`project:run`……没有 `mcp:browser`。事件流里那一次
+  调用：`PermissionResolved effect=deny reason_code=missing_permission_scope` → `ToolFailed
+  policy_denied`。也就是说 ADR-0113 §4 把工具端到端接通之后，**控制台的身份从来用不了它**——
+  原生路径同样如此，那份 ADR 的实测证据不是经控制台身份发出的。修法一行：`mcp:browser` 进
+  `DEFAULT_IDENTITY`，测试同步。
+- **Node**：ADR-0115 §4 写着「runner 里没有 Node，留给下一个真需要它的场景」——那个场景当天就来了。
+  共享镜像从 `web-build` 阶段拷进 `/usr/local/bin/node`（同一个钉住的 node:24 镜像，126 MB 一个文件，
+  不拉新东西），npm 故意不带；`libstdc++6` / `libgcc_s1` 基础镜像里已有（`ldconfig -p` 量过）。
+  提示词、quickstart、`stack.cmd`、ADR §2/§4 的「没有 Node」一并改口；
+  `test_the_image_carries_node_for_the_runner_and_nothing_to_install_with` 钉住拷贝与 npm 的缺席。
+
+### 2. 证据
+
+- 后端：`test_code_session`、`test_compose`（含新的 node 拷贝断言）、`test_smoke_walkthrough` 全过；
+  前端：lint、typecheck、938 条 vitest、build 全过。`DEFAULT_IDENTITY` 的存储键升到 `aw.identity.v6`
+  ——`useStoredState` 原样返回存过的身份而不合并默认值，不升键的话每个开过控制台的浏览器都
+  继续拿旧的 scope 集被拒（那段注释早就写着这条规则，`v1`…`v5` 每次都是这么升的）；
+  `scripts/smoke_local.py` 的 `CONSOLE_SCOPES` 同步，两者的一致性由 `test_smoke_walkthrough` 钉住。
+- 镜像：`node v24.14.0` 在 `agent-workbench:local` 里以 uid 10001 能跑；经 runner 隧道在
+  `/projects/windows测试` 跑 `node check_level.js` → 「每行长度检查: 通过 / 出生点检查: 通过」，
+  退出码 0。这正是模型上一轮说「跑不了」的那个脚本。
+- **从控制台真发一轮**（新会话，项目 `windows测试`，指令：不改文件，用浏览器打开 `mario.html` 报告
+  标题/canvas 数/控制台错误数并截图，再 `project_run` 跑 `node check_level.js`）：3 步、5 次工具调用。
+  `mcp_browser_browser_open` → `PermissionResolved allow (within_submitted_envelope)`（上一轮这里是
+  `deny missing_permission_scope`）；`project_run` 停在审批卡上，点「允许一次」后
+  `ToolApprovalDecided approve_once`；`browser_eval`、`browser_diagnostics`、`browser_screenshot`
+  相继完成，截图落成工件 `art_8d0f…`。模型的报告：标题「超级马里奥」、canvas 1、控制台错误 0、
+  `check_level.js` 原样输出与退出码 0——并且它自己指出 `AGENTS.md` 里那句「本机没有 node」
+  已经不成立（它上一轮写的）。控制台右栏「浏览器」标签里是那张游戏开始画面。
+- 顺带看到、没修：事件列表里浏览器那六件工具显示的是原名 `mcp_browser_browser_open`，
+  `stepGroups.ts` 的 `TOOL_VERBS` 还没有它们的中文。
+
+---
 ## 2026-09-12（第八十批）：测试套件在 Windows 上不再弹真的「屏幕控制批准」——它能弹十个，不是六个
 
 ### 1. 起因
@@ -106,7 +151,7 @@ Claude Code 的 `Bash` 永远在、每条命令过一次权限门、可以跑在
    `code.browser_enabled` 留假，由 `docker/run-api-local.sh` 用 `scripts/smoke_mcp_server.py`
    逐次启动探（真实 MCP 客户端 + 健康路由 + 期望的工具名），探到才导出环境变量。
 5. **提示词**：`_HAS_SHELL` 说出命令跑的两个地方（用户的机器 / 本项目镜像的容器：Python 3.12 与
-   常规 Unix 工具，没有 Node），并补上 ADR-0114 写不出的那句——「一条批准的命令胜过二十次答
+   常规 Unix 工具，当时没有 Node——第八十二批补上），并补上 ADR-0114 写不出的那句——「一条批准的命令胜过二十次答
    不了的搜索」。`with_web_search` 的第四个锚点跟着挪。
 6. **浏览器**：补上从来不存在的 8773 隧道（F-39 说有，脚本里没有）；`browser` 容器只读挂上
    `/projects`；`adapters/tools/browser.py::open_within_project` 让项目会话的 `workspace_path`

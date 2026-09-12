@@ -1850,7 +1850,7 @@ def test_a_turn_holding_the_run_tool_is_told_both_places_a_command_can_run() -> 
 
     assert "user's own machine" in prompt
     assert "container built from this project's image" in prompt
-    assert "no Node" in prompt
+    assert "Node without npm" in prompt
     assert "There is no shell" not in prompt
     # The sentence ADR-0114 could not write: with a shell, the instrument a
     # search is not is one approved command away.

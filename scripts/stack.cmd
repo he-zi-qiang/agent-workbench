@@ -395,7 +395,7 @@ echo   Coding sessions read and write folders under var\projects in this
 echo   checkout (the only host folder the container can see); put a project
 echo   there, or start with AGENT_WORKBENCH_PROJECTS_DIR set to another one.
 echo   Their shell is the runner container, not this machine: Python 3.12
-echo   and the usual Unix tools, no Node, nothing you installed on Windows,
+echo   Node without npm and the usual Unix tools, nothing you installed on Windows,
 echo   and every command stops on an approval card first. Their browser is
 echo   the guarded Chromium in the browser container, not this desktop's.
 echo   Both are probed once at start; the System page's Code rows say which
