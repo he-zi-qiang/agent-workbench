@@ -6,8 +6,13 @@ for a person. What can be driven is everything around it: what is handed to
 check goes wrong, because they are the paths nobody looks at: a timeout, an
 Escape, a missing binary. Each of them has exactly one safe reading.
 
-Nothing here opens a dialog. ``osascript`` is replaced in every test that would
-reach it, so running this suite never interrupts whoever is running it.
+Nothing here opens a dialog, on any platform. Every test that lets ``ask``
+dispatch pins ``sys.platform`` first, so the osascript tests exercise the
+osascript branch on Windows too, rather than whichever dialog the host has --
+which is how this file came to open ten real Windows dialogs and wait two
+minutes on each (2026-09-12, ``docs/status.md`` 第七十九批 §3). Behind that,
+``tests/apps/conftest.py`` makes the real ``MessageBoxTimeoutW`` raise, and the
+last test in this file asserts that it does.
 """
 
 from __future__ import annotations
@@ -25,6 +30,23 @@ NOTES = ApplicationIdentity(bundle_id="com.apple.Notes", name="Notes")
 TERMINAL = ApplicationIdentity(bundle_id="com.apple.Terminal", name="Terminal")
 
 
+def _on_a_mac(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``ask`` to the osascript branch, whatever machine runs this.
+
+    ``ask`` reads ``sys.platform`` on every call -- the dispatch is the fact
+    the two routing tests at the bottom assert -- so this is the one seam the
+    branch needs, and the fake ``osascript`` is only ever reached through it.
+    Without this line a test *describes* the macOS dialog and *exercises*
+    whichever one the host has. On Windows that was the real box: the fake
+    ``subprocess.run`` beside it was never called, the box waited its full
+    countdown, and a timeout reads as a refusal, so half of these tests
+    passed for the wrong reason and the other half failed for one that
+    looked like consent logic (2026-09-12, ``docs/status.md`` 第七十九批 §3).
+    """
+
+    monkeypatch.setattr(consent.sys, "platform", "darwin")
+
+
 def _answers(
     monkeypatch: pytest.MonkeyPatch, stdout: str, *, code: int = 0
 ) -> list[tuple[str, ...]]:
@@ -36,6 +58,7 @@ def _answers(
         calls.append(tuple(arguments))
         return subprocess.CompletedProcess(arguments, code, stdout, "")
 
+    _on_a_mac(monkeypatch)
     monkeypatch.setattr(consent.shutil, "which", lambda _: "/usr/bin/osascript")
     monkeypatch.setattr(consent.subprocess, "run", fake_run)
     return calls
@@ -89,6 +112,7 @@ def test_an_osascript_that_hangs_refuses(monkeypatch: pytest.MonkeyPatch) -> Non
     def hangs(arguments: Any, **_: Any) -> subprocess.CompletedProcess[str]:
         raise subprocess.TimeoutExpired(arguments, 1.0)
 
+    _on_a_mac(monkeypatch)
     monkeypatch.setattr(consent.shutil, "which", lambda _: "/usr/bin/osascript")
     monkeypatch.setattr(consent.subprocess, "run", hangs)
 
@@ -104,6 +128,7 @@ def test_a_machine_with_no_way_to_ask_says_so(
     places, and only one of them is worth retrying.
     """
 
+    _on_a_mac(monkeypatch)
     monkeypatch.setattr(consent.shutil, "which", lambda _: None)
 
     with pytest.raises(consent.ConsentUnavailableError):
@@ -113,6 +138,7 @@ def test_a_machine_with_no_way_to_ask_says_so(
 def test_an_empty_list_is_not_a_question_worth_asking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _on_a_mac(monkeypatch)
     called: list[object] = []
     monkeypatch.setattr(consent.shutil, "which", lambda _: called.append(1))
 
@@ -307,3 +333,30 @@ def test_ask_routes_to_the_windows_dialog_on_windows(
 
     assert asyncio.run(consent.ask((NOTES,), reason="r")) is True
     assert len(calls) == 1
+
+
+def test_a_test_that_lets_ask_reach_the_real_box_fails_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shape every osascript test above had on 2026-09-12, on purpose:
+    ``ask`` on win32 with nothing faked. What must happen is what the autouse
+    fixture in ``tests/apps/conftest.py`` does -- the real ``MessageBoxTimeoutW``
+    is never called, and the test fails at once with a message that says how
+    to fix it. This is the assertion that the fixture is live.
+
+    Two things are chosen so that *removing* the fixture fails this test on
+    both platforms this project runs on, and cheaply. The exception it expects
+    is the tripwire's own -- an ``AssertionError`` with its message, matched
+    that way because a ``conftest.py`` class imported under a second module
+    name is a second class -- and not ``ConsentUnavailableError``, so on Linux
+    the "no Windows message box here" refusal cannot pass for it. And the
+    timeout is one second, so on Windows a missing fixture costs one second
+    of dialog rather than a hundred and twenty.
+    """
+
+    monkeypatch.setattr(consent.sys, "platform", "win32")
+
+    with pytest.raises(
+        AssertionError, match="would have opened a real 「屏幕控制批准」"
+    ):
+        asyncio.run(consent.ask((NOTES,), timeout_seconds=1.0))

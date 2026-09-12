@@ -27,6 +27,50 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-12（第八十批）：测试套件在 Windows 上不再弹真的「屏幕控制批准」——它能弹十个，不是六个
+
+### 1. 起因
+
+第七十九批 §3 量到的那十二分钟。`tests/apps/test_computer_consent.py` 的 osascript 测试只替换了
+`consent.subprocess.run`，没有钉住平台；`consent.ask` 每次调用都读 `sys.platform`，于是在 win32
+上它绕过那个假 osascript 直接走到 `MessageBoxTimeoutW`，一个真对话框等满 120 秒，超时读作拒绝。
+五条因此**错着通过**（它们期望的就是 False），五条失败（期望 True、期望抛
+`ConsentUnavailableError`、期望 `calls[0]` 里有东西）——后五条就是 §3 里的「另外 5 条」。
+
+**能弹的是十个，不是记录里的六个。** 数法不是等它弹：一个临时的 pytest 插件把
+`adapters.screen.win32.message_box_with_timeout` 换成抛异常，改前跑这个文件——
+`10 failed, 16 passed in 0.52s`，十条失败全是那个异常，清单正好是所有通过 `ask` 派发且名单非空的
+测试。§3 的「六个」是当时看见的数，本批没有去查为什么少了四个；那一段按本文档的约定不改。
+
+### 2. 改了什么（`src/` 未动）
+
+1. **`_on_a_mac(monkeypatch)`**：把 `consent.sys.platform` 钉成 `darwin`，`_answers` 和另外三条
+   直接调 `ask` 的测试都先过它。缝是现成的——文件末尾两条路由测试早就这样钉 `linux` / `win32`，
+   所以 `consent.py` 一个字没加。
+2. **`tests/apps/conftest.py`（新）**：autouse 绊线，把 `win32.message_box_with_timeout` 换成抛
+   `RealDialogReached(AssertionError)`。放目录级而不是文件级，因为能走到真对话框的不止这一个文件：
+   `ScreenGate` 的 `consent` 默认值就是真的 `ask`，gate 或 MCP server 的测试漏写 `consent=` 会走到
+   同一个框。补在 `user32` 之前最后一个 Python 函数上而不是 `consent._windows_message_box` 上，
+   绕过 consent 模块那层间接的路也拦得住。故意不用 `ask_win32` 会转成 `ConsentUnavailableError`
+   的那两类异常——那是产品对「没有桌面」的回答，误触真框的测试不能靠它通过。
+3. **新测试 `test_a_test_that_lets_ask_reach_the_real_box_fails_at_once`**：钉 `win32`、什么都不假，
+   断言立刻得到绊线的 `AssertionError`（按基类和消息匹配，不 import 那个类——`conftest.py` 可能被
+   pytest 用另一个模块名加载，第二个名字下是第二个类）。`timeout_seconds=1.0`：绊线被拿掉时在
+   Windows 上的代价是一秒的对话框，不是一百二十秒。
+
+### 3. 证据（本机 Windows 11，2026-09-12）
+
+- 改后 `uv run pytest tests/apps/test_computer_consent.py`：**`27 passed in 0.09s`**，没有窗口。
+- 反向检查（临时插件把绊线换成 Linux 上真函数的那句 `ScreenUnavailableError` 拒绝）：新测试
+  **失败**、其余 26 条通过——它断言的是绊线在，不是「有东西抛了」。
+- `uv run pytest tests/apps` 全目录（绊线对目录里每条测试生效）：`5 failed, 359 passed, 2 skipped`，
+  45 秒。五条失败全在 `test_sandbox_bootstrap.py`，是 `\r\n` 对 `\n` 那类 Windows 差异，与
+  第七十九批 §3 列的「`test_sandbox_bootstrap` 5」逐条相同；本批之前就在，本批没动。
+- `ruff format --check` / `ruff check` 两个文件通过。
+- HIGHLIGHTS §2 的数字没有刷新：那张表量的是 macOS 的离线数，本机是 Windows、跳过集不同，
+  +1 不能直接加上去。
+
+---
 ## 2026-09-12（第七十九批）：搜索只负责找到，不负责度量——模型拿 grep 量字符数，量了七十四次（ADR-0114）
 
 起因是用户贴来的一段转录——81 步，六十来步写着「搜索项目目录」，末尾「这一轮把步数用完了」——
