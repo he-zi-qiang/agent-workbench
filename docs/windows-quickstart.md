@@ -311,8 +311,8 @@ key 和「运行状态」页上的开关都只对**下一次启动**生效
   再跑 `stack.cmd`。选择器里能看到 `/app` 之类别的目录，别选——那是镜像自己的只读树。
 - **这里的编码会话有一把 shell，但不是你这台机器的。** `project_run` 跑在 `runner` 容器里
   （[ADR-0115](adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md)）：
-  它只挂着 `var\projects`、没有 key、没有数据库地址，里面是 Python 3.12 和常规 Unix 工具，
-  **没有 Node、没有你装在 Windows 上的任何东西**。每条命令先出现在审批卡上，你点了才跑。
+  它只挂着 `var\projects`、没有 key、没有数据库地址，里面是 Python 3.12、不带 npm 的 Node 和常规 Unix 工具，
+  **没有你装在 Windows 上的任何东西**。每条命令先出现在审批卡上，你点了才跑。
   Mac 上原生跑（`scripts/dev.sh up`）的 demo 档给的才是你机器上的真 shell（ADR-0077）。
   浏览器也有：ADR-0113 的受控 Chromium 在 `browser` 容器里，模型能打开它刚写的页面、读
   可访问性树、截图、看控制台错误——但它出网只经守卫代理，这台机器的桌面浏览器它开不了。

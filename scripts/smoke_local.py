@@ -121,6 +121,8 @@ CONSOLE_SCOPES: tuple[str, ...] = (
     "workspace:write",
     "mcp:web",
     "mcp:word",
+    # ADR-0115: the browser tools arrive by MCP discovery under `mcp:browser`.
+    "mcp:browser",
     # `sandbox_run` (ADR-057). Added here in the same commit that added it to
     # the console, because the parity test between the two is the thing that
     # noticed the last time they drifted.

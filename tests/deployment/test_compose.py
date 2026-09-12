@@ -1274,3 +1274,16 @@ def test_every_loopback_healthcheck_probes_the_port_its_own_process_listens_on()
     # The browser publishes 8773 through its tunnel and serves on 8780 itself;
     # the check runs inside the container, so it is the server port.
     assert probed("browser") == 8780
+
+
+def test_the_image_carries_node_for_the_runner_and_nothing_to_install_with() -> None:
+    """ADR-0115, after the first turn that had the runner: it looked for a JS
+    engine in `/usr/bin`, found none, and reported it could not run the
+    project's own `check_level.js`. The binary comes from the same pinned
+    `web-build` stage the console is built with, so no new base is pulled;
+    npm stays out, on purpose -- a read-only container with a tmpfs home is
+    not where `npm install` should be spending a turn."""
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "COPY --from=web-build /usr/local/bin/node /usr/local/bin/node" in dockerfile
+    assert "/usr/local/lib/node_modules" not in dockerfile

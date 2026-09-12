@@ -422,9 +422,9 @@ call stops and asks them before it runs, and they see the command you wrote.
 Where the command executes is one of two places, and the difference is whose
 tools are there. On the native launcher it is the user's own machine, with
 their toolchain and their environment. Under the container stack it is a Linux
-container built from this project's image: Python 3.12 and the ordinary Unix
-tools -- sh, coreutils, grep, awk -- and no Node, no compilers, none of the
-user's own installs; the project directory is the same files, mounted. Either
+container built from this project's image: Python 3.12, Node without npm, and
+the ordinary Unix tools -- sh, coreutils, grep, awk -- no compilers and none of
+the user's own installs; the project directory is the same files, mounted. Either
 way the command inherits that place's environment and network, so whatever
 the place itself can reach, a command can reach. That is a description of
 where the command runs, not a capability this session is promising you: an

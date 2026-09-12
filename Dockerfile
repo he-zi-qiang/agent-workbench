@@ -140,6 +140,25 @@ RUN uv sync --frozen --no-dev --no-editable --extra embedding \
 # through `docker buildx imagetools inspect docker:29-cli`).
 COPY --from=docker:29-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e /usr/local/bin/docker /usr/local/bin/docker
 
+# Node, for exactly one service as well: the `runner` (ADR-0115), where a
+# coding session's `project_run` executes under Compose. Measured 2026-09-12:
+# the first turn that had the runner looked for `node`, `deno`, `bun`, `qjs`
+# and `d8` in `/usr/bin`, found none, and reported that it could not run the
+# project's own `check_level.js` -- the one script the project keeps for the
+# check the turn was asked to make. A shell that cannot run the project's own
+# scripts is the "tool that cannot be honoured" ADR-0057 refuses.
+#
+# The binary alone, from the same pinned image the console is built with
+# above, so this pulls nothing new. 126 MB, one file, and deliberately no
+# npm: `npm install` inside a read-only container with a tmpfs home is a
+# way to spend a turn on a failure the person approving cannot read, and a
+# project that needs packages has its own `node_modules` in the folder the
+# runner mounts. Shared image rather than a second one, for the reason the
+# Docker CLI is: inert everywhere else, and one fewer build step for the
+# Windows launcher to explain. `libstdc++6` and `libgcc_s1`, which it links
+# against, are already in this base image (measured: `ldconfig -p`).
+COPY --from=web-build /usr/local/bin/node /usr/local/bin/node
+
 USER app:app
 
 CMD ["agent-api"]
