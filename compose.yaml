@@ -178,7 +178,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8774/health', timeout=5)\"",
+          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8769/health', timeout=5)\"",
         ]
       interval: 10s
       timeout: 10s

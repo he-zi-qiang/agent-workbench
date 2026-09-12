@@ -139,8 +139,17 @@ config/config.compose-local.toml` 通过。
   `status: 200`, `console_errors_during_load: 0`；`browser_eval`（要写 `return`）：
   `document.querySelectorAll('canvas').length` = 1，`LEVEL_ROWS` 15 行每行 160，`typeof MarioGame`
   = `function`；`browser_screenshot` 回一张 `image/jpeg`。**这个页面在受控浏览器里跑起来了。**
-- encoder 因镜像重建被重新拉起，模型重载约十分钟，`up --wait` 的 600 秒在它之前到期（退出码 1）；
-  API 不等它，`/health/ready` 200，encoder 随后 healthy。这是 `stack.cmd` 同一句注释写过的形状。
+- **一次自己造成的事故，当场查实**：那次 `up --wait` 退出码 1、encoder 一直「health: starting」，
+  第一版这里写的是「模型重载约十分钟，随后 healthy」——**不对**。把 runner 从 8769 挪到 8774 的
+  那条 `sed` 同时改写了 encoder 自己的健康检查（`compose.yaml` 第 181 行），encoder 在 8769 上
+  暖好了、健康检查却去探 8774，于是永远 unhealthy；第三次起栈时 Compose 因此拒绝启动依赖它的
+  API。改回 8769，并加
+  `test_every_loopback_healthcheck_probes_the_port_its_own_process_listens_on`：encoder 探的端口
+  从它 `--port` 参数读，runner 探的是 `DEFAULT_PORT`，沙箱 8766，浏览器 8780。一个探错端口的健康
+  检查和一次慢的模型加载长得一模一样，这条测试是把两者分开的唯一办法。改回之后第四次起栈：
+  encoder 4 分钟 healthy，API healthy，两次探针 `health 200`，`compose up --wait` 退出码 0；
+  控制台的「浏览器」标签在会话里显示「浏览器在跑，但还没打开过页面」——204 那条路，即面板
+  带着身份头取到了帧路由的答复。
 
 ### 4. 顺带查实的三处口径，其中一处是控制台的 bug
 

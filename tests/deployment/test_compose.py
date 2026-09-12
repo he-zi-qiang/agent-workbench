@@ -1235,3 +1235,42 @@ def test_the_api_launcher_decides_the_runner_and_the_browser_by_probing() -> Non
     assert services["api"]["environment"]["AW_CODE__BROWSER_ENABLED"] == ""
     assert services["api"]["depends_on"]["runner"]["condition"] == "service_healthy"
     assert services["api"]["depends_on"]["browser"]["condition"] == "service_healthy"
+
+
+def test_every_loopback_healthcheck_probes_the_port_its_own_process_listens_on() -> (
+    None
+):
+    """Measured 2026-09-12: a `sed` that moved the runner off 8769 rewrote the
+    encoder's healthcheck too -- the encoder listens on 8769 and its check went
+    looking on 8774, so it was `unhealthy` for ever, `compose up --wait` timed
+    out, and the API (which depends on it) was never started. Nothing failed
+    loudly: the encoder was up, warm and answering on the port nobody probed.
+
+    So the port a healthcheck probes is derived from the same place the
+    process gets it, and asserted equal: the encoder's `--port` argument, the
+    runner's `DEFAULT_PORT`, the sandbox's 8766, the browser's 8780 server
+    port. A check that probes a port the process does not bind is a stack
+    that cannot come up, and it looks exactly like a slow model load.
+    """
+
+    import re
+
+    from agent_workbench.apps.runner_mcp.main import DEFAULT_PORT as RUNNER_PORT
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    def probed(name: str) -> int:
+        test = " ".join(services[name]["healthcheck"]["test"])
+        match = re.search(r"127\.0\.0\.1:(\d+)/health", test)
+        assert match, f"{name}'s healthcheck does not probe a loopback /health: {test}"
+        return int(match.group(1))
+
+    encoder_command = services["encoder"]["command"]
+    listens = int(encoder_command[encoder_command.index("--port") + 1])
+    assert probed("encoder") == listens
+    assert probed("runner") == RUNNER_PORT
+    assert probed("sandbox") == 8766
+    # The browser publishes 8773 through its tunnel and serves on 8780 itself;
+    # the check runs inside the container, so it is the server port.
+    assert probed("browser") == 8780
