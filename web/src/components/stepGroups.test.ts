@@ -438,3 +438,65 @@ describe("一行步骤说得出它对哪个文件动的手", () => {
     expect(result[0]?.subject).toBeNull();
   });
 });
+
+describe("浏览器的六个工具各有自己的中文说法", () => {
+  // 2026-09-13 在 Code 页的步骤列表上看到的：`mcp_browser_browser_open`、
+  // `mcp_browser_browser_eval`……六行原始标识符，夹在一列中文之间。名字里
+  // `browser` 出现两次不是笔误：别名是 browser（domain/browser.py），六个远端
+  // 名也都以 browser_ 起头，naming.py 拼成 mcp_<别名>_<远端名>。这里钉的是拼
+  // 好之后的写法，因为事件里的 tool_name 就是它——凭记忆写成 mcp_browser_open
+  // 的键什么也匹配不上，而回退到原名不会报错，只会把这六行再一次露出来。
+  it.each([
+    ["mcp_browser_browser_open", "打开页面"],
+    ["mcp_browser_browser_snapshot", "读取页面结构"],
+    ["mcp_browser_browser_eval", "在页面里求值"],
+    ["mcp_browser_browser_interact", "操作页面"],
+    ["mcp_browser_browser_screenshot", "页面截图"],
+    ["mcp_browser_browser_diagnostics", "读取页面诊断"],
+  ])("%s 那一行叫「%s」", (toolName, title) => {
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: toolName,
+        argument_preview: "{}",
+      }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+    ]);
+
+    expect(result[0]?.title).toBe(title);
+  });
+
+  it("打开页面那一行说得出它打开的是哪个文件", () => {
+    // 项目回合看的是自己刚写的页面，发的是 workspace_path 而不是 url
+    // （ADR-0115 §1.4：它拼不出 file:// 地址，也就只能这么发）。SUBJECT_KEYS
+    // 此前只认 url 和 path，于是这一行只剩「打开页面」四个字——偏偏这是读者最
+    // 想知道「哪一页」的那一步。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "mcp_browser_browser_open",
+        argument_preview: '{"workspace_path":"mario.html"}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+    ]);
+
+    expect(result[0]?.title).toBe("打开页面");
+    expect(result[0]?.subject).toBe("mario.html");
+  });
+
+  it("按地址打开的页面，主语仍是那个地址", () => {
+    // 两种写法二选一（contract.py 两个都给或都不给都拒），所以 url 和
+    // workspace_path 在 SUBJECT_KEYS 里谁先谁后无关紧要；这里只是钉住加了
+    // 一个键之后原来那条路没有被挤掉。
+    const result = groupSteps([
+      event("ToolProposed", {
+        tool_call_id: "call_1",
+        tool_name: "mcp_browser_browser_open",
+        argument_preview: '{"url":"http://127.0.0.1:5173/","timeout_ms":15000}',
+      }),
+      event("ToolCompleted", { tool_call_id: "call_1" }),
+    ]);
+
+    expect(result[0]?.subject).toBe("http://127.0.0.1:5173/");
+  });
+});
