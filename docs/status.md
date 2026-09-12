@@ -73,6 +73,32 @@ CSP），缺的只是「谁替读者按下去」。
 这几条走一个只答 `AGENTS.md` 的 store 替身，理由与它钉住文件名的那句 `assert` 写在 ADR-0112 §5；
 两条既有的提示词等值用例改成把这一段算进去，而不是放宽成 `startswith`。
 
+### 4. 同日收尾：B-07，以及是这一批把它推上来的
+
+上面第 1 条落地之后，Code 上开始反复出现「这一轮没有跑完（the provider sent unparsable
+arguments for project_write）」。这不是新缺陷，是 [B-07](./known-gaps.md) ——2026-08-13 就
+登记过、当时判定为间歇的那一条：`_completed_tool_calls` 排在 `finish` 确定之后，provider 报
+`length` 时控制流照常往下走，拿一段被截断的 JSON 去 `json.loads`，失败后说的是「provider 送来
+坏参数」。两件该做不同事的事（把要求改小 / 重试换 provider）在同一句话里收场，而那句话指向
+唯一没出问题的组件。
+
+**是这一批把它从间歇变成常见的。** 新那段提示词让模型在「要一个能看的东西」时写一个自包含
+的 `.html`，而一个文件的整份正文走在**一次**工具调用的参数里；`config.code-local.toml` 的
+32768 上限同时管思考与回答，那份 profile 自己的注释量过「最简单的节点烧掉约 14,900 思考
+token」。页面装不下，JSON 断在半句。
+
+两半都修了：适配器按 `finish` 分开两种说法（对照组用同一段坏 JSON、只差一个 finish_reason），
+provider 自报的那个词进 message，于是控制台那句「这一轮没有跑完（…）」本身就够判定；提示词
+补上它欠的那句话——大文件分几次写，骨架先落、段落用 edit 填，每次调用是一个新请求各有各的
+上限。没给它新的 `ErrorCode`，理由是 `domain/errors.py` 写好的那条标准（一个自己的词由「更小
+的要求也够不着」挣得，而这一个够得着）。
+
+**证据**：`tests/contracts/test_deepseek_model.py` 新增 1 条 + 既有那条成为对照组；
+`tests/application/test_code_session.py` 那条提示词用例多钉两句。B-07 关闭。
+
+**仍然没做**：这一轮还是死的——没有续写也没有重试，那是 B-06，它的前提（重复文本谁来吞）
+一个字没动。
+
 ### 没做的
 
 - 另一个标签页跑的那一轮不弹（`runningIn` 只记这个标签页发起的请求）。

@@ -294,6 +294,14 @@ class DeepSeekModel:
         partials: dict[int, _PartialToolCall] = {}
         usage = TokenUsage()
         finish: ModelFinishReason | None = None
+        # The provider's own word for why it stopped, kept beside the mapped
+        # one. The mapping is lossy on purpose -- three provider spellings
+        # become three of ours -- but when a tool call does not survive the
+        # stream, *which* word it used is the bit that decides whether the
+        # model was cut off or the provider sent rubbish (`docs/known-gaps.md`
+        # B-07). Keeping it costs a string; deriving it afterwards is not
+        # possible.
+        reported_finish: str | None = None
         failure: ErrorInfo | None = None
         emitted = False
 
@@ -367,6 +375,7 @@ class DeepSeekModel:
 
                     reported = _finish_reason_of(chunk)
                     if reported is not None:
+                        reported_finish = reported
                         finish, failure = _map_finish_reason(reported)
         except httpx.HTTPError as exc:
             # Transport faults stay transport faults: the type is descriptive
@@ -405,7 +414,9 @@ class DeepSeekModel:
             )
             return
 
-        calls, invalid = _completed_tool_calls(partials)
+        calls, invalid = _completed_tool_calls(
+            partials, finish=finish, reported=reported_finish
+        )
         if invalid is not None:
             yield ModelStreamCompleted(
                 finish_reason="error",
@@ -676,8 +687,34 @@ def _map_finish_reason(
 
 def _completed_tool_calls(
     partials: Mapping[int, _PartialToolCall],
+    *,
+    finish: ModelFinishReason,
+    reported: str | None,
 ) -> tuple[tuple[ToolCall, ...], ErrorInfo | None]:
-    """Turn buffered fragments into whole calls, or explain why they are not."""
+    """Turn buffered fragments into whole calls, or explain why they are not.
+
+    ``finish`` is read for one thing only, and it is the whole of
+    `docs/known-gaps.md` B-07: a call whose arguments do not parse means two
+    different things depending on why the stream ended, and until this argument
+    existed both ended in the same sentence. A provider that sent malformed
+    JSON is a provider to retry or replace; a model that was cut off at the
+    output ceiling is an ask to make smaller -- and a reader told the first
+    while living the second goes looking for a bug in the adapter.
+
+    Observed in Code on 2026-09-12, which is what finally separated them: a
+    turn asked for one self-contained `.html` page, and the whole body of that
+    file travels inside one tool call's arguments. `config.code-local.toml`
+    spends the same 32768-token ceiling on the reasoning *and* the answer, and
+    that profile's own comment measures ~14,900 tokens of thinking for the
+    simplest node there is. The page did not fit; the JSON stopped mid-string;
+    the console said the provider had sent rubbish.
+
+    No new `ErrorCode` for it, on the argument `domain/errors.py` uses to hand
+    one to `provider_refused` and withhold one from a search adapter's network
+    fault: a word of its own is earned by a condition no retry and no smaller
+    prompt can reach. A smaller ask reaches this one. So the code stays
+    `provider_error` and the message says which of the two happened.
+    """
 
     calls: list[ToolCall] = []
     for index in sorted(partials):
@@ -690,7 +727,20 @@ def _completed_tool_calls(
         arguments = _decode_arguments(partial.arguments)
         if arguments is None:
             # Guessing at the arguments would put something the model never
-            # asked for in front of a handler.
+            # asked for in front of a handler. Either way nothing runs; what
+            # differs is what the reader should do next.
+            if finish == "max_tokens":
+                return (), ErrorInfo(
+                    code="provider_error",
+                    message=(
+                        "the model hit its output ceiling in the middle of its "
+                        f"call to {partial.name} (the provider said "
+                        f"{reported or 'length'!r}), so the arguments stop "
+                        "mid-JSON and nothing ran -- a file's whole body is "
+                        "spent from the same ceiling as the reasoning before "
+                        "it, so ask for it in smaller pieces"
+                    ),
+                )
             return (), ErrorInfo(
                 code="provider_error",
                 message=(f"the provider sent unparsable arguments for {partial.name}"),

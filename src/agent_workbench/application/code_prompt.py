@@ -78,6 +78,14 @@ script and the styles inline, and it is on screen the moment your call returns.
 That frame reaches nothing outside itself: a page that pulls a library from a
 CDN renders blank there, so inline what it needs.
 
+Build anything sizeable in steps. A file's whole body travels inside one tool
+call, and that call is spent from the same output ceiling as the reasoning you
+did before it -- so a large file emitted in a single write is cut off
+mid-argument, and then *nothing* is written, not even the part that had
+arrived. Write the skeleton first and put the sections in with edits: each call
+is a fresh request with its own ceiling, and a page that exists after four
+calls beats one that does not exist after one.
+
 Reads and searches that do not depend on each other can be proposed together in
 one message; they run as a group and keep the order you gave them. A write or a
 command runs on its own, after everything proposed before it.
