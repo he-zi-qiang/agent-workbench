@@ -105,7 +105,9 @@
 「这里能碰到」那一行多画「放手做」。`test_system_capabilities.py` 加一条三种部署各一个答案的用例，
 `CodePage.test.tsx` 加两条（提供时第一轮就有且发 `unattended`；不提供时三档且划掉）。
 前端 956 条 vitest（+2）。`scripts\stack.cmd` 收尾那段话把「every command stops on an approval
-card first」补上了 unattended 的例外。
+card first」补上了 unattended 的例外。补丁合入后再重建一次栈（镜像 `922fbe05…`）：
+`GET /v1/system/capabilities` 的 `code.unattended` 为 `available`，控制台点「新建会话」、选
+`windows测试` 之后的起始屏四档齐全，「这里能碰到」一行是沙箱运行 / 宿主命令 / 联网搜索 / 放手做。
 
 ### 3. 顺带看到、没修
 
