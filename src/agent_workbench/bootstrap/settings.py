@@ -257,9 +257,25 @@ class ApiSettings(StrictModel):
     #: screen, which is not a thing this route is for.
     computer_session_url: str = "http://127.0.0.1:8768/session"
 
-    @field_validator("computer_session_url")
+    #: Where the guarded browser's latest screencast frame is, for the console's
+    #: panel to forward (ADR-0112 §3.6).
+    #:
+    #: A defaulted leaf under `[api]`, exactly like `computer_session_url` above
+    #: and for the reason stated there: a new table would bump
+    #: `config_schema_version`, and one URL is not worth a version. It describes
+    #: **this process** -- where it looks for that frame -- and is a different
+    #: question from the `[[mcp.servers]]` entry that decides which tools enter
+    #: a Task's envelope.
+    #:
+    #: Loopback for the same reason, checked below. Under Compose that loopback
+    #: is the near end of the tunnel `docker/loopback_proxy.py` opens to the
+    #: browser container, so the rule holds there unchanged rather than by
+    #: exception.
+    browser_frame_url: str = "http://127.0.0.1:8773/frame"
+
+    @field_validator("computer_session_url", "browser_frame_url")
     @classmethod
-    def refuse_a_screen_server_on_another_host(cls, value: str) -> str:
+    def refuse_a_server_on_another_host(cls, value: str) -> str:
         # The same argument as `host` below, from the other side. That one
         # refuses to *serve* anywhere a caller could name themselves; this one
         # refuses to *read* a screen that is not this machine's. A URL pointing
@@ -268,10 +284,7 @@ class ApiSettings(StrictModel):
         # request headers.
         host = urlsplit(value).hostname
         if host is None or not is_loopback_bind_address(host):
-            raise ValueError(
-                "api.computer_session_url must point at this machine; "
-                f"{value!r} does not"
-            )
+            raise ValueError(f"this URL must point at this machine; {value!r} does not")
         return value
 
     @field_validator("host")

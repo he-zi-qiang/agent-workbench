@@ -170,6 +170,19 @@ jobs:
           sys.exit(0 if importlib.util.find_spec('sentence_transformers') is None
           else 'the embedding extra must not be installed in CI')"
 
+      # The browser extra, on exactly the same terms (ADR-0112 §5). The wheel is
+      # small; the Chromium `playwright install` downloads is not, and none of
+      # the gates above need a browser. The consequence is stated rather than
+      # implied: nothing behind this extra is covered by CI, so evidence for the
+      # browser tools comes from local and Compose runs and must be labelled as
+      # such in docs/status.md.
+      - name: Confirm the optional browser runtime is not installed
+        run: >-
+          uv run --no-sync python -c
+          "import importlib.util, sys;
+          sys.exit(0 if importlib.util.find_spec('playwright') is None
+          else 'the browser extra must not be installed in CI')"
+
   stateful:
     name: Migrations, stores and end-to-end recovery
     runs-on: ubuntu-latest

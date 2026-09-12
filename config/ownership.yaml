@@ -87,6 +87,13 @@
       ]
     },
     {
+      "owner": "apps.api.routes.browser",
+      "lifecycle": "live",
+      "fields": [
+        "api.browser_frame_url"
+      ]
+    },
+    {
       "owner": "apps.api.routes.computer",
       "lifecycle": "live",
       "fields": [

@@ -9979,3 +9979,19 @@ p.aw-code-step-thought {
   color: var(--aw-text-soft);
   font-size: 12px;
 }
+
+/* 浏览器面板的那一帧（ADR-0112 §3.6）。
+ *
+ * `max-width: 100%` 而不是固定宽：截屏来自 1280×800 的视口，而这一栏可能只有
+ * 320px 宽，等比缩下来读者仍然看得出「模型现在停在哪一页」——这是这块面要回答
+ * 的唯一问题，不是让人在这里读正文。 */
+.aw-browser-frame img {
+  border: 1px solid var(--aw-border);
+  border-radius: 4px;
+  display: block;
+  max-width: 100%;
+}
+
+.aw-browser-frame p {
+  margin-top: 8px;
+}

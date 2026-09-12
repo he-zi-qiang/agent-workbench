@@ -129,6 +129,19 @@ computer-use = [
   "pyobjc-framework-ScreenCaptureKit>=10,<13; sys_platform == 'darwin'",
 ]
 
+# The guarded browser (ADR-0112). Optional for the same reason `embedding` is:
+# the wheel is small but the Chromium it downloads is not, and every gate except
+# the browser's own end-to-end runs without it. CI does not install this, so
+# nothing behind it is covered there -- evidence for the browser tools comes
+# from local and Compose runs and is labelled as such.
+#
+# Playwright is here for launching Chromium and holding a CDP session open, not
+# for its high-level API: `apps/browser_mcp/session.py` speaks the protocol
+# directly, which is why there is one dependency and not a test framework.
+browser = [
+  "playwright>=1.49,<2",
+]
+
 [project.scripts]
 agent-api = "agent_workbench.apps.api.main:main"
 agent-cli = "agent_workbench.apps.cli.main:main"
@@ -138,6 +151,8 @@ agent-word-mcp = "agent_workbench.apps.word_mcp.main:main"
 agent-sandbox-mcp = "agent_workbench.apps.sandbox_mcp.main:main"
 agent-web-mcp = "agent_workbench.apps.web_mcp.main:main"
 agent-computer-mcp = "agent_workbench.apps.computer_mcp.main:main"
+agent-browser-mcp = "agent_workbench.apps.browser_mcp.main:main"
+agent-browser-egress = "agent_workbench.apps.browser_mcp.egress:main"
 agent-encoder = "agent_workbench.apps.encoder.main:main"
 agent-config-check = "agent_workbench.bootstrap.config_check:main"
 agent-evidence = "agent_workbench.bootstrap.evidence:main"

@@ -1556,6 +1556,7 @@ id；或把这一类不相等**升级成可纠正**（它今天不是 framing �
 | D-05 | Langfuse、生产身份认证、S3 Artifact、远程部署 | 未实现 |
 | D-07 | 在控制台里存一把 key、或拨一个开关，都不产生任何事件 | 未实现 |
 | D-08 | ~~Worker 不向控制平面上报自己~~ 每个 Worker 自己登记，`GET /v1/system/workers` 读它（ADR-0110，`005cc4d`） | **已关闭** |
+| D-09 | 浏览器那条容器路径没有被完整装配验证过 | 未验证 |
 
 > 编号一经退休不再复用。D-06（Chat 历史 compaction，词表齐备而没有任何发射点）已于
 > 2026-08-25 关闭，按本文档维护规则从正文删除，落地记录在 [status.md](./status.md)：
@@ -1678,6 +1679,40 @@ Identity Adapter 只信请求头。在那个前提下「谁存的」这个问题
 **做完了算什么样**：这一条与生产身份认证（D-05）绑定，且顺序不能反——先有真正的身份，
 再有一条能被信任的「谁在什么时候换了这台部署的 key」。在那之前，能被信任的只有
 文件本身的 mtime。
+
+
+### D-09 浏览器那条容器路径没有被完整装配验证过
+
+**是什么**：ADR-0112 的 Compose 拓扑——`browser` 服务在 `internal: true` 网络上、
+`browser-egress` 持有守卫、两条回环隧道、只读挂进去的工作区卷——**从来没有作为一个整体
+`compose up` 起来过**。
+
+**已经验过的部分，说清楚免得这条被读成「什么都没验」**：Chromium 在完整硬化条件下
+（uid 10001、`cap_drop: ALL`、`no-new-privileges`、`read_only` + tmpfs、
+`docker/chromium-seccomp.json`）带自沙箱启动、`evaluate` 返回 42、截图 7303 字节，
+对照组在默认 seccomp 下 `Chromium sandboxing failed!`；`internal: true` 那侧确实没有
+默认路由、公网与 DNS 都不通；六个工具、守卫的放行与拒绝、画面经 API 反代回流，全部在
+原生路径上端到端跑通。缺的是**这些部件装在一起**那一次。
+
+**为什么没做**：本机磁盘只剩 12 GB。完整 base 镜像 6.4 GB（`--extra embedding` 里的
+torch 占大头）加上 browser 层会再次逼近上限——这一轮已经因此把 Docker 的 containerd
+元数据库写坏过一次，`docker images/build/rmi/run` 全部 `input/output error`，而且陷入
+「释放空间要写元数据、元数据写不下」的死锁，只能靠清宿主缓存加重启 Docker Desktop 打破。
+在同一台机器上再赌一次不划算。
+
+**它可能藏着什么**：装配期的缺陷这一轮已经出现过三个（`Dockerfile` 没装 Chromium、
+`stack.cmd` 不知道 browser、8770 端口撞 `dev.sh panel`），全都是**单元测试全绿而那条路
+不可能跑通**的形状。`tests/deployment/test_compose.py` 现在静态断言了拓扑的形状，但静态
+断言看不见的东西至少有三样：隧道两端在真实容器里是否接得上、`browser` 对
+`browser-egress` 的 `depends_on: service_healthy` 时序是否够、以及只读工作区卷在
+`browser_open` 的 `file://` 下是否真的可读。
+
+**做完了算什么样**：在一台有 ≥25 GB 空余的机器上跑
+`docker build -t agent-workbench:local .`、`scripts/dev.sh browser-image`、
+`docker compose --profile demo up -d --wait`，然后对 `browser` 容器跑一遍原生路径已经
+跑过的那八步，并确认守卫在容器里走的是**直连分支**（容器里没有任何代理变量，所以
+ADR §3.2b 那条较弱的名字判断分支不该被触发）。Windows 启动器是这条路径的主要使用者，
+所以在 Windows 上验一次比在这台 Mac 上补验更有价值。
 
 ### D-08 控制平面看不见 Worker —— **已关闭**（2026-09-05，ADR-0110）
 

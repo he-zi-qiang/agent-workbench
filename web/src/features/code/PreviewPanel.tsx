@@ -40,6 +40,7 @@ import type {
 import { EventLog } from "../../components/EventLog";
 import { PanelTabs } from "../../components/PanelTabs";
 import { formatSize, IconButton } from "../../components/ui";
+import { BrowserFrame } from "./BrowserFrame";
 import { FilePreview, type OpenedFile } from "./FilePreview";
 import { ProjectFileBody } from "./ProjectFileTree";
 
@@ -194,6 +195,14 @@ export function PreviewPanel({
                 )}
               </>
             ),
+          },
+          {
+            // ADR-0112 §3.6。永远 `available`，因为这一张要说的正是「那个浏览
+            // 器在不在」——一张只在浏览器已经跑起来时才出现的标签，恰好在读者
+            // 最需要知道它没跑的时候消失。
+            id: "browser",
+            label: "浏览器",
+            body: <BrowserFrame />,
           },
           {
             id: "events",

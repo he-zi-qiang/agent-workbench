@@ -49,6 +49,7 @@ from agent_workbench.apps.api.middleware import ControlPlaneLimit
 from agent_workbench.apps.api.routes import (
     approvals,
     artifacts,
+    browser,
     chat,
     code,
     computer,
@@ -269,6 +270,11 @@ def create_app(
     # server is not up right now", which are the two states ADR-095 §7 says must
     # stay distinguishable.
     app.include_router(computer.router)
+    # Unconditional for the same reason, one ADR later (ADR-0112 §3.6). The two
+    # states a console must keep apart are "this deployment has no browser" and
+    # "the browser is not up right now", and a router that disappeared would
+    # collapse them into one 404.
+    app.include_router(browser.router)
     # Unconditional, and for a sharper version of computer.router's reason: a
     # settings page that vanished when no key was configured would be a page
     # nobody could reach in order to configure one.

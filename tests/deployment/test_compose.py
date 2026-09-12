@@ -618,7 +618,14 @@ def test_the_stack_names_the_profile_it_runs() -> None:
     assert profile.is_file(), "the profile every container names does not exist"
     parsed = tomllib.loads(profile.read_text(encoding="utf-8"))
     assert parsed["optional_labs"]["mcp_adapter"] is True
-    assert [server["alias"] for server in parsed["mcp"]["servers"]] == ["word", "web"]
+    assert [server["alias"] for server in parsed["mcp"]["servers"]] == [
+        "word",
+        "web",
+        # ADR-0112. Listed rather than counted, because each alias widens every
+        # Task submitted under this profile by its own tools, and a test that
+        # only counted them would let a rename through.
+        "browser",
+    ]
     # The one line that would take the API down if it were copied across from
     # `config.demo-local.toml`: `SandboxSession.open` is fail-fast, and nothing
     # in this topology can answer a sandbox probe.
@@ -917,7 +924,11 @@ def test_the_windows_launcher_builds_the_image_that_can_lay_a_document_out() -> 
     builds = [
         line for line in commands if line.startswith("docker build ") and " ." in line
     ]
-    assert len(builds) == 1, builds
+    # Two, and the count is asserted rather than the first match taken: a third
+    # build appearing here is a third multi-minute step in the one path whose
+    # whole promise is "double-click and wait once", and it should have to be
+    # written into a test before it is written into the launcher.
+    assert len(builds) == 2, builds
     assert "--build-arg WITH_FIDELITY_PREVIEW=%FIDELITY%" in builds[0]
     assert 'set "FIDELITY=1"' in commands
     # The lighter image is a word somebody types, not a second launcher.
@@ -926,6 +937,43 @@ def test_the_windows_launcher_builds_the_image_that_can_lay_a_document_out() -> 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "ARG WITH_FIDELITY_PREVIEW=0" in dockerfile, (
         "the Dockerfile default moved; the launcher's argument is the decision"
+    )
+
+
+def test_the_windows_launcher_builds_the_browser_image_in_order() -> None:
+    """The second image, and the order it has to come in (ADR-0112 §3.5b).
+
+    `docker/browser.Dockerfile` is `FROM agent-workbench:local`, so building it
+    first gets either a stale base or no base at all. Compose cannot enforce
+    that ordering here because this is deliberately not a compose `build:` --
+    on a checkout whose path contains non-ASCII characters `compose build`
+    fails with an error that never mentions the path, which is the failure this
+    project has already been bitten by.
+
+    The reason it is a second image at all is size: `api`, both Workers,
+    `ingestion`, `sandbox`, `encoder` and `browser-egress` share the base one,
+    and none of them can start a browser.
+    """
+
+    commands = _launcher_commands()
+    builds = [
+        line for line in commands if line.startswith("docker build ") and " ." in line
+    ]
+    base, browser = builds
+    assert "-t agent-workbench:local" in base
+    assert "-f docker\\browser.Dockerfile" in browser
+    assert "-t agent-workbench-browser:local" in browser
+    assert "--build-arg BASE_IMAGE=agent-workbench:local" in browser, (
+        "the derived image must name what it derives from, or a rebuild of the "
+        "base leaves this one silently pinned to an older layer"
+    )
+
+    compose = _compose()
+    service = compose["services"]["browser"]
+    assert service["image"] == "agent-workbench-browser:local"
+    assert "build" not in service, (
+        "a compose `build:` here is what fails on a CJK path; the launcher "
+        "builds this image and compose only names it"
     )
 
 
@@ -969,3 +1017,112 @@ def test_the_api_alone_can_write_one_host_folder_and_the_picker_opens_there() ->
     # and this one is Compose's, never the application's.
     text = (ROOT / "compose.yaml").read_text(encoding="utf-8")
     assert "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects" in text
+
+
+# --- The browser's way out is a shape, not a flag (ADR-0112 §3.3) ----------
+
+
+def test_the_browser_container_has_no_default_route() -> None:
+    """The claim the whole design rests on, asserted rather than described.
+
+    `--proxy-server` is a command-line argument, and an argument can be
+    omitted by anything that gets to run code in the container. A missing
+    default route cannot be. So the browser is on one network, that network is
+    `internal`, and the only thing on it that can leave is the guard.
+    """
+
+    compose = _compose()
+    services = compose["services"]
+    networks = compose["networks"]
+    assert isinstance(services, dict)
+    assert isinstance(networks, dict)
+
+    browser = services["browser"]
+    attached = sorted((browser.get("networks") or {}).keys())
+    assert attached == ["browser"], attached
+    assert networks["browser"]["internal"] is True
+
+
+def test_the_guard_is_the_only_way_from_that_network_to_the_outside() -> None:
+    """Exactly one service bridges the internal network and the default one."""
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    bridging = sorted(
+        name
+        for name, service in services.items()
+        if "browser" in (service.get("networks") or {})
+        and "default" in (service.get("networks") or {})
+        # The API and the Workers are on both because they *call* the browser;
+        # what matters is which of them the browser itself can reach, and it
+        # reaches only what is on its network with it.
+        and name not in {"api", "task-worker", "task-worker-b"}
+    )
+    assert bridging == ["browser-egress"], bridging
+
+
+def test_the_browser_keeps_its_own_sandbox() -> None:
+    """ADR-0112 §3.5: the hardening stays, and the seccomp profile is what moves.
+
+    If this profile is ever dropped, Chromium aborts at start rather than
+    running unsandboxed -- but it would abort in a container whose `cap_drop`
+    somebody had probably relaxed to "fix" it, which is the trade this test
+    exists to keep visible.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    browser = services["browser"]
+
+    options = browser.get("security_opt", [])
+    assert "no-new-privileges:true" in options
+    assert any("chromium-seccomp.json" in str(option) for option in options), options
+    assert browser.get("cap_drop") == ["ALL"]
+    assert browser.get("read_only") is True
+
+
+def test_the_browser_sees_the_workspace_read_only() -> None:
+    """It opens what a session produced; it has no business writing there."""
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    mounts = services["browser"].get("volumes", [])
+    workspace = [mount for mount in mounts if mount.get("target") == "/workspace"]
+    assert len(workspace) == 1, mounts
+    assert workspace[0].get("read_only") is True
+    assert workspace[0].get("source") == "artifact_data"
+
+
+def test_neither_browser_service_holds_anything_worth_stealing() -> None:
+    """No key volume, no database, no Docker socket -- stated as an assertion.
+
+    The ADR's argument for `--no-sandbox` being unnecessary, and for the blast
+    radius being acceptable if Chromium is ever exploited, both depend on this
+    container holding nothing. That is only true while nobody adds a mount.
+    """
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+
+    for name in ("browser", "browser-egress"):
+        service = services[name]
+        sources = {mount.get("source") for mount in service.get("volumes", [])}
+        assert "/var/run/docker.sock" not in sources, name
+        assert "provider_key_data" not in sources, name
+        environment = service.get("environment") or {}
+        assert not any("DSN" in key for key in environment), name
+        assert not any("SECRET" in key.upper() for key in environment), name
+
+
+def test_the_callers_of_the_browser_are_on_its_network() -> None:
+    """A tunnel to a service on a network you are not on reaches nothing."""
+
+    services = _compose()["services"]
+    assert isinstance(services, dict)
+    for name in ("api", "task-worker", "task-worker-b"):
+        attached = (services[name].get("networks") or {}).keys()
+        assert "browser" in attached, name
+        # And still on the default one, or they lose the database: a service
+        # that names any network is no longer on the implicit one.
+        assert "default" in attached, name

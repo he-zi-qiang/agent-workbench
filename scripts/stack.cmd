@@ -320,6 +320,29 @@ if errorlevel 1 (
     goto :popped
 )
 
+rem  The browser image, and it is a second `docker build` rather than a
+rem  `build:` in compose.yaml for two reasons that both had to be met.
+rem
+rem  Chromium plus the libraries it links against is a few hundred megabytes,
+rem  and the shared image is what `api`, both Workers, `ingestion`, `sandbox`,
+rem  `encoder` and `browser-egress` all run -- seven containers would carry a
+rem  browser none of them can start (docker\browser.Dockerfile says the same
+rem  at more length). And a `build:` under compose fails outright on a
+rem  checkout whose path contains non-ASCII characters, with an error that
+rem  never mentions the path; `docker build` does not.
+rem
+rem  It derives FROM the image built just above, so it must come after it.
+echo Building the browser image (ADR-0112): Chromium on top of the image above.
+docker build --build-arg BASE_IMAGE=agent-workbench:local -t agent-workbench-browser:local -f docker\browser.Dockerfile .
+if errorlevel 1 (
+    echo stack: browser image build failed -- see the output above. 1>&2
+    rem  Same reasoning as the base image: `compose up` would otherwise reuse
+    rem  a stale agent-workbench-browser:local, or fail on a missing image
+    rem  with a message that says nothing about this step having been skipped.
+    set "RC=1"
+    goto :popped
+)
+
 rem  --profile demo, not the default stack. The default one is a control plane
 rem  with no Task Worker in it, so a person who opens the console can look at
 rem  Chat and at an empty task list and see nothing of claim, lease, epoch or
