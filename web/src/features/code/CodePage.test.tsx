@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -3639,6 +3646,171 @@ describe("CodePage 的自动预览", () => {
     expect(
       await screen.findByRole("region", { name: "文件 index.html" }),
     ).toBeInTheDocument();
+  });
+
+  /** 一轮写完 `index.html`、页面已经自己打开、并且报了 `fault`。 */
+  async function faulted(fault: string): Promise<void> {
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("index.html 预览");
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: fault },
+        source: frame.contentWindow,
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText(fault)).toBeInTheDocument();
+    });
+  }
+
+  /** 这几条自动验证用例共用的那一轮：写出 index.html，然后落定。 */
+  function wroteAPage(): void {
+    vi.mocked(askCode).mockResolvedValue({
+      report: "写好了 index.html。",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "index.html", size_bytes: 620, media_type: "text/html" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "<h1>hi</h1>",
+      truncated: false,
+    });
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个页面" },
+        { role: "assistant", text: "写好了 index.html。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: wrote("index.html"),
+    });
+  }
+
+  it("页面报错之后自己再发一轮，不等人点", async () => {
+    // 用户的话：「我是让他自己验证 不是需要我点击」。这一条钉的就是那句话——
+    // 一轮落定、页面自己跑起来、它报了错，下一轮是这个页面自己发出去的。
+    const user = userEvent.setup();
+    wroteAPage();
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await faulted("ReferenceError: GRAVITY is not defined");
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalledTimes(2);
+    });
+    const asked = String(vi.mocked(askCode).mock.calls[1]?.[2]);
+    // 转录里看得出是谁问的、问了什么：一次没有人按下的模型调用，必须在它花掉
+    // 之后能被指认出来。
+    expect(asked).toContain("自动验证");
+    expect(asked).toContain("ReferenceError: GRAVITY is not defined");
+  });
+
+  it("同一组错误不发第二次——修不动就停", async () => {
+    // 没有这一道，一个改不对的模型会把预算烧到上限为止。
+    const user = userEvent.setup();
+    wroteAPage();
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await faulted("TypeError: ctx.drawImage is not a function");
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalledTimes(2);
+    });
+
+    // 第二轮之后页面报的还是同一条。
+    await faulted("TypeError: ctx.drawImage is not a function");
+    await nextFrame();
+
+    expect(vi.mocked(askCode)).toHaveBeenCalledTimes(2);
+  });
+
+  it("关掉自动验证之后，错误只显示出来", async () => {
+    // 它会花钱，所以关得掉；关掉之后那颗「交给它」的按钮还在——读者自己决定。
+    const user = userEvent.setup();
+    wroteAPage();
+
+    mounted();
+    await user.click(screen.getByRole("button", { name: "自动验证" }));
+    await user.type(screen.getByLabelText("要做的事"), "写个页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await faulted("ReferenceError: GRAVITY is not defined");
+    await nextFrame();
+
+    expect(vi.mocked(askCode)).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: "把这些错误交给它" }),
+    ).toBeInTheDocument();
+  });
+
+  it("页面报的错一键回到输入框里，闭上那个回路", async () => {
+    // 这一条钉的是整条回路，而不是其中一段：模型写出页面 → 右栏把它跑起来 →
+    // 它自己报出运行时错误 → 一次点击把那些话放回输入框 → 下一轮去修。
+    //
+    // 为什么这一段值得做：这个部署的项目会话一个执行工具都没有（ADR-0109 §3.3），
+    // 模型永远不可能自己运行它写的东西。而那张页面其实早就在读者眼前跑过了——
+    // 缺的只是有人在听它说话，以及一条把话带回去的路。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "写好了 index.html。",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "index.html", size_bytes: 620, media_type: "text/html" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "<h1>hi</h1>",
+      truncated: false,
+    });
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个页面" },
+        { role: "assistant", text: "写好了 index.html。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: wrote("index.html"),
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("index.html 预览");
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: "ReferenceError: GRAVITY is not defined" },
+        source: frame.contentWindow,
+      }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "把这些错误交给它" }),
+    );
+
+    // 输入框里是可以直接发出去的一句话：哪个文件、报了什么。
+    const composer = screen.getByLabelText<HTMLTextAreaElement>("要做的事");
+    expect(composer.value).toContain("index.html");
+    expect(composer.value).toContain("ReferenceError: GRAVITY is not defined");
   });
 
   it("打开一段旧会话，上次那张页面不会盖住文件夹", async () => {

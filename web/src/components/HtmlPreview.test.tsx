@@ -6,6 +6,7 @@ import { HtmlPreview, withPreviewCsp } from "./HtmlPreview";
 function renderPreview(overrides?: {
   sizeBytes?: number;
   body?: { text: string; truncated: boolean };
+  onReport?: (report: string) => void;
 }) {
   const body = overrides?.body ?? {
     text: "<html><head></head><body><h1>你好</h1></body></html>",
@@ -19,6 +20,9 @@ function renderPreview(overrides?: {
       <HtmlPreview
         load={() => Promise.resolve(body)}
         name="report.html"
+        {...(overrides?.onReport === undefined
+          ? {}
+          : { onReport: overrides.onReport })}
         queryKey={["test-html", "report.html"]}
         sizeBytes={overrides?.sizeBytes ?? body.text.length}
       />
@@ -112,6 +116,120 @@ describe("HtmlPreview", () => {
     // PDF frame has no sandbox at all.
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("srcdoc")).toContain("Content-Security-Policy");
+    // The reporter rides in the same insertion, *after* the policy: it is a
+    // script, so it has to be governed by the meta that precedes it.
+    const doc = frame.getAttribute("srcdoc") ?? "";
+    expect(doc.indexOf("awPreviewError")).toBeGreaterThan(
+      doc.indexOf("Content-Security-Policy"),
+    );
+  });
+
+  it("says what the page reported about itself while running", async () => {
+    // A page that throws on load paints nothing; so does one that has not
+    // started drawing. 2026-09-12, the report that prompted this: a turn wrote
+    // a 40 KB game, had no tool in this deployment that could run it, and said
+    // so honestly -- while the frame beside that sentence had already run it
+    // and nobody was listening.
+    renderPreview();
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("report.html 预览");
+
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: "ReferenceError: GRAVITY is not defined" },
+        source: frame.contentWindow,
+      }),
+    );
+
+    expect(
+      await screen.findByText("ReferenceError: GRAVITY is not defined"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/报了 1 条错误/)).toBeInTheDocument();
+  });
+
+  it("hands what the page said to whoever can act on it", async () => {
+    // The loop this closes: the model wrote the page, the frame ran it, and
+    // until there was a way back the only thing between "it throws" and "fix
+    // it" was the reader retyping the error by hand.
+    const reports: string[] = [];
+    renderPreview({ onReport: (report: string) => reports.push(report) });
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("report.html 预览");
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: "ReferenceError: GRAVITY is not defined" },
+        source: frame.contentWindow,
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "把这些错误交给它" }));
+
+    expect(reports).toHaveLength(1);
+    // The file's name is in it: a session with three pages open otherwise
+    // hands back an error about no page in particular.
+    expect(reports[0]).toContain("report.html");
+    expect(reports[0]).toContain("ReferenceError: GRAVITY is not defined");
+  });
+
+  it("offers no hand-back where there is nobody to hand it to", async () => {
+    // A Task artifact has no next turn. The button would be a control that
+    // does nothing, which is worse than its absence.
+    renderPreview();
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("report.html 预览");
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: "boom" },
+        source: frame.contentWindow,
+      }),
+    );
+
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "把这些错误交给它" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("counts one throwing frame once, not sixty times a second", async () => {
+    // A game loop that throws reports the same line every frame. What the
+    // reader needs is that it throws and what it says -- once.
+    renderPreview();
+    const frame =
+      await screen.findByTitle<HTMLIFrameElement>("report.html 预览");
+
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent(
+        window,
+        new MessageEvent("message", {
+          data: { awPreviewError: "TypeError: ctx.drawImage is not a function" },
+          source: frame.contentWindow,
+        }),
+      );
+    }
+
+    expect(await screen.findByText(/报了 1 条错误/)).toBeInTheDocument();
+  });
+
+  it("ignores a message that did not come from this frame", async () => {
+    // The frame has an opaque origin, so `event.origin` is the string "null"
+    // and authenticates nothing. The window identity is what does. Without
+    // this check any page in the tab -- or the console itself -- could put
+    // words under somebody's preview.
+    renderPreview();
+    await screen.findByTitle("report.html 预览");
+
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { awPreviewError: "这条不该显示出来" },
+        source: window,
+      }),
+    );
+
+    expect(screen.queryByText("这条不该显示出来")).not.toBeInTheDocument();
+    expect(screen.queryByText(/条错误/)).not.toBeInTheDocument();
   });
 
   it("flips to the source view and back without a second fetch", async () => {

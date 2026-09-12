@@ -771,7 +771,11 @@ export function CodePage() {
     setRunningIn((held) => new Set(held).add(startedIn));
     setFault(null);
     setPending({ sessionId: sessionId ?? null, text });
-    setInstruction("");
+    // Only what came *from* the composer empties it. A turn started with text
+    // of its own -- re-running a plan, and now the automatic verify pass --
+    // would otherwise throw away the half-sentence the reader was typing while
+    // it fired.
+    if (override === undefined) setInstruction("");
     try {
       if (target === undefined) {
         const created = await createCodeSession(identity);
@@ -1019,6 +1023,9 @@ export function CodePage() {
   // 弹出来的那一版会一直留在屏幕上，看起来却像是最新的。那比不弹更糟。
   const ranIn = useRef<string | null>(null);
   const settled = useRef(false);
+  // 自动弹出来的那一张页面的名字。自动验证那一段读它：读者自己从文件夹里点开一个
+  // 历史页面，不该触发任何模型调用。
+  const autoShown = useRef<string | null>(null);
   useEffect(() => {
     if (running) {
       ranIn.current = sessionId ?? null;
@@ -1049,6 +1056,7 @@ export function CodePage() {
       // 次渲染里就当作办过，等于每一次都不弹。
       if (entry === undefined) return;
       settled.current = false;
+      autoShown.current = page;
       // 正文缓存按名字键、`staleTime: Infinity`（`FilePreview` 的 `fileKey`），
       // 所以改写过的同名文件会拿着上一版的字节渲染——而这正是「改一下这个按钮」
       // 那种轮次的常态。不失效的话，自动弹出来的是一张看起来最新的旧页面，比不
@@ -1082,6 +1090,7 @@ export function CodePage() {
       return;
     }
     settled.current = false;
+    autoShown.current = page.split("/").pop() ?? page;
     // 项目那一侧同理，键是 `ProjectTextBody` 那条读。默认 5 秒的 staleTime 在
     // 一轮比 5 秒短的时候同样会给出上一版。
     void queries.invalidateQueries({
@@ -1122,6 +1131,59 @@ export function CodePage() {
     sessionId,
     writtenPage,
   ]);
+
+  // 自己验证自己写的页面（第七十七批·第 8 条）。
+  //
+  // **这条回路里没有人。** 上一条把页面报的错画了出来、给了一颗「交给它」的按钮，
+  // 而用户的话是「我是让他自己验证 不是需要我点击」。所以这里把那次点击也拿掉：
+  // 一轮落定、页面自己跑起来、它报了错，就直接用那些错误再发一轮。
+  //
+  // **说清楚这条回路证明得了什么、证明不了什么。** 它证明的是「这页不抛异常了」。
+  // 「跳得跟不跟手、关卡好不好玩」它一个字也答不了——那种判断只有人做得了，而这台
+  // 部署的项目会话一个执行工具都没有（ADR-0109 §3.3），模型自己永远跑不了它写的
+  // 东西。真正在跑的是读者浏览器里那个沙箱帧，这段代码只是把帧说的话送回去。
+  //
+  // 三道闸，少一道这就是一台烧钱的机器：
+  //
+  // 1. **最多两轮。** 第三轮还在报同样的错，说明模型修不动它，再发一轮只是重复。
+  // 2. **同一组错误不发第二次。** 上一轮发过 A、这一轮还是 A，就是没修好——停。
+  // 3. **只对「这个标签页刚跑完的那一轮自己打开的页面」生效。** 读者从文件夹里点开
+  //    一个历史页面不该触发任何模型调用。
+  //
+  // 关得掉，而且关掉这件事记得住：`aw.code.autofix.v1`。
+  const AUTO_ROUNDS = 2;
+  const [autoVerify, setAutoVerify] = useStoredState("aw.code.autofix.v1", true);
+  // 这一轮的自动修到第几轮了，以及上一次交出去的是哪一组错误。按会话记，换会话清零。
+  const autoPass = useRef<{ session: string | null; rounds: number; sent: string }>(
+    { session: null, rounds: 0, sent: "" },
+  );
+  const onFaults = useCallback(
+    (list: readonly string[], name: string) => {
+      if (!autoVerify || running || sessionId === undefined) return;
+      // 只认自动弹出来的那一张：`shownPage` 是那段效果记下的「这一轮产出的页面」。
+      if (autoShown.current !== name) return;
+      const signature = [...list].sort().join("|");
+      const pass =
+        autoPass.current.session === sessionId
+          ? autoPass.current
+          : { session: sessionId, rounds: 0, sent: "" };
+      if (pass.rounds >= AUTO_ROUNDS || pass.sent === signature) return;
+      autoPass.current = {
+        session: sessionId,
+        rounds: pass.rounds + 1,
+        sent: signature,
+      };
+      // 这句话原样进转录，所以读者看得见是谁问的、问了什么——一次没有人按下的
+      // 模型调用，必须在它花掉之后能被指认出来。
+      void send(
+        permission,
+        `（自动验证，第 ${String(pass.rounds + 1)}/${String(AUTO_ROUNDS)} 轮）` +
+          `${name} 在预览里运行时报了这些错误，请修掉它们：\n` +
+          list.map((fault) => `- ${fault}`).join("\n"),
+      );
+    },
+    [autoVerify, permission, running, send, sessionId],
+  );
 
   const decide = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
@@ -1507,6 +1569,25 @@ export function CodePage() {
             </button>
           ))}
         </div>
+        {/* 一个开关，不是一档权限：它不改这一轮能做什么，只决定「页面报错之后
+            要不要自己再发一轮」。放在权限选择器旁边，因为这两个是读者在按发送
+            之前唯一要想的两件事，而它会花钱——一个花钱的行为不该只在代码里
+            存在。 */}
+        <button
+          aria-pressed={autoVerify}
+          className={`aw-button aw-code-autofix ${autoVerify ? "is-active" : ""}`}
+          onClick={() => {
+            setAutoVerify(!autoVerify);
+          }}
+          title={
+            autoVerify
+              ? `写出的页面在预览里报错时，自动把错误交回去修，最多 ${String(AUTO_ROUNDS)} 轮`
+              : "页面报错时只显示出来，要不要交回去由你决定"
+          }
+          type="button"
+        >
+          自动验证
+        </button>
         <ComposerMenu
           catalogue={toolOffer.data}
           catalogueFailed={toolOffer.isError}
@@ -2010,7 +2091,21 @@ export function CodePage() {
                 setFault({ scope: viewing.sessionId, text: describe(cause) });
               });
             }}
+            onFaults={onFaults}
             onOpen={open}
+            onReport={(report) => {
+              // 追加而不是替换，和「快捷指令」那一处同一个理由：读者可能已经
+              // 打了半句。落焦点是这次点击的全部意思——他要的下一步是补一句
+              // 「顺便把跳跃调高一点」然后发送，而不是再去找输入框。
+              setInstruction((held) =>
+                held.trim() === ""
+                  ? report
+                  : `${held.replace(/\s+$/, "")}\n${report}`,
+              );
+              window.requestAnimationFrame(() =>
+                instructionRef.current?.focus(),
+              );
+            }}
             onTab={setPanelTab}
             onWrote={refreshWorkspace}
             orphanRuns={orphanRuns}

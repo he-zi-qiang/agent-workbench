@@ -358,10 +358,15 @@ export function ProjectFileTree({
  * 条路线整个搬进了 `ProjectTextBody`。
  */
 export function ProjectFileBody({
+  onFaults,
+  onReport,
   path,
   projectId,
   sizeBytes,
 }: {
+  /** Same as `FilePreview`'s: a rendered page's own report, on its way back. */
+  onReport?: (report: string) => void;
+  onFaults?: (faults: readonly string[], name: string) => void;
   path: string;
   projectId: string;
   /**
@@ -413,6 +418,8 @@ export function ProjectFileBody({
       identity={identity}
       kind={kind}
       name={name}
+      {...(onFaults === undefined ? {} : { onFaults })}
+      {...(onReport === undefined ? {} : { onReport })}
       path={path}
       projectId={projectId}
       sizeBytes={sizeBytes}
@@ -432,6 +439,8 @@ function ProjectTextBody({
   identity,
   kind,
   name,
+  onFaults,
+  onReport,
   path,
   projectId,
   sizeBytes,
@@ -440,6 +449,8 @@ function ProjectTextBody({
   identity: PrincipalIdentity;
   kind: PreviewKind;
   name: string;
+  onReport?: (report: string) => void;
+  onFaults?: (faults: readonly string[], name: string) => void;
   path: string;
   projectId: string;
   sizeBytes: number;
@@ -492,6 +503,8 @@ function ProjectTextBody({
             Promise.resolve({ text: body.text ?? "", truncated: false })
           }
           name={name}
+          {...(onFaults === undefined ? {} : { onFaults })}
+          {...(onReport === undefined ? {} : { onReport })}
           queryKey={[
             "project-file-html",
             identity,

@@ -58,7 +58,9 @@ export function PreviewPanel({
   identity,
   onCollapse,
   onDownload,
+  onFaults,
   onOpen,
+  onReport,
   onWrote,
   orphanRuns,
   onTab,
@@ -92,6 +94,16 @@ export function PreviewPanel({
   onCollapse: () => void;
   onDownload: () => void;
   onOpen: (file: WorkspaceEntryView) => void;
+  /**
+   * What a rendered page said about itself, on its way to the composer.
+   *
+   * Held by the page rather than by this panel for the same reason `tab` is:
+   * the composer is the page's, and a panel that reached for it would be a
+   * second owner of the next instruction.
+   */
+  onReport: (report: string) => void;
+  /** The same report as a fact, for the page's own automatic pass. */
+  onFaults: (faults: readonly string[], name: string) => void;
   /** A run in here can write files; the page owns the listing they land in. */
   onWrote: (names: string[]) => void;
   /** Runs the pairing could not attribute; surfaced rather than swallowed. */
@@ -166,6 +178,8 @@ export function PreviewPanel({
                 {projectFile !== null ? (
                   <div className="aw-drawer-body">
                     <ProjectFileBody
+                      onFaults={onFaults}
+                      onReport={onReport}
                       path={projectFile.path}
                       projectId={projectFile.projectId}
                       sizeBytes={projectFile.sizeBytes}
@@ -187,6 +201,8 @@ export function PreviewPanel({
                         const entry = files.find((held) => held.name === name);
                         if (entry !== undefined) onOpen(entry);
                       }}
+                      onFaults={onFaults}
+                      onReport={onReport}
                       onWrote={onWrote}
                       viewing={viewing}
                     />
