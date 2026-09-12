@@ -3557,3 +3557,164 @@ describe("CodePage 的工具选取（ADR-096）", () => {
     expect(screen.queryByRole("menuitem", { name: /^工具/ })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * 生成一个页面之后，它自己到右栏里跑起来（ADR-0112）。
+ *
+ * 这一组钉的是三条边，而三条里有两条说的是「什么时候**不**弹」——一个会自己抢
+ * 屏幕的行为，能用的前提是它抢得足够少。
+ */
+describe("CodePage 的自动预览", () => {
+  /** 一轮写出 `name` 的最小事件对，形状同上面那些用例。 */
+  function wrote(name: string) {
+    return [
+      {
+        event_id: "evt_1",
+        run_id: "run_1",
+        timestamp: "2026-09-12T12:00:00Z",
+        event_type: "ToolProposed",
+        sequence: 1,
+        payload: {
+          kind: "ToolProposed",
+          tool_call_id: "call_1",
+          tool_name: "workspace_write",
+        },
+      },
+      {
+        event_id: "evt_2",
+        run_id: "run_1",
+        timestamp: "2026-09-12T12:00:00Z",
+        event_type: "ToolCompleted",
+        sequence: 2,
+        payload: {
+          kind: "ToolCompleted",
+          tool_call_id: "call_1",
+          workspace_writes: [name],
+        },
+      },
+    ] as unknown as ReturnType<typeof useCodeStream>["steps"];
+  }
+
+  it("一轮写完一个 .html，它自己就在右栏里打开了", async () => {
+    // 「写出来」和「跑起来」之间原本隔着两次点击（展开那一栏、点那张卡片），而
+    // 一个没被跑起来的页面等于没做出来——读者拿到的是一份他看不懂也用不了的源码。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "写好了 index.html。",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "index.html", size_bytes: 620, media_type: "text/html" }],
+    });
+    vi.mocked(getCodeWorkspaceFileText).mockResolvedValue({
+      text: "<h1>hi</h1>",
+      truncated: false,
+    });
+    // 回合是靠「一条指令配一次运行」拼出来的（`turnBlocks.ts` 的尾锚配对），所以
+    // 一轮**跑完之后**的记录里必须有那条指令——否则这一轮在页面上根本不存在，而
+    // 这条用例会因为一个与自动预览无关的原因变绿。
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个页面" },
+        { role: "assistant", text: "写好了 index.html。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: wrote("index.html"),
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个页面");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    // 没有点过任何东西，那一栏自己开着，停在「预览」那一张，装的是这一轮写出
+    // 的那个文件。
+    expect(
+      await screen.findByRole("region", { name: "文件 index.html" }),
+    ).toBeInTheDocument();
+  });
+
+  it("打开一段旧会话，上次那张页面不会盖住文件夹", async () => {
+    // 触发的是「这个标签页刚跑完一轮」，不是「流里有一个 .html」。后者会让每一次
+    // 打开旧会话都被上次的产出抢屏，而那时读者要的是上次说到哪。
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "index.html", size_bytes: 620, media_type: "text/html" }],
+    });
+    // 上一次留下的那一轮，完整的：有指令、有回答、有产出，所以这段会话里确实
+    // 有一个「候选页面」——没有它，这条用例证明的就只是「空会话不弹」。
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个页面" },
+        { role: "assistant", text: "写好了 index.html。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: wrote("index.html"),
+    });
+
+    mounted();
+
+    // 等到这段会话的清单确实到齐了再断言「没弹」，否则这条用例靠的是时序而不是
+    // 行为——「工作区 1」那颗开关就是清单到齐的凭据。
+    expect(
+      await screen.findByRole("button", { name: "工作区 1" }),
+    ).toBeInTheDocument();
+    await nextFrame();
+    expect(
+      screen.queryByRole("region", { name: "文件 index.html" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("写出的是源码就不抢屏，卡片照旧", async () => {
+    // 只有能跑的那一种值得抢。`.py` 在预览里是被画出来的，而读者在对话里已经
+    // 看到了它的名字和大小——自动打开只是把同一件事再说一遍。
+    const user = userEvent.setup();
+    vi.mocked(askCode).mockResolvedValue({
+      report: "写好了 main.py。",
+      workspace_version: "art_1",
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+    vi.mocked(getCodeWorkspace).mockResolvedValue({
+      files: [{ name: "main.py", size_bytes: 90, media_type: "text/x-python" }],
+    });
+    vi.mocked(getCodeHistory).mockResolvedValue({
+      messages: [
+        { role: "user", text: "写个脚本" },
+        { role: "assistant", text: "写好了 main.py。" },
+      ],
+    });
+    vi.mocked(useCodeStream).mockReturnValue({
+      progress: new Map(),
+      thinking: "",
+      thinkingCallId: "",
+      answer: "",
+      steps: wrote("main.py"),
+    });
+
+    mounted();
+    await user.type(screen.getByLabelText("要做的事"), "写个脚本");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const outputs = await screen.findByRole("list", {
+      name: "这一轮产出的文件",
+    });
+    expect(within(outputs).getByText("main.py")).toBeInTheDocument();
+    await nextFrame();
+    expect(
+      screen.queryByRole("region", { name: "文件 main.py" }),
+    ).not.toBeInTheDocument();
+  });
+});

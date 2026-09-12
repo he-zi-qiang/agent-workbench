@@ -67,8 +67,15 @@ export interface OpenedFile {
  * not touch them. Without the principal in the key, narrowing your own scopes
  * in the identity dialog leaves a file you had already read rendering straight
  * from cache, with no second trip past the server's authorization.
+ *
+ * Exported for `CodePage`, which invalidates these three caches for a file a
+ * settled turn rewrote before putting it on screen (ADR-0112). It takes the
+ * key from here rather than spelling one out: a second construction of it
+ * would be a second place the principal has to be remembered, and the failure
+ * mode of forgetting it there is a cache that is never invalidated -- silent,
+ * and indistinguishable from a file that did not change.
  */
-function fileKey(
+export function fileKey(
   prefix: string,
   identity: PrincipalIdentity,
   file: Pick<OpenedFile, "sessionId" | "name">,

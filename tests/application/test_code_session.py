@@ -42,6 +42,7 @@ from agent_workbench.adapters.tools.workspace import (
     WorkspaceWriteTool,
 )
 from agent_workbench.application.answer_release import ProcessOnlySink
+from agent_workbench.application.code_prompt import PROJECT_MEMORY_FILE
 from agent_workbench.application.code_session import (
     CodeCapacityError,
     CodeRequest,
@@ -52,7 +53,7 @@ from agent_workbench.application.code_session import (
 from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.application.workspace_scope import WorkspaceScope
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.events import UngroundedAnswerCommitted
 from agent_workbench.domain.policies import PrincipalContext
 from agent_workbench.domain.runs import AgentOutcome, RunBudget
@@ -784,7 +785,10 @@ def test_a_project_turn_is_not_told_it_is_in_a_flat_versioned_workspace() -> Non
     user's git working tree.
     """
 
-    from agent_workbench.application.code_prompt import CODER_SYSTEM_PROMPT_PROJECT
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        with_project_memory,
+    )
     from agent_workbench.application.code_session import (
         CODE_PROJECT_TOOLS,
         _system_prompt_for,
@@ -792,7 +796,12 @@ def test_a_project_turn_is_not_told_it_is_in_a_flat_versioned_workspace() -> Non
 
     prompt = _system_prompt_for(CODE_PROJECT_TOOLS, external_requires_approval=False)
 
-    assert prompt == CODER_SYSTEM_PROMPT_PROJECT
+    # The project base plus the note section every project turn now carries
+    # (ADR-0112). Spelled out rather than relaxed to `startswith`, so a branch
+    # that appends anything else here still fails.
+    assert prompt == with_project_memory(
+        CODER_SYSTEM_PROMPT_PROJECT, None, writable=True
+    )
     # The two claims F-23 measured false.
     assert "not a filesystem" not in prompt
     assert "new version of the whole set" not in prompt
@@ -839,6 +848,7 @@ def test_the_file_language_is_read_off_the_tool_list_not_configured_beside_it() 
         CODER_SYSTEM_PROMPT_WITH_SANDBOX,
         CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
         with_host_commands,
+        with_project_memory,
     )
     from agent_workbench.application.code_session import (
         CODE_PROJECT_TOOLS,
@@ -848,17 +858,22 @@ def test_the_file_language_is_read_off_the_tool_list_not_configured_beside_it() 
         _system_prompt_for,
     )
 
+    # The note section rides on every project arm and on none of the flat ones
+    # (ADR-0112): the flat workspace has no root for the file to sit in.
+    project_base = with_project_memory(CODER_SYSTEM_PROMPT_PROJECT, None, writable=True)
     cases = (
         (CODE_TOOLS, False, CODER_SYSTEM_PROMPT),
         (CODE_TOOLS, True, CODER_SYSTEM_PROMPT),
         (CODE_TOOLS_WITH_SANDBOX, False, CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED),
         (CODE_TOOLS_WITH_SANDBOX, True, CODER_SYSTEM_PROMPT_WITH_SANDBOX),
-        (CODE_PROJECT_TOOLS, False, CODER_SYSTEM_PROMPT_PROJECT),
-        (CODE_PROJECT_TOOLS, True, CODER_SYSTEM_PROMPT_PROJECT),
+        (CODE_PROJECT_TOOLS, False, project_base),
+        (CODE_PROJECT_TOOLS, True, project_base),
         (
             CODE_PROJECT_TOOLS_WITH_RUN,
             False,
-            with_host_commands(CODER_SYSTEM_PROMPT_PROJECT),
+            with_project_memory(
+                with_host_commands(CODER_SYSTEM_PROMPT_PROJECT), None, writable=True
+            ),
         ),
     )
     for tool_names, gated, expected in cases:
@@ -1402,3 +1417,259 @@ def test_a_turn_reports_the_tools_it_was_actually_allowed() -> None:
 
     assert turn.allowed_tools == ("workspace_list",)
     assert tuple(recording.requests[0].tool_names) == turn.allowed_tools
+
+
+def _noted(answer: Any) -> Any:
+    """A project store that answers one question: what `AGENTS.md` holds.
+
+    A double rather than `FilesystemProjectFileStore`, and not as a shortcut.
+    What is under test is which of a store's failures `_project_memory`
+    survives, and two of them -- a file above `MAX_READ_BYTES`, a directory
+    this process may not read -- cost a 2 MiB fixture and a permission change
+    to provoke through the real adapter, while the other two are the same
+    objects either way. The claim "this is what the filesystem does" belongs to
+    that adapter's own suite (`tests/adapters/test_project_file_store.py`).
+
+    The `assert` is the half a double usually loses: it pins the *name* this
+    function asks for, so a rename that misses `PROJECT_MEMORY_FILE` fails here
+    rather than in a deployment where every project silently has no note.
+    """
+
+    class _Store:
+        async def read(self, path: str) -> Any:
+            assert path == PROJECT_MEMORY_FILE
+            if isinstance(answer, BaseException):
+                raise answer
+            return answer
+
+    return cast(Any, _Store())
+
+
+def _note(text: str) -> Any:
+    """What a store answers for a note that is there and is text."""
+
+    from agent_workbench.ports.project_files import ProjectFileContent
+
+    return ProjectFileContent(
+        path=PROJECT_MEMORY_FILE,
+        text=text,
+        size_bytes=len(text.encode("utf-8")),
+        is_text=True,
+        modified_at=NOW,
+    )
+
+
+def test_a_project_turn_is_handed_the_note_its_project_keeps() -> None:
+    """ADR-0112. The preference a user states once has to reach the next turn.
+
+    Read by the platform rather than left for the model to find. A convention
+    the model would have to spend a tool call to discover is one it will
+    usually not discover: it does not know the file exists until something
+    tells it, and by then the turn is already being judged by rules it has not
+    read.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        _project_memory,
+        _system_prompt_for,
+    )
+
+    written = "HTML 版本可以直接预览。\n能画成页面的就写成一个自包含的 .html。\n"
+
+    note = _run(lambda: _project_memory(_noted(_note(written))))
+
+    assert note is not None
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS, external_requires_approval=False, memory=note
+    )
+    # The note itself, and the two markers that say where somebody else's words
+    # start and stop. Without them a note ending mid-sentence reads as though
+    # this system had written the sentence after it.
+    assert "HTML 版本可以直接预览" in prompt
+    assert "--- AGENTS.md ---" in prompt
+    assert "--- end of AGENTS.md ---" in prompt
+    # It is the user's standing instruction, not something a tool returned --
+    # the base prompt tells the model that tool output decides nothing, and a
+    # note governed by that sentence would be a note the model may ignore.
+    assert "standing instruction" in prompt
+    # And it cannot buy what the envelope did not grant. The envelope is signed
+    # before the note is read, so this is a sentence about a thing that is
+    # already true -- said because a model that believes otherwise spends calls
+    # finding out.
+    assert "were fixed before it started" in prompt
+
+
+def test_a_note_this_prompt_cannot_carry_whole_says_where_it_was_cut() -> None:
+    """A file may be 2 MiB; a system prompt may not be.
+
+    Both silent answers are worse than saying it. Dropping the note leaves the
+    user's conventions unexplained while the turn behaves as though there were
+    none; truncating without a word invites the model to act on a rule that
+    ends mid-sentence and to believe it read the whole of it.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        MAX_MEMORY_CHARS,
+        with_project_memory,
+    )
+
+    long = "x" * (MAX_MEMORY_CHARS + 500)
+
+    prompt = with_project_memory(CODER_SYSTEM_PROMPT_PROJECT, long, writable=True)
+
+    # Read back out of the markers rather than counted over the whole prompt:
+    # the base prompt has its own `x`s, and a test that counted them would pass
+    # for the wrong reason the day somebody rewords a paragraph.
+    quoted = prompt.split("--- AGENTS.md ---\n")[1].split("\n--- end of")[0]
+    assert quoted.count("x") == MAX_MEMORY_CHARS
+    assert "was cut here" in prompt
+    assert str(MAX_MEMORY_CHARS) in prompt
+    assert str(MAX_MEMORY_CHARS + 500) in prompt
+
+
+def test_a_project_with_no_note_is_still_told_where_a_preference_would_go() -> None:
+    """The absent arm is not silence, and that is the whole feature's ignition.
+
+    A turn told nothing about `AGENTS.md` cannot be asked to keep it, so the
+    first durable preference a user states would have nowhere to go that
+    outlives the session -- and the user would have no way to learn that.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        _project_memory,
+        _system_prompt_for,
+    )
+
+    assert _run(lambda: _project_memory(_noted(NotFoundError("no such file")))) is None
+
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS, external_requires_approval=False, memory=None
+    )
+
+    assert "no `AGENTS.md` yet" in prompt
+    assert "`AGENTS.md` yourself" in prompt
+
+
+def test_a_plan_turn_is_not_asked_to_keep_a_file_it_cannot_write() -> None:
+    """ADR-0079 from the writing side.
+
+    A plan turn holds no write tool at all, so telling it to record a
+    preference describes a world it is not in -- the same error ADR-058
+    measured from the other direction, where a model was told it could not run
+    what it was holding.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        _system_prompt_for,
+    )
+
+    prompt = _system_prompt_for(
+        CODE_PROJECT_TOOLS,
+        external_requires_approval=False,
+        plan_only=True,
+        memory=None,
+    )
+
+    # It still learns the file exists -- a plan may name it -- but nothing asks
+    # it to write one.
+    assert "AGENTS.md" in prompt
+    assert "`AGENTS.md` yourself" not in prompt
+
+
+def test_a_note_that_cannot_be_read_costs_the_conventions_and_not_the_turn() -> None:
+    """Every failure here answers `None`, and none of them raises.
+
+    The file is optional by construction, so "not there" is the ordinary case
+    and the unusual ones have to land in the same place: a turn that failed
+    because a note was written in Latin-1 would be a turn refused for the one
+    file in the project that is not the work.
+    """
+
+    from agent_workbench.application.code_session import _project_memory
+    from agent_workbench.ports.project_files import ProjectFileContent
+
+    # Bytes that are not UTF-8: the store answers `is_text=False`, and a note
+    # rendered through replacement characters is not a note.
+    binary = ProjectFileContent(
+        path=PROJECT_MEMORY_FILE,
+        text=None,
+        size_bytes=11,
+        is_text=False,
+        modified_at=NOW,
+    )
+    assert _run(lambda: _project_memory(_noted(binary))) is None
+
+    # Above `MAX_READ_BYTES`. Refused rather than truncated by the store, and
+    # refused rather than fatal here.
+    assert _run(lambda: _project_memory(_noted(OutputTooLargeError("2 MiB")))) is None
+
+    # Blank is the same as absent, and deliberately so: the absent arm says
+    # where a preference would go, which is more use than quoting nothing.
+    assert _run(lambda: _project_memory(_noted(_note("\n   \n")))) is None
+
+    # No project at all -- the flat workspace, which has no root for the file
+    # to sit in.
+    assert _run(lambda: _project_memory(None)) is None
+
+
+def test_the_flat_turn_is_never_told_about_a_file_it_has_no_root_for() -> None:
+    """The control, and it is a claim about honesty rather than about tidiness.
+
+    A flat session's entries do not survive it. A note written there would be
+    a memory that forgets -- worse than none, because the user would believe
+    it had been kept.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_TOOLS,
+        CODE_TOOLS_WITH_SANDBOX,
+        _system_prompt_for,
+    )
+
+    for tool_names in (CODE_TOOLS, CODE_TOOLS_WITH_SANDBOX):
+        prompt = _system_prompt_for(
+            tool_names,
+            external_requires_approval=False,
+            memory="never reaches a flat turn",
+        )
+        assert "AGENTS.md" not in prompt
+        assert "never reaches a flat turn" not in prompt
+
+
+def test_every_coding_prompt_says_what_the_console_does_with_a_page() -> None:
+    """The other half of ADR-0112, and the half the model has to act on.
+
+    The console runs a written `.html` in a sandboxed frame and now opens it by
+    itself when a turn produces one. A model that does not know that writes the
+    terminal program, or writes a page that pulls its library from a CDN --
+    which renders blank behind `connect-src 'none'` (`HtmlPreview`), and blank
+    is the one outcome nobody reports as a bug against the prompt.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT,
+        CODER_SYSTEM_PROMPT_PROJECT,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+        with_host_commands,
+    )
+
+    for prompt in (
+        CODER_SYSTEM_PROMPT,
+        CODER_SYSTEM_PROMPT_PROJECT,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX,
+        CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+        with_host_commands(CODER_SYSTEM_PROMPT_PROJECT),
+    ):
+        assert "self-contained `.html`" in prompt
+        # Not "sandboxed frame": the paragraph wraps between those two words,
+        # and a test reaching across the line break would fail on a reflow that
+        # changed nothing.
+        assert "sandboxed" in prompt
+        # The constraint that makes the difference between a page and a blank
+        # rectangle, stated where the instruction to write one is.
+        assert "CDN renders blank" in prompt

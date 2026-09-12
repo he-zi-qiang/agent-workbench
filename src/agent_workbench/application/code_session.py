@@ -51,8 +51,10 @@ from agent_workbench.application.code_prompt import (
     CODER_SYSTEM_PROMPT_PROJECT,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX,
     CODER_SYSTEM_PROMPT_WITH_SANDBOX_UNGATED,
+    PROJECT_MEMORY_FILE,
     with_host_commands,
     with_plan_only,
+    with_project_memory,
     with_write_gate,
 )
 from agent_workbench.application.file_read_receipts import ReadReceipts
@@ -67,7 +69,7 @@ from agent_workbench.application.workspace import (
 )
 from agent_workbench.application.workspace_scope import WorkspaceScope
 from agent_workbench.domain.artifacts import ArtifactRef
-from agent_workbench.domain.errors import NotFoundError
+from agent_workbench.domain.errors import NotFoundError, OutputTooLargeError
 from agent_workbench.domain.identifiers import (
     Identifier,
     new_session_id,
@@ -293,12 +295,52 @@ def _assert_every_prompt_combination_resolves() -> None:
                 with_web_search(base)
 
 
+async def _project_memory(store: ProjectFileStore | None) -> str | None:
+    """What this project's own ``AGENTS.md`` says, or ``None`` (ADR-0112).
+
+    Read once per turn, here, rather than offered to the model as a file it
+    might think to open: a preference nobody reads is the same as one
+    nobody wrote, and a turn that has to spend a tool call to discover the
+    conventions it is being judged by will usually spend it on something
+    else.
+
+    Every failure is ``None`` and none of them fails the turn. The file is
+    optional by construction, so "not there" is the ordinary case; and the
+    three unusual ones -- too large for `MAX_READ_BYTES`, not UTF-8, or a
+    directory permission this process does not hold -- are all "the note
+    could not be read", which costs the conventions and never the work.
+
+    Not cached across turns. It is a file on the user's disk that the user
+    (or the previous turn) may have just edited, and a cache would serve
+    the version that was current when this process started -- the one shape
+    of staleness nobody would think to look for.
+    """
+
+    if store is None:
+        return None
+    try:
+        content = await store.read(PROJECT_MEMORY_FILE)
+    except (NotFoundError, OutputTooLargeError, OSError):
+        return None
+    # `is_text` rather than `text is not None`: an empty file is legitimately
+    # `""`, and a file of bytes decodes to `None` -- the two need different
+    # answers and only this flag separates them (`ports/project_files.py`).
+    if not content.is_text or content.text is None:
+        return None
+    # An empty or blank note is the same as no note, and says so: the
+    # absent arm of `with_project_memory` tells the turn where a preference
+    # would go, which is the more useful of the two things to say about a
+    # file holding nothing.
+    return content.text if content.text.strip() != "" else None
+
+
 def _system_prompt_for(
     tool_names: tuple[ToolName, ...],
     *,
     external_requires_approval: bool,
     plan_only: bool = False,
     write_gate: bool = False,
+    memory: str | None = None,
 ) -> str:
     """What this turn is told about the world it is in.
 
@@ -327,7 +369,8 @@ def _system_prompt_for(
     that does not exist (`docs/known-gaps.md` F-23).
     """
 
-    if _PROJECT_TOOLS & frozenset(tool_names):
+    project = bool(_PROJECT_TOOLS & frozenset(tool_names))
+    if project:
         base = CODER_SYSTEM_PROMPT_PROJECT
     elif SANDBOX_RUN_TOOL in tool_names:
         base = (
@@ -349,6 +392,23 @@ def _system_prompt_for(
     # makes that true of this function on its own.
     if write_gate and not plan_only:
         base = with_write_gate(base)
+    # Last, and only on the project branch. The note is the user's own words
+    # about their own directory, and every paragraph above it is this system's
+    # description of the world the turn is in -- so a preference that disagrees
+    # with a default is read after the default rather than before it.
+    #
+    # The branch is the same expression that picked the project base, not a
+    # second switch on `memory is not None`: the flat workspace has no root for
+    # the file to sit in, so a caller that passed one would be describing a
+    # directory this turn cannot see. `_project_memory` already answers `None`
+    # there, and this makes that structural rather than a convention two
+    # functions keep by agreement.
+    if project:
+        # `plan_only` is what decides the keeping half, and it is the same fact
+        # the write-gate line above reads: a plan turn holds no write tool
+        # (ADR-0079), so asking it to record anything describes a world it is
+        # not in.
+        base = with_project_memory(base, memory, writable=not plan_only)
     return base
 
 
@@ -1175,6 +1235,7 @@ class CodeSessionService:
                     asked=asked,
                     tool_names=tool_names,
                     risks=risks,
+                    memory=await _project_memory(project_files),
                 ),
                 sink,
                 cancellation,
@@ -1352,6 +1413,7 @@ class CodeSessionService:
         asked: Message,
         tool_names: tuple[ToolName, ...],
         risks: Mapping[ToolName, ToolRisk],
+        memory: str | None = None,
     ) -> AgentRunRequest:
         return AgentRunRequest(
             trace=TraceContext(agent_run_id=request.run_id),
@@ -1409,6 +1471,7 @@ class CodeSessionService:
                 external_requires_approval=self.external_requires_approval,
                 plan_only=request.mode == "plan",
                 write_gate=request.approvals == "before_write",
+                memory=memory,
             ),
             messages=(*history, asked),
             # Both, and they are not the same thing: the envelope says what

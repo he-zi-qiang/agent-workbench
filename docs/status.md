@@ -27,6 +27,75 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-12（第七十七批）：写出来的页面自己跑起来，项目自己记着它的偏好
+
+用户的原话是两句：「code 模式应该在对 html 文件生成后进行预览」，以及「应该有类似于 agent.md
+记忆文件来记录偏好，例如编写 html 版本的可以直接进行预览」。两句说的都不是新能力，是既有能力
+的两处断路。一份 ADR（[0112](./adr/0112-a-page-shows-itself-and-a-project-keeps-its-own-note.md)）。
+
+**先查了它在不在。** 工作区干净、无 stash、几条分支都是 Windows 相关的，`find` 全库没有
+`AGENTS.md` 或 `agent.md`，`code_prompt.py` 也没有任何读外部文件拼进提示词的路径——用户记得
+改过的那一次不在这个 checkout 里。查出来的现状是：HTML 查看器自 ADR-0065 起就在（沙箱帧 +
+CSP），缺的只是「谁替读者按下去」。
+
+### 1. 「控制台会显示你写的东西」提到基础提示词里
+
+这句话此前只有两个 sandbox 变体有，而项目档正是原生控制台跑的那一档——它的模型从来没被告诉过
+自己写出的页面会被渲染。现在它在基础提示词里说一次，沿既有派生链进入每一个变体；两个 sandbox
+变体里原来那半句删掉，只留下选择本身（写页面，不要写终端程序）。同一段说出那个帧的边界：
+`connect-src 'none'`，所以从 CDN 取库的页面在那里是一张白纸。
+
+**证据**：`tests/application/test_code_session.py::test_every_coding_prompt_says_what_the_console_does_with_a_page`
+——五份提示词（基础、项目、两个 sandbox、`with_host_commands` 之后）各自都说得出。
+
+### 2. 一轮落定之后，写出的页面自己到右栏里跑起来
+
+触发的是「这个标签页刚跑完一轮」，不是「流里有一个 `.html`」——后者会让每一次打开旧会话都被
+上次的产出抢屏。只有 `previewKind` 判成 `html` 的那一种会这样；读者**明确**收起过预览栏时不
+展开它（`panelChoice` 的三态在这里是有用的：`null` 是没表过态，要展开）。打开之前先失效那个
+文件的正文缓存——两侧的缓存都不是按内容键的，不失效弹出来的是一张看起来最新的旧页面。工作区
+与项目目录两侧都接了；项目那侧多问一次所在层的目录列表，因为预览要在取正文之前知道字节数。
+
+**证据**：`web/src/features/code/previewIntent.test.ts` 5 条（只选页面、同一轮取最后一个、
+`application/octet-stream` 是「没人说过」所以名字仍然算数）；`CodePage.test.tsx`「CodePage 的
+自动预览」3 条（写完 `.html` 自己打开、打开旧会话不被盖住、写出 `.py` 不抢屏）。
+
+### 3. 项目根上的 `AGENTS.md` 是这个项目的长期记忆
+
+每个项目回合开始时读一次：有就原样进系统提示（上限 8000 字符，超了在提示里说被截在哪），没有
+就告诉模型这个文件是什么、在哪里——否则第一条偏好没有地方可去。模型也能写它（用户选的），除了
+计划档，那种回合根本没有写工具。整段只加在项目档上：平铺工作区没有根给它坐，写进去的笔记会是
+一份会忘的记忆。读不出来的笔记（不存在、非 UTF-8、空白、超过 `MAX_READ_BYTES`）一律退回「没有
+笔记」，一次也不失败回合。
+
+**证据**：`tests/application/test_code_session.py` 新增 6 条（拿到笔记与两条边界、截断说在哪、
+没有笔记时仍说得出这个文件、计划档不被要求写、五种读不出来都不失败回合、平铺档一个字不提）；
+这几条走一个只答 `AGENTS.md` 的 store 替身，理由与它钉住文件名的那句 `assert` 写在 ADR-0112 §5；
+两条既有的提示词等值用例改成把这一段算进去，而不是放宽成 `startswith`。
+
+### 没做的
+
+- 另一个标签页跑的那一轮不弹（`runningIn` 只记这个标签页发起的请求）。
+- 平铺工作区没有长期记忆，这是拒绝而不是遗漏（ADR-0112 §4）。
+- 一轮改写过的**其余**文件，正文缓存仍然是旧的：只有被自动打开的那一个被失效。新登记 F-38，
+  连同它为什么不是一行能修的。
+- 没有「记住这条」的按钮：偏好要么读者自己写进文件，要么在对话里说出来由模型写。
+
+**本轮门禁，以及这台机器量不了什么**。前端全绿：`pnpm lint`、`typecheck`、Vitest 59 个文件
+925 passed、`vite build`。后端 `ruff format` / `ruff check` 全绿；覆盖本次改动的五个目录
+（`application` / `domain` / `runtime` / `workflows` / `architecture`）**1368 passed, 1 skipped**。
+
+**其余的量不准，原因是宿主不是 Linux，这里如实记下而不是当作绿灯。** `pyright` 14 条报错全部是
+`os.O_NOFOLLOW` / `os.killpg` / `signal.SIGKILL` 这类 POSIX 专属属性，落在本次一个字没动的两个文件里
+（`adapters/filesystem/sandbox.py`、`adapters/tools/project_files.py`）。离线 pytest 的其余目录有
+14 条失败，全部集中在 `tests/apps/test_computer_consent.py` 与 `tests/apps/test_sandbox_bootstrap.py`，
+外加 `tests/config` 那批读 `scripts/dev.sh` 的用例——同一类原因：`adapters/filesystem/sandbox.py`
+的包含性检查比的是 `PurePosixPath`，Windows 路径在它眼里一律不是绝对路径。本次新增的后端用例
+因此**不碰真的文件存储**（理由与替身的形状见 ADR-0112 §5）。跑一次全量还会在约 31% 处挂住一次，
+两次复现，没有深查——它挂在本次一行没动的地方。服务依赖的五个目录没跑：这台机器上没有起
+PostgreSQL 与 Qdrant。
+
+---
 ## 2026-09-05（第七十六批）：照着一份外部评审收尾——外壳、任务体验、刷新后引用还在、Worker 登记
 
 用户把一份外部评审（OpenAI Codex，[docs/reviews/2026-09-04-product-review.md](./reviews/2026-09-04-product-review.md)）

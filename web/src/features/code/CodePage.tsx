@@ -71,6 +71,7 @@ import {
   getCodeWorkspace,
   getProject,
   listCodeSessions,
+  listProjectFiles,
   listProjects,
   newIdempotencyKey,
   putCodeWorkspaceFile,
@@ -117,9 +118,11 @@ import { ProjectFileTree } from "./ProjectFileTree";
 import { RunPanel } from "../../components/RunPanel";
 import { buildRunTree } from "../../components/runTree";
 import { CodeTurn } from "./CodeTurn";
+import { fileKey as workspaceFileKey } from "./FilePreview";
 import type { OpenedFile } from "./FilePreview";
 import { TurnUsage, sumTurnUsage } from "../../components/TurnUsage";
 import { PreviewPanel } from "./PreviewPanel";
+import { pageAmong, parentOf } from "./previewIntent";
 import { buildTurnBlocks, projectWritesIn } from "./turnBlocks";
 import { useCodeStream } from "./useCodeStream";
 import { stopNote } from "./stopNote";
@@ -344,16 +347,22 @@ export function CodePage() {
   // 点开项目目录里的一个文件：它和会话产出共用右边那一栏，所以另一个要让位。
   // 两个都留着的话，那一栏得决定谁在上面，而读者刚点的那个显然应该在上面——
   // 与其在渲染时判断先后，不如在这里就只留一个。
-  const openProjectFileAt = useCallback((entry: ProjectFileEntryView) => {
-    setOpenProjectFile(entry);
-    setOpened(null);
-    setPanelChoice(true);
-    // 点开一个文件就跳到「预览」那一张。写在这里而不是让面板按「有没有打开的
-    // 文件」自己推断：读者可能刚刚亲手点到「本次会话」那一张，而 `tab` 一旦有
-    // 值就压过面板的默认——不在这里说一句，点开的文件会安静地待在一张没人看的
-    // 标签后面。
-    setPanelTab("preview");
-  }, [setPanelChoice]);
+  const openProjectFileAt = useCallback(
+    (entry: ProjectFileEntryView, options?: { expand?: boolean }) => {
+      setOpenProjectFile(entry);
+      setOpened(null);
+      // 读者点的那一次要展开；自动弹的那一次不要——收起过这一栏是一次表过的态，
+      // 而「agent 写出了一个页面」不是推翻它的理由。那时只把文件放好，读者下次
+      // 展开就看见它（`panelChoice` 的三态在上面）。
+      if (options?.expand !== false) setPanelChoice(true);
+      // 点开一个文件就跳到「预览」那一张。写在这里而不是让面板按「有没有打开的
+      // 文件」自己推断：读者可能刚刚亲手点到「本次会话」那一张，而 `tab` 一旦有
+      // 值就压过面板的默认——不在这里说一句，点开的文件会安静地待在一张没人看的
+      // 标签后面。
+      setPanelTab("preview");
+    },
+    [setPanelChoice],
+  );
   // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
   // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
   const [startingIn, setStartingIn] = useState<ProjectView | null>(null);
@@ -947,9 +956,10 @@ export function CodePage() {
   // it is the reason a produced `.py` could not be previewed inside the
   // conversation -- there was nowhere in a card to run the prefetch.
   const open = useCallback(
-    (file: WorkspaceEntryView) => {
+    (file: WorkspaceEntryView, options?: { expand?: boolean }) => {
       if (sessionId === undefined) return;
-      setPanelChoice(true);
+      // 同 `openProjectFileAt`：自动弹的那一次不推翻读者收起过的表态。
+      if (options?.expand !== false) setPanelChoice(true);
       setPanelTab("preview");
       // 让位给它，理由同 `openProjectFileAt`：一栏，一个文件。
       setOpenProjectFile(null);
@@ -974,6 +984,144 @@ export function CodePage() {
     },
     [files, open],
   );
+
+  // 这一轮写出来的那个页面，工作区一份、项目目录一份（ADR-0112）。
+  //
+  // 两份分开算而不是合成一个：一段会话只在其中一个面上工作（工具清单在每轮开始
+  // 时就按有没有项目目录定死了），所以合并只会掩盖「这段会话现在在哪一面」这个
+  // 本来就知道的事实——下面那段效果直接按 `heldProjectId` 选一份。
+  //
+  // 类型从清单里取，取不到就按名字猜：工作区条目带着服务端给的 media type，项目
+  // 文件没有（那条路由一律答 `application/octet-stream`），而 `pageAmong` 两种都
+  // 接。
+  const producedPage = useMemo(
+    () =>
+      pageAmong(
+        blocks.flatMap((block) => block.produced.map((file) => file.name)),
+        (name) => files.find((held) => held.name === name)?.media_type,
+      ),
+    [blocks, files],
+  );
+  const writtenPage = useMemo(() => pageAmong(projectWrites), [projectWrites]);
+
+  // 写出一个页面之后，它自己到右边那一栏里跑起来。
+  //
+  // **触发的是「这个标签页刚跑完一轮」，不是「流里有一个 .html」。** 后者看起来
+  // 更简单，实际是另一件事：打开一段旧会话时，流里早就有上次写出的页面，而那时
+  // 读者要的是文件夹和上次说到哪，不是一张盖住它们的页面。一轮的落定是这个页面
+  // 已经知道的事实（`running` 由 `runningIn` 派生），所以「刚生成」不用猜。
+  //
+  // 代价说清楚：另一个标签页跑的那一轮不会弹——`runningIn` 只记这个标签页发起的
+  // 请求。那一侧的产出仍然是对话里的一张卡片。
+  //
+  // **为什么等落定而不是写出就弹。** 一轮里页面常被改写好几次，而两侧的正文缓存
+  // 都不是按内容键的（工作区那份是 `staleTime: Infinity`，项目那份 5 秒）——半路
+  // 弹出来的那一版会一直留在屏幕上，看起来却像是最新的。那比不弹更糟。
+  const ranIn = useRef<string | null>(null);
+  const settled = useRef(false);
+  useEffect(() => {
+    if (running) {
+      ranIn.current = sessionId ?? null;
+      return;
+    }
+    // 还要仍然停在跑它的那段会话上：中途切走的读者已经用脚表过态了。
+    settled.current = ranIn.current !== null && ranIn.current === sessionId;
+    ranIn.current = null;
+  }, [running, sessionId]);
+
+  useEffect(() => {
+    if (!settled.current || sessionId === undefined) return;
+    // 一段会话只在其中一个面上工作（工具清单每轮开始时就按有没有项目目录定死
+    // 了），所以这里是选一份，不是合并两份。
+    const page = heldProjectId == null ? producedPage : writtenPage;
+    if (page === null) return;
+    // 展开，除非读者**明确**收起过这一栏。三态在这里是有用的：`null` 是「还没
+    // 表过态」，不是「不要」——而没有项目目录的会话，那一栏默认就是不显示的
+    // （`panelShown`），所以把页面放进一个不显示的栏里等于什么也没做。`false`
+    // 才是表过的态，那就听他的：文件放好，他下次展开就看见。
+    const expand = panelChoice !== false;
+    if (heldProjectId == null) {
+      const entry = files.find((held) => held.name === page);
+      // 清单里还没有它就什么也不做，**而且不解除待办**——这一步的顺序是这两段
+      // 效果唯一容易写错的地方，因为它在正常路径上必然发生一次：一轮结束时
+      // `setRunningIn` 先落，工作区清单是随后那次 `reload` 才回来的，所以
+      // 「`running` 变 false」和「清单里有这个新文件」之间隔着一次渲染。在那
+      // 次渲染里就当作办过，等于每一次都不弹。
+      if (entry === undefined) return;
+      settled.current = false;
+      // 正文缓存按名字键、`staleTime: Infinity`（`FilePreview` 的 `fileKey`），
+      // 所以改写过的同名文件会拿着上一版的字节渲染——而这正是「改一下这个按钮」
+      // 那种轮次的常态。不失效的话，自动弹出来的是一张看起来最新的旧页面，比不
+      // 弹更糟。只失效这一个名字：别的文件没有在屏幕上，而它们的陈旧是这次改动
+      // 之前就有的事，顺手半修一半只会让下一个读者以为它被修好了——那一半登记
+      // 成 F-38，连同它为什么不是一行能修的。
+      //
+      // 先失效、再打开，顺序就是理由：查看器一挂上就去取正文，先失效等于它取
+      // 到的是新的那一份。在 `.then` 里打开还有第二个作用——这份文件里每一处
+      // 「效果里改状态」都躲在 `.then` 后面（`reload` 那几处写着为什么），lint
+      // 认的也是这一条。
+      void Promise.all(
+        ["code-file-text", "code-file-html", "code-file-blob"].map((prefix) =>
+          queries.invalidateQueries({
+            queryKey: workspaceFileKey(prefix, identity, {
+              sessionId,
+              name: page,
+            }),
+          }),
+        ),
+      )
+        // 失效没做成也照样打开：查看器自己会说它取不到，而在这里咽掉预览等于
+        // 用一个更小的问题换一个更沉默的问题。
+        .catch(() => undefined)
+        .then(() => {
+          // 这几毫秒里读者可能已经换了一段会话。`shown` 是这份文件里回答「我
+          // 现在停在哪」的那个 ref，几处迟到的响应都问它。
+          if (shown.current.sessionId !== sessionId) return;
+          open(entry, { expand });
+        });
+      return;
+    }
+    settled.current = false;
+    // 项目那一侧同理，键是 `ProjectTextBody` 那条读。默认 5 秒的 staleTime 在
+    // 一轮比 5 秒短的时候同样会给出上一版。
+    void queries.invalidateQueries({
+      queryKey: ["project-file", identity, heldProjectId, page],
+    });
+    // 项目文件只有路径，而预览在取正文之前要知道字节数（太大的不展开）。那一行
+    // 在它所在那一层的目录列表里，所以这里问一次——一次很小的请求，换的是不必
+    // 编一个假的大小塞给查看器。
+    const controller = new AbortController();
+    const projectId = heldProjectId;
+    listProjectFiles(identity, projectId, {
+      path: parentOf(page),
+      signal: controller.signal,
+    })
+      .then((listing) => {
+        const entry = listing.entries.find(
+          (held) => held.path === page && held.kind === "file",
+        );
+        if (entry !== undefined) openProjectFileAt(entry, { expand });
+      })
+      .catch(() => {
+        // 打不开就不开。这是一个便利，不是一条结果——为它弹一条错误，等于把
+        // 「你没要求的事没做成」摆到读者面前。文件仍然在文件夹那一张里。
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    files,
+    heldProjectId,
+    identity,
+    open,
+    openProjectFileAt,
+    panelChoice,
+    producedPage,
+    queries,
+    running,
+    sessionId,
+    writtenPage,
+  ]);
 
   const decide = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
