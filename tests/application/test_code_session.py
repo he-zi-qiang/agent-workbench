@@ -1673,3 +1673,11 @@ def test_every_coding_prompt_says_what_the_console_does_with_a_page() -> None:
         # The constraint that makes the difference between a page and a blank
         # rectangle, stated where the instruction to write one is.
         assert "CDN renders blank" in prompt
+        # And the one that decides whether the file arrives at all. Asking for a
+        # self-contained page without this is asking for the failure B-07
+        # describes: the body travels inside one call, the call shares its
+        # ceiling with the reasoning, and a page emitted whole is cut off
+        # mid-argument -- after which nothing is written, not even the part
+        # that had arrived.
+        assert "in steps" in prompt
+        assert "own ceiling" in prompt

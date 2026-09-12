@@ -434,8 +434,59 @@ def test_a_tool_call_without_arguments_is_an_empty_object() -> None:
     assert proposal.call.arguments == {}
 
 
+def test_a_call_cut_off_at_the_ceiling_says_so_instead_of_blaming_the_provider() -> (
+    None
+):
+    """`docs/known-gaps.md` B-07: two failures had been sharing one sentence.
+
+    A tool call whose arguments do not parse is either a provider sending
+    malformed JSON or a model cut off mid-argument at `max_tokens`. They need
+    opposite things -- retry or replace the provider, versus ask for something
+    smaller -- and both used to end in "the provider sent unparsable
+    arguments", which points at the one component that was working.
+
+    What made it worth separating was Code: a turn writing one self-contained
+    `.html` page carries that whole file inside one call's arguments, and
+    `config.code-local.toml` spends one 32768-token ceiling on the reasoning
+    and the answer together.
+    """
+
+    events, _ = _run(
+        _serve(
+            _sse(
+                _tool_fragment(
+                    call_id="call_1",
+                    name="project_write",
+                    arguments='{"path": "index.html", "content": "<!doctype ht',
+                ),
+                # The provider's own word for it, which is the bit that decides
+                # which of the two happened.
+                _finish_chunk("length"),
+            )
+        )
+    )
+    completion = _completion(events)
+
+    assert completion.finish_reason == "error"
+    assert completion.error is not None
+    assert "output ceiling" in completion.error.message
+    assert "project_write" in completion.error.message
+    # The decidable bit, left where somebody reading the transcript will find
+    # it: this is the half of B-07 that said the event stream never recorded
+    # the provider's own finish reason.
+    assert "'length'" in completion.error.message
+    # Nothing ran, exactly as before -- the change is what the reader is told,
+    # not what was executed.
+    assert not any(isinstance(event, ModelToolCallProposed) for event in events)
+
+
 def test_unparsable_tool_arguments_fail_the_stream() -> None:
-    """Guessing would put something the model never asked for before a handler."""
+    """Guessing would put something the model never asked for before a handler.
+
+    The control for the test above: the same broken JSON under a *finished*
+    stream is still the provider's fault and still says so. Without this pair,
+    a branch that answered "output ceiling" to everything would pass.
+    """
 
     events, _ = _run(
         _serve(
