@@ -33,7 +33,7 @@ import pytest
 from agent_workbench.apps.browser_mcp.main import DEFAULT_PORT as BROWSER_PORT
 from agent_workbench.apps.web_mcp.main import DEFAULT_PORT as WEB_PORT
 from agent_workbench.apps.word_mcp.main import DEFAULT_PORT as WORD_PORT
-from agent_workbench.bootstrap.projections import project_task_worker
+from agent_workbench.bootstrap.projections import project_api, project_task_worker
 from agent_workbench.bootstrap.settings import Settings, load_settings
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -167,3 +167,47 @@ def test_the_compose_profile_opens_the_picker_in_the_mounted_folder(
 
     settings = _load(monkeypatch)
     assert settings.code.projects_root == "/projects"
+
+
+def test_the_compose_profile_offers_the_shell_and_leaves_where_it_runs_to_the_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0115. `shell_tools_enabled` is on in this file because the shell it
+    grants runs in the `runner` container and not in the API's; `runner.enabled`
+    and `code.browser_enabled` are off in the file because both slots are
+    fail-fast and `docker/run-api-local.sh` decides them per start."""
+
+    settings = _load(monkeypatch)
+    assert settings.policy.shell_tools_enabled is True
+    assert settings.runner.enabled is False
+    assert settings.code.browser_enabled is False
+    # Behind the tunnel the launcher opens, and loopback -- the address the
+    # validator was written to admit.
+    assert settings.runner.endpoint == "http://127.0.0.1:8774/mcp"
+
+
+def test_the_launcher_can_turn_both_on_over_this_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two environment variables the launcher exports load over this file
+    without tripping the root validator -- which they would, if this profile
+    had left `shell_tools_enabled` off."""
+
+    for name in tuple(os.environ):
+        if name.upper().startswith("AW_"):
+            monkeypatch.delenv(name, raising=False)
+    for suffix in ("DSN", "GUARD_DSN", "LISTEN_DSN"):
+        monkeypatch.setenv(f"AW_DATABASE__{suffix}", POSTGRES_DSN)
+    monkeypatch.setenv("AW_RUNNER__ENABLED", "true")
+    monkeypatch.setenv("AW_CODE__BROWSER_ENABLED", "true")
+
+    settings = load_settings(config_file=COMPOSE_CONFIG)
+
+    assert settings.runner.enabled is True
+    assert settings.code.browser_enabled is True
+    api = project_api(settings)
+    assert api.runner is not None
+    assert api.runner.endpoint == "http://127.0.0.1:8774/mcp"
+    assert api.browser is not None
+    assert api.code is not None
+    assert api.code.host_commands_enabled is True

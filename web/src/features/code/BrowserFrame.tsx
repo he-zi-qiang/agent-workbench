@@ -20,6 +20,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { fetchBrowserFrame } from "../../api/client";
+import type { PrincipalIdentity } from "../../api/types";
 
 /** 两次取帧之间隔多久。 */
 const POLL_MS = 1000;
@@ -30,7 +32,15 @@ type Frame =
   | { kind: "idle" }
   | { kind: "shown"; url: string };
 
-export function BrowserFrame() {
+interface Props {
+  /**
+   * 谁在看。帧那条路由和其他每一条一样先认身份头（ADR-044），第一版这里裸
+   * `fetch` 不带头，在 Compose 栈上一秒一次 401，面板永远说「没在跑」。
+   */
+  identity: PrincipalIdentity;
+}
+
+export function BrowserFrame({ identity }: Props) {
   const [frame, setFrame] = useState<Frame>({ kind: "loading" });
   // 上一帧的 object URL，拿到新的之后要撤销——一秒一张，不撤销就是一分钟六十
   // 个 blob 挂在文档上。
@@ -48,9 +58,7 @@ export function BrowserFrame() {
 
     const tick = async () => {
       try {
-        const response = await fetch("/v1/browser/frame", {
-          cache: "no-store",
-        });
+        const response = await fetchBrowserFrame(identity);
         if (cancelled) return;
         if (response.status === 204) {
           revoke();
@@ -86,7 +94,7 @@ export function BrowserFrame() {
       window.clearInterval(timer);
       revoke();
     };
-  }, []);
+  }, [identity]);
 
   if (frame.kind === "loading") {
     return <p className="aw-code-workspace-empty">正在取画面……</p>;

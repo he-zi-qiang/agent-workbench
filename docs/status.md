@@ -71,6 +71,90 @@
   +1 不能直接加上去。
 
 ---
+## 2026-09-12（第八十批）：容器栈里的编码会话拿到一把不持有 key 的 shell，和一个知道页面在哪的浏览器（ADR-0115）
+
+第七十九批落地、栈重启之后，用户又发了一次「请你编写马里奥」：63 步，53 次 `project_grep`，
+这次跑完了、写了报告——报告里模型自己说「我一度把 `project_grep` 当尺子用」「没有 shell，
+我跑不了 `check_level.js`」「我没有运行游戏」。用户的判断：「还是很多次读取文件；没有在自带的
+浏览器中进行 html 的运行展示；所以你应该把 shell 也一起补上？」并要求**参考本机 Claude Code 的
+技术实现**。事件流证实：第 25 次搜索的提醒落下后模型说「I've been using grep as a ruler … Let me
+stop」，然后又滑回去，直到第 50 次再被提醒。没有仪器的模型会一再伸手去拿唯一像仪器的东西。
+
+### 1. 对照 Claude Code，搬的是哪两样
+
+Claude Code 的 `Bash` 永远在、每条命令过一次权限门、可以跑在只准写项目目录的沙箱里；桌面版
+另有浏览器面板。前两样这个仓库早就有（`project_run` + `destructive` 审批门），差的是**一个让它
+不危险的地方**——F-37 拒绝把它放进 API 容器（key、数据库、全部工作区都在那里），并写下翻案
+条件：「一个不持有 key 的、只跑 shell 的容器该长什么样」。本批按那个条件做，ADR-0115 §1.1 有
+逐项对照表。
+
+### 2. 改了什么
+
+1. **第六个项目自有 MCP server `agent-runner-mcp`**（`apps/runner_mcp/`）：一个工具 `run_command`，
+   用 `project_run` 一直在用的子进程代码（进程组、`SIGKILL`、有界读取，原样搬进
+   `adapters/filesystem/commands.py`），只多一条规则——`cwd` 必须是 `--projects-root` 之下已存在的
+   目录，在解析后的路径上判。`/health` 在根目录缺失时答 503。
+2. **Compose 服务 `runner`**：同一镜像、同一套硬化、把 API 挂的宿主文件夹以同一路径 `/projects`
+   读写挂入；没有 `x-app-environment`、没有 key 卷、没有工件卷、没有 socket；只在新网络 `runner`
+   上，上面只有它和 API。API 经 `127.0.0.1:8774 → runner:8774` 的隧道调它（8769 是 encoder 的，
+   第一版撞了号，改掉）。
+3. **`ports/commands.py` 的 `CommandRunner`**：`LocalCommandRunner` / `RemoteCommandRunner`，
+   `ProjectRunTool(runner=...)`。工具的名字、风险、门、回执、渲染一个字不动；没配 `[runner]`
+   的部署拿到 `None`，行为与之前逐字相同。装配用 `RunnerSlot`（与 `SandboxSlot` 同形）。
+4. **`[runner]` 段，schema `1.19 → 1.20`**；根校验器拒 `runner.enabled` 而 `shell_tools_enabled`
+   为假。`config.compose-local.toml` 打开 `shell_tools_enabled`，`runner.enabled` 与
+   `code.browser_enabled` 留假，由 `docker/run-api-local.sh` 用 `scripts/smoke_mcp_server.py`
+   逐次启动探（真实 MCP 客户端 + 健康路由 + 期望的工具名），探到才导出环境变量。
+5. **提示词**：`_HAS_SHELL` 说出命令跑的两个地方（用户的机器 / 本项目镜像的容器：Python 3.12 与
+   常规 Unix 工具，没有 Node），并补上 ADR-0114 写不出的那句——「一条批准的命令胜过二十次答
+   不了的搜索」。`with_web_search` 的第四个锚点跟着挪。
+6. **浏览器**：补上从来不存在的 8773 隧道（F-39 说有，脚本里没有）；`browser` 容器只读挂上
+   `/projects`；`adapters/tools/browser.py::open_within_project` 让项目会话的 `workspace_path`
+   先过 store 的路径判断再拼成该项目目录下的 `file://`——**两条路都缺这一半**：项目回合从来
+   不知道自己的绝对根，也就从来打不开自己写的页面（ADR-0115 §1.4）。
+
+### 3. 证据
+
+新测试 33 条（`test_runner_mcp_server` 8、`test_remote_command_runner` 5、
+`test_browser_open_within_project` 6、`test_project_tools::TestRunningACommandSomewhereElse` 4、
+`test_compose` 4、`test_compose_profile` 2、`test_settings` 2、`test_code_session` 2），一条真 shell
+的在 Windows 上跳过。`ruff` / `pyright`（除本机 POSIX 属性那一组）干净；`agent-config-check --config
+config/config.compose-local.toml` 通过。
+
+**离线全量，本机 Windows，排除 `test_computer_consent.py`（另一段会话在修它的弹窗）**：
+`3469 passed / 152 failed / 811 skipped`，2 分 31 秒。152 个失败与第七十九批 §3 在干净 main 上
+复跑的集合**逐条相同**（`diff` 为空）——全是 Windows 平台的，本批零新增。
+
+**装配验证（Compose 栈，本机 Windows，2026-09-12 22:36 起栈）**：`docker compose --profile demo up`
+之后 `runner` 与 `browser` 均 healthy；API 日志里两次 smoke 探针都是 `health 200` + `tools`，
+「Application startup complete」——两个 fail-fast 的 slot 都开起来了。控制台那个项目会话的
+`GET /v1/code/sessions/{id}/tools` 现在列出 `project_run` 与六个 `mcp_browser_*`。**不经模型**，
+从 API 容器里沿两条隧道各调一次（`scratchpad/verify_runner_browser.py`）：
+
+- runner：`cwd=/projects/windows测试`，`awk '{print NR": "length}' mario.html | sed -n 175,189p`
+  → 十五行全是 165（160 字符 + 缩进与引号），`python 3.12.13`，uid `10001`；`cwd=/app` 被拒
+  「cwd is outside the projects root /projects」；容器里 `env | grep -c AW_` = 0，
+  `getent hosts postgres` 解析不到——**没有 key、没有数据库地址、够不着数据库**。
+- browser：`browser_open file:///projects/windows测试/mario.html` → `title: 超级马里奥`,
+  `status: 200`, `console_errors_during_load: 0`；`browser_eval`（要写 `return`）：
+  `document.querySelectorAll('canvas').length` = 1，`LEVEL_ROWS` 15 行每行 160，`typeof MarioGame`
+  = `function`；`browser_screenshot` 回一张 `image/jpeg`。**这个页面在受控浏览器里跑起来了。**
+- encoder 因镜像重建被重新拉起，模型重载约十分钟，`up --wait` 的 600 秒在它之前到期（退出码 1）；
+  API 不等它，`/health/ready` 200，encoder 随后 healthy。这是 `stack.cmd` 同一句注释写过的形状。
+
+### 4. 顺带查实的三处口径，其中一处是控制台的 bug
+
+- **控制台的浏览器面板从来没显示过一帧**：`BrowserFrame.tsx` 裸 `fetch("/v1/browser/frame")`，
+  不带身份头，而 `routes/browser.py` 和每一条路由一样先 `principals.resolve(request)`——API 日志
+  里一秒一次 `401 Unauthorized`，面板永远写着「浏览器服务没有在这套部署里应答」。这是上一批
+  的前端 bug，原生路径上同样存在（ADR-0113 的帧证据是 curl 带头拿到的）。修法：`api/client.ts`
+  新增 `fetchBrowserFrame(identity)`，面板从 `PreviewPanel` 拿 `identity`，测试断言头被送出。
+  验证：带头 curl `/v1/browser/frame` → `200 image/jpeg`；不带头 → `401`。
+- F-39 说「API 容器已有通向 8773 的隧道」——没有；`compose.yaml` 三处注释说有、脚本里没有。
+- ADR-0113 的 `browser_open` 实测是平铺工作区；项目会话（demo-local 下的每一个）从来没能打开
+  自己的页面。
+
+---
 ## 2026-09-12（第七十九批）：搜索只负责找到，不负责度量——模型拿 grep 量字符数，量了七十四次（ADR-0114）
 
 起因是用户贴来的一段转录——81 步，六十来步写着「搜索项目目录」，末尾「这一轮把步数用完了」——

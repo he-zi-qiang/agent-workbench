@@ -218,7 +218,7 @@ export function PreviewPanel({
             // 最需要知道它没跑的时候消失。
             id: "browser",
             label: "浏览器",
-            body: <BrowserFrame />,
+            body: <BrowserFrame identity={identity} />,
           },
           {
             id: "events",

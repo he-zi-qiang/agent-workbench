@@ -592,16 +592,17 @@ def _capabilities(dependencies: ApiDependencies) -> DeploymentCapabilitiesRespon
                 if not dependencies.serves_code
                 else (
                     "policy.shell_tools_enabled 为假：项目会话只有读写文件的五件"
-                    "工具，没有 shell，也开不了这台机器上的浏览器。"
+                    "工具，没有 shell。"
                 )
             ),
             remedy=(
                 ""
                 if code_host_commands
                 else (
-                    "这是宿主机自己的 shell（ADR-077），只有 API 跑在你机器上的"
-                    "原生路径（scripts/dev.sh up）打开它。容器里没有这台机器的"
-                    " shell，Compose 栈不提供（ADR-0109）。"
+                    "原生路径（scripts/dev.sh up）上这是宿主机自己的 shell"
+                    "（ADR-077）；Compose 栈上它跑在 runner 容器里——只挂项目"
+                    "目录、不持有 key（ADR-0115）。两边都由配置档 [policy] 的 "
+                    "shell_tools_enabled 打开。"
                 )
             ),
             provision="install",

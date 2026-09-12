@@ -1,7 +1,7 @@
 # 已知缺口
 
-截至 **2026-08-31**，配置 schema `1.19`，Alembic 迁移 32 个
-（head `0032_events_stream_run_sequence`）——这三项本次重测。
+截至 **2026-09-12**，配置 schema `1.20`（ADR-0115 加了 `[runner]` 段），Alembic 迁移 32 个
+（head `0032_events_stream_run_sequence`）——前两项本次重测，迁移数照抄 2026-08-31。
 
 **上一版这三个数又过期了，而且过期的方式和上上版一模一样。** 它写着"截至 2026-08-25，
 schema `1.18`，迁移 31 个（head `0031_project_root_path`）"，并且在同一句里指出上上版的
@@ -2187,9 +2187,10 @@ production build 四步，**没有覆盖率那一步**。
 | F-34 | computer 页把门禁规则手抄了一遍，无交叉校验 | 已知代价 |
 | F-35 | Windows 抓屏逐窗渲染再合成：被遮挡的已批准窗口在图里完整可见 | 已知代价 |
 | F-36 | Windows 上 `activate_application` 受前台锁限制，且碰屏幕的那一半从未在 Windows 上跑过 | 未实现（证据） |
-| F-37 | Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器 | **拒绝** |
+| F-37 | ~~Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器~~ 宿主的仍然没有；它现在有一把不持有 key 的容器 shell 和受控浏览器 | **已关闭**（2026-09-12，ADR-0115） |
 | F-38 | 一轮改写过的工作区文件，正文缓存只对被自动打开的那一个失效 | 已知代价 |
-| F-40 | Compose 栈里的编码会话握不到任何能计算的东西，于是拿搜索当尺子 | 已知代价（缓解已落地，ADR-0114） |
+| F-39 | ~~Compose 栈里的编码会话仍然驱动不了那个受控浏览器~~ | **已关闭**（2026-09-12，ADR-0115） |
+| F-40 | ~~Compose 栈里的编码会话握不到任何能计算的东西，于是拿搜索当尺子~~ | **已关闭**（2026-09-12，ADR-0115） |
 
 > 编号一经退休不再复用。**F-18（合成器过滤是 allowlist 形状，抓屏不是遮盖）
 > 已于 2026-08-28 关闭**，按维护规则从正文删除，落地记录在
@@ -2778,7 +2779,15 @@ FileDescription——**一次也没在 Windows 上执行过**。CI 也不跑它�
 一次抓屏的毫秒数）写进 ADR-0108，替换掉「未量」。在此之前，Windows 快速开始 §7 那三条实情
 就是全部口径。
 
-### F-37 Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器 —— 拒绝
+### F-37 Compose 栈里的编码会话没有宿主 shell，也开不了这台机器上的浏览器 —— **已关闭**（2026-09-12，ADR-0115）
+
+> **关闭的方式是这一条自己写的那条路，不是推翻它。** 下面「做完的判据」要求回答「容器里的 shell
+> 是谁的 shell」和「一个不持有 key 的、只跑 shell 的容器该长什么样」——
+> [ADR-0115](./adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md)
+> 就是那两个答案：`runner` 服务只挂 `/projects`、没有 key、没有数据库地址、没有工件卷、只在
+> 自己的网络上；`project_run` 一个字不变，命令经隧道交给它。标题里的两句仍然逐字为真——
+> 宿主的 shell 没有、这台机器的桌面浏览器开不了——而它们描述的需求已由不同的东西满足：
+> 容器 shell 与 ADR-0113 的受控浏览器（后者的接线见 F-39）。以下正文按当时原样保留。
 
 **证据**：[config.compose-local.toml](../config/config.compose-local.toml) 的 `[policy]`
 没有 `shell_tools_enabled`（[config.demo-local.toml](../config/config.demo-local.toml) 有，
@@ -2833,7 +2842,14 @@ Compose 路径上还不能，那一条单独记在 F-39。
 **做完的判据**：一轮改写 `a.py` 与 `b.py`、读者在这一轮之前预览过两者，turn 结束后点开
 任意一个，看到的都是新正文；一条前端用例钉住它。
 
-### F-39 Compose 栈里的编码会话仍然驱动不了那个受控浏览器 —— 未接线
+### F-39 Compose 栈里的编码会话仍然驱动不了那个受控浏览器 —— **已关闭**（2026-09-12，ADR-0115）
+
+> **关闭时查实了一句口径不实**：下面写着「API 容器也已经有一条 `docker/loopback_proxy.py` 的
+> 隧道通向它的 8773」——`docker/run-api-local.sh` 里从来没有那条隧道，`compose.yaml` 三处注释
+> 说有、脚本里没有，`api.browser_frame_url` 在 Compose 里指向一个没人监听的端口。
+> ADR-0115 补上隧道，用 `scripts/smoke_mcp_server.py` 逐次启动探 `browser_open`，探到才导出
+> `AW_CODE__BROWSER_ENABLED=true`；`browser` 容器只读挂上 `/projects`，项目会话按相对路径
+> 打开自己的页面（两条路都缺的那一半，见 ADR-0115 §1.4）。以下正文按当时原样保留。
 
 **证据**：[config.compose-local.toml](../config/config.compose-local.toml) 里
 `[code] browser_enabled` 没有出现，因此取默认的 `false`
@@ -2859,7 +2875,11 @@ ADR-0057 §3）。在 compose 档里打开它，等于让 API 容器的启动依
 Compose 栈里开一个编码会话，让它 `browser_open` 一个刚写出来的页面，浏览器面板出现那一帧。
 `tests/deployment/test_compose.py` 加一条断言把开关与隧道绑在一起。
 
-### F-40 Compose 栈里的编码会话握不到任何能计算的东西，于是拿搜索当尺子 —— 已知代价（缓解已落地）
+### F-40 Compose 栈里的编码会话握不到任何能计算的东西，于是拿搜索当尺子 —— **已关闭**（2026-09-12，ADR-0115）
+
+> 登记的当天关闭，按下面「做完的判据」的第二条：「一条新 ADR 给 Compose 档的编码回合一个
+> 能跑一行代码的地方（有隔离论证的）」——ADR-0115 的 `runner` 容器。ADR-0114 的三段提示词
+> 与那句提醒仍然成立，只是现在它们指着一把真的尺子。以下正文按当时原样保留。
 
 **证据**：[ADR-0114 §1](./adr/0114-a-search-finds-and-does-not-measure.md) 的那张表。
 一个 Compose 栈上的编码回合被 `AGENTS.md` 要求核对「每行正好 160 字符」，手里没有

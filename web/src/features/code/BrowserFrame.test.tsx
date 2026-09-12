@@ -1,6 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PrincipalIdentity } from "../../api/types";
 import { BrowserFrame } from "./BrowserFrame";
+
+// 这块面现在带身份头去取帧（ADR-0115 装配验证时发现它裸 fetch 一秒一次 401）。
+const IDENTITY: PrincipalIdentity = {
+  tenantId: "tenant_local",
+  principalId: "user_local",
+  scopes: [],
+};
 
 // 这块面只跟一个端点说话，而且说的是「给我一张图」。替掉 fetch 比替掉一个
 // 客户端模块更贴近它真实的样子——它没有走 api/client，因为返回的是二进制而
@@ -35,7 +43,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
 
   it("服务没在跑时，给出把它跑起来的命令", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 503 });
-    render(<BrowserFrame />);
+    render(<BrowserFrame identity={IDENTITY} />);
     await waitFor(() => {
       expect(screen.getByText(/没有在这套部署里应答/)).toBeTruthy();
     });
@@ -44,7 +52,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
 
   it("在跑但还没打开过页面时，说的是「等一个动作」而不是错误", async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204 });
-    render(<BrowserFrame />);
+    render(<BrowserFrame identity={IDENTITY} />);
     await waitFor(() => {
       expect(screen.getByText(/还没打开过页面/)).toBeTruthy();
     });
@@ -58,7 +66,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
       status: 200,
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
-    render(<BrowserFrame />);
+    render(<BrowserFrame identity={IDENTITY} />);
     await waitFor(() => {
       expect(screen.getByAltText("浏览器当前画面")).toBeTruthy();
     });
@@ -67,11 +75,17 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     ).toBe("blob:frame-1");
     // ADR-0113 §4：只读是写在面上的，不是靠读者猜的。
     expect(screen.getByText(/点不动它/)).toBeTruthy();
+    // 帧那条路由先认身份头，和其他每一条一样（ADR-044）；不带头的那一版在
+    // Compose 栈上一秒一次 401，面板永远说「没在跑」。
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["x-principal-id"]).toBe(
+      "user_local",
+    );
   });
 
   it("取不到和没在跑，对读者是同一件事", async () => {
     fetchMock.mockRejectedValue(new TypeError("network"));
-    render(<BrowserFrame />);
+    render(<BrowserFrame identity={IDENTITY} />);
     await waitFor(() => {
       expect(screen.getByText(/没有在这套部署里应答/)).toBeTruthy();
     });
@@ -83,7 +97,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
       status: 200,
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
-    const view = render(<BrowserFrame />);
+    const view = render(<BrowserFrame identity={IDENTITY} />);
     await waitFor(() => {
       expect(screen.getByAltText("浏览器当前画面")).toBeTruthy();
     });

@@ -1691,3 +1691,115 @@ class TestTheChoiceIsPerTurn:
         )
         assert store is not None
         assert (await store.read("README.md")).text == "# alpha\n"
+
+
+class TestRunningACommandSomewhereElse:
+    """`project_run` with a runner behind it (ADR-0115).
+
+    Everything above this class ran the command in the test process; these
+    hand it to a `CommandRunner` and check that what the tool does around the
+    command -- the receipt, the rendering, the two refusals -- is the same
+    whichever side the shell is on. A fake store rather than the filesystem
+    one, because the only thing the tool asks the store here is where the
+    project is.
+    """
+
+    class _Store:
+        working_directory = Path("/projects/demo")
+
+    class _Runner:
+        def __init__(
+            self, outcome: object = None, raises: BaseException | None = None
+        ) -> None:
+            self.outcome = outcome
+            self.raises = raises
+            self.seen: list[tuple[str, str, float]] = []
+
+        async def run(self, command: str, *, cwd: str, timeout_seconds: float) -> Any:
+            self.seen.append((command, cwd, timeout_seconds))
+            if self.raises is not None:
+                raise self.raises
+            return self.outcome
+
+    def _handle(self, runner: Any, command: str = "pytest -q") -> Any:
+        from agent_workbench.adapters.tools.project_files import ProjectRunTool
+
+        scope = ProjectFileScope()
+        receipts = ReadReceipts()
+        tool = ProjectRunTool(scope, receipts, environment={}, runner=runner)
+
+        async def scenario() -> tuple[Any, bool]:
+            # Both scopes, the way a project turn enters them (ADR-0078): the
+            # tool notes that a command ran in the ledger of *this* turn, and
+            # the ledger is only readable from inside it.
+            with scope.using(cast(Any, self._Store())), receipts.using():
+                result = await tool.handle(_invocation("project_run", command=command))
+                return result, receipts.commands_ran()
+
+        return asyncio.run(scenario())
+
+    def test_the_runner_is_handed_the_command_and_the_project_directory(self) -> None:
+        from agent_workbench.adapters.filesystem.commands import RUN_TIMEOUT_SECONDS
+        from agent_workbench.ports.commands import CommandOutcome
+
+        runner = self._Runner(
+            CommandOutcome(
+                exit_code=3, output="one\nnope\n", timed_out=False, overflowed=False
+            )
+        )
+
+        result, ran = self._handle(runner)
+
+        assert runner.seen == [
+            ("pytest -q", str(Path("/projects/demo")), RUN_TIMEOUT_SECONDS)
+        ]
+        assert result.error is None
+        assert result.content is not None
+        assert "exit code: 3" in result.content
+        assert "nope" in result.content
+        # The receipt is the tool's, not the runner's: a command that ran
+        # somewhere else still moved files the model has receipts for.
+        assert ran is True
+
+    def test_a_refusal_from_the_runner_carries_its_code(self) -> None:
+        from agent_workbench.adapters.tools.runner import RunnerRefusedError
+
+        runner = self._Runner(
+            raises=RunnerRefusedError("tool_failed", "cwd is outside the projects root")
+        )
+
+        result, _ = self._handle(runner)
+
+        assert result.error is not None
+        assert result.error.code == "tool_failed"
+        assert "outside the projects root" in result.error.message
+
+    def test_an_unopened_runner_is_a_sentence_not_a_class_name(self) -> None:
+        from agent_workbench.adapters.tools.runner import RunnerUnavailableError
+
+        runner = self._Runner(
+            raises=RunnerUnavailableError("the runner connection is not open")
+        )
+
+        result, _ = self._handle(runner)
+
+        assert result.error is not None
+        assert "the runner connection is not open" in result.error.message
+
+    def test_a_command_the_runner_killed_is_reported_with_what_it_printed(self) -> None:
+        from agent_workbench.ports.commands import CommandOutcome
+
+        runner = self._Runner(
+            CommandOutcome(
+                exit_code=None,
+                output="three failures so far",
+                timed_out=True,
+                overflowed=False,
+            )
+        )
+
+        result, _ = self._handle(runner)
+
+        assert result.error is not None
+        assert result.error.code == "tool_timeout"
+        assert "three failures so far" in result.error.message

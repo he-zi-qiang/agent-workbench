@@ -178,7 +178,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8769/health', timeout=5)\"",
+          "python -c \"from urllib.request import urlopen; urlopen('http://127.0.0.1:8774/health', timeout=5)\"",
         ]
       interval: 10s
       timeout: 10s
@@ -230,6 +230,45 @@ services:
         [
           "CMD-SHELL",
           "python -c \"import urllib.error, urllib.request\ntry: urllib.request.urlopen('http://127.0.0.1:8766/health', timeout=5)\nexcept urllib.error.HTTPError: pass\"",
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 15s
+    <<: *app-hardening
+
+  # The shell a coding session gets under Compose (ADR-0115): a container
+  # that mounts the host folder the API mounts, at the same path, and holds
+  # nothing else. No `*app-environment` (that block carries the database
+  # address), no key volume, no artifact volume, no configuration file, no
+  # socket -- so a command the model wrote and a person approved can reach the
+  # user's project files and this container's own network, and that is the
+  # whole list. It is the shape F-37 asked for when it refused a shell in the
+  # API's container: "a container that holds no key and only runs shell
+  # commands". `tests/deployment/test_compose.py` pins every absence.
+  #
+  # `command_environment()` scrubs `AW_*` from what a command inherits, and
+  # here there is nothing to scrub; it runs anyway, so the two places a
+  # command can execute stay one code path.
+  runner:
+    image: agent-workbench:local
+    build:
+      context: .
+    command: ["sh", "/app/docker/run-runner-local.sh"]
+    volumes:
+      # Read-write: `project_run` is how a coding session runs the project's
+      # own formatter, test suite or build, and those write. It is the same
+      # bind mount the API has, so a file the API wrote a moment ago is the
+      # file a command here sees.
+      - "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects"
+    # Only the runner network -- see `networks:` at the bottom. The API joins
+    # it to reach this container; nothing else does.
+    networks: [runner]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8774/health', timeout=5)\"",
         ]
       interval: 10s
       timeout: 6s
@@ -307,6 +346,12 @@ services:
       # stack whose broker could not pull its image refuse to start.
       AW_CODE__SANDBOX_ENABLED: "${AW_CODE__SANDBOX_ENABLED-}"
       AW_SANDBOX__ENABLED: "${AW_SANDBOX__ENABLED-}"
+      # ADR-0115: the same arrangement for the two connections a coding
+      # session's shell and browser need. Empty means "nobody decided" and
+      # the launcher probes each server before turning its switch on; an
+      # explicit value from the operator is left alone.
+      AW_RUNNER__ENABLED: "${AW_RUNNER__ENABLED-}"
+      AW_CODE__BROWSER_ENABLED: "${AW_CODE__BROWSER_ENABLED-}"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -322,6 +367,15 @@ services:
         condition: service_healthy
       # Answering before this process decides whether `sandbox_run` is on.
       sandbox:
+        condition: service_healthy
+      # And before it decides whether `project_run` executes in the runner
+      # and whether a coding session may drive the browser (ADR-0115). Both
+      # probes wait, so these are about not spending the wait; a runner that
+      # never comes up leaves `project_run` off for this start rather than
+      # holding the API.
+      runner:
+        condition: service_healthy
+      browser:
         condition: service_healthy
     # The computer-use server runs on the host, because no container can
     # reach the desktop (ADR-0108). This is Docker Desktop's name for the
@@ -373,7 +427,12 @@ services:
     # too -- a service that lists any network is no longer on the implicit
     # one, and dropping it here would cut this container off from the
     # database (ADR-0113 §3.3).
-    networks: [default, browser]
+    # And on the runner's, which exists so that the runner is on *no other*
+    # network (ADR-0115 §3.2): a command a model wrote can reach this
+    # container's console proxy -- as a shell on the host could reach
+    # 127.0.0.1:8000 -- and cannot reach PostgreSQL, Qdrant, the encoder or
+    # the sandbox broker, which a shell on the host could.
+    networks: [default, browser, runner]
     <<: *app-hardening
 
   task-worker:
@@ -516,6 +575,13 @@ services:
       # Nothing here writes, and the contract refuses a path that would climb
       # out of this mount.
       - artifact_data:/workspace:ro
+      # The project side of the same sentence (ADR-0115 §3.3). A project
+      # session's page is in the host folder the API mounts at `/projects`;
+      # mounted here at the *same path* and read-only, so the `file://` URL
+      # the API builds from its own view of the directory names the same file
+      # on this side. `tests/deployment/test_compose.py` pins that the two
+      # mounts share a source.
+      - "${AGENT_WORKBENCH_PROJECTS_DIR:-./var/projects}:/projects:ro"
     networks: [browser]
     depends_on:
       browser-egress:
@@ -584,3 +650,9 @@ networks:
   # can be omitted, a missing route cannot be talked around.
   browser:
     internal: true
+  # The runner's network (ADR-0115 §3.2). *Not* internal: a command a model
+  # writes may need the network the way it would on the user's machine --
+  # `pip download`, `curl` -- and the runner holds nothing whose theft the
+  # missing route would prevent. What the separate network buys is who else
+  # is on it: the API, and nobody. See the `runner` service.
+  runner: {}

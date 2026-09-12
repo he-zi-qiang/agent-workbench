@@ -394,9 +394,12 @@ echo.
 echo   Coding sessions read and write folders under var\projects in this
 echo   checkout (the only host folder the container can see); put a project
 echo   there, or start with AGENT_WORKBENCH_PROJECTS_DIR set to another one.
-echo   They have no shell here: project_run is the native launcher's, and a
-echo   container cannot open a browser on this desktop. The System page's
-echo   Code rows say so, with what each would take.
+echo   Their shell is the runner container, not this machine: Python 3.12
+echo   and the usual Unix tools, no Node, nothing you installed on Windows,
+echo   and every command stops on an approval card first. Their browser is
+echo   the guarded Chromium in the browser container, not this desktop's.
+echo   Both are probed once at start; the System page's Code rows say which
+echo   answered.
 echo.
 start "" "http://127.0.0.1:8000/ui/"
 set "RC=0"

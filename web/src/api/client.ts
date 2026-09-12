@@ -787,6 +787,25 @@ export async function getSystemWorkers(
 }
 
 /**
+ * 模型此刻在受控浏览器里看到的那一帧（ADR-0113 §3.6）。
+ *
+ * 不走 `apiRequest`，因为回来的是一张 JPEG 而不是 JSON，调用方要的是
+ * `Response` 本身（`204` 是「还没打开过页面」，`503` 是「浏览器没在跑」，
+ * 两者都不是错误）。但身份头**必须**带：`routes/browser.py` 和其他每一条路由
+ * 一样先 `principals.resolve(request)`，而这块面第一版直接 `fetch` 裸 URL，
+ * 于是在 Compose 栈上一秒一次 401，面板永远显示「浏览器服务没有在这套部署里
+ * 应答」——ADR-0115 装配验证时从 API 日志里看出来的。
+ */
+export async function fetchBrowserFrame(
+  identity: PrincipalIdentity,
+): Promise<Response> {
+  return fetch("/v1/browser/frame", {
+    cache: "no-store",
+    headers: identityHeaders(identity),
+  });
+}
+
+/**
  * 拨一个零件的开关（ADR-103）：`true`/`false` 记下选择，`null` 收回它。
  *
  * 写的是**下次启动**的事，这个进程什么也不会变——所以服务端回的是整份能力清单，

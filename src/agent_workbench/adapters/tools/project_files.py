@@ -21,26 +21,31 @@ rules live.
 
 from __future__ import annotations
 
-import asyncio
-import os
-import signal
 import time
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import Final
 
 from pydantic import JsonValue
 
+from agent_workbench.adapters.filesystem.commands import (
+    MAX_CAPTURE_BYTES,
+    MAX_INLINE_OUTPUT_CHARS,
+    RUN_TIMEOUT_SECONDS,
+    LocalCommandRunner,
+    render_output,
+)
 from agent_workbench.adapters.tools.reading import (
     LIMIT_SCHEMA,
     OFFSET_SCHEMA,
     windowed_result,
 )
+from agent_workbench.adapters.tools.runner import RunnerRefusedError
 from agent_workbench.application.file_read_receipts import ReadReceipts
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.domain.errors import (
+    AgentWorkbenchError,
     ErrorInfo,
     NotFoundError,
     OutputTooLargeError,
@@ -73,6 +78,7 @@ from agent_workbench.domain.workspace import (
     WorkspaceScanTimeoutError,
     grep_workspace,
 )
+from agent_workbench.ports.commands import CommandRunner
 from agent_workbench.ports.project_files import (
     MAX_LISTING_ENTRIES,
     ProjectFileEntry,
@@ -959,95 +965,18 @@ class ProjectGrepTool:
         )
 
 
-#: How long one command may run before it is killed.
-#:
-#: 120s. Argued from the two ends it sits between rather than rounded: the
-#: turn that contains it is 360s in `config.code-local.toml`, and the longest
-#: command this repository's own gate runs is `uv run pytest`, measured
-#: 2026-08-24 at 71s for 2811 tests. A ceiling under that would make the tool
-#: useless for the one command a coding agent most wants to run; a ceiling near
-#: the turn's own would let a single hung command consume the turn and leave
-#: nothing to report it with. The spec's `timeout_seconds` is set higher so
-#: this clock fires first -- a killed command can say what it printed before it
-#: died, and `tool_timeout` from the executor cannot.
-RUN_TIMEOUT_SECONDS: Final[float] = 120.0
-
-#: How much output is read before the command is killed for producing too much.
-#:
-#: Reading stops here rather than growing a list until the process exits: a
-#: command like `yes` fills memory in seconds, and the wall clock above is
-#: 120 of them. Once reading stops the pipe fills and the command blocks, so
-#: the kill is not optional -- it is what turns "we stopped listening" into
-#: "it stopped talking".
-MAX_CAPTURE_BYTES: Final[int] = 1024 * 1024
-
-#: How much of what was captured reaches the model, matching `sandbox_run`'s
-#: inline ceiling and its marker rather than inventing a second convention.
-MAX_INLINE_OUTPUT_CHARS: Final[int] = 8_000
-
-
-def _terminate(process: asyncio.subprocess.Process) -> None:
-    """Kill the command and everything it started.
-
-    The process *group*, not the process. A shell command runs under ``/bin/sh
-    -c``, so the thing that actually matters -- the ``pytest``, the ``npm``,
-    the dev server -- is a child of what ``process.kill()`` would reach.
-    Killing only the shell leaves that child alive and reparented, still
-    holding the pipe this call was reading from and whatever port it had bound,
-    with nothing left in the system that knows it exists.
-    ``start_new_session=True`` at spawn is what makes a group exist to be
-    killed.
-
-    ``SIGKILL`` rather than a term-then-kill pair. Both paths that reach here
-    have already spent their budget -- the clock ran out, or the output ceiling
-    was passed and the pipe is full -- and a grace period is time taken from a
-    turn that has none left to give. The cost is a command that cannot clean up
-    after itself, which is the cost of every timeout.
-    """
-
-    if process.returncode is not None:
-        return
-    with suppress(ProcessLookupError, PermissionError):
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-
-
-async def _capture(process: asyncio.subprocess.Process, chunks: list[bytes]) -> bool:
-    """Read up to the ceiling into ``chunks``, and say whether there was more.
-
-    The accumulator belongs to the caller rather than to this function, and
-    that is the whole reason for the signature. A command that runs past the
-    clock is cancelled *inside this loop*, and a version that built the buffer
-    locally and returned it would lose every byte it had already read -- which
-    is exactly the output worth having. A `pytest` that printed three failures
-    and then hung is a far more useful answer than "it did not finish".
-    """
-
-    assert process.stdout is not None
-    total = 0
-    while True:
-        chunk = await process.stdout.read(65_536)
-        if not chunk:
-            return False
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > MAX_CAPTURE_BYTES:
-            return True
-
-
-def _rendered(text: str) -> str:
-    """The output as far as it fits, marked where it was cut."""
-
-    if len(text) <= MAX_INLINE_OUTPUT_CHARS:
-        return text
-    return (
-        f"[{len(text)} characters; first {MAX_INLINE_OUTPUT_CHARS} shown]\n"
-        + text[:MAX_INLINE_OUTPUT_CHARS]
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class ProjectRunTool:
-    """One command, run in the project's directory, on this machine (ADR-077)."""
+    """One command, run in the project's directory (ADR-077, ADR-0115).
+
+    *Where* it runs is the runner's business, and there are two: the process
+    holding this session, which on the native launcher is the user's own
+    machine, and a container that mounts the project directory and holds
+    nothing else (ADR-0115). The tool is the same in front of either -- the
+    same `destructive` risk, the same stop at a person, the same receipts, the
+    same sentence to the model -- because the thing the gate protects is the
+    user's files, and those are the same files in both places.
+    """
 
     scope: ProjectFileScope
     #: Told that a command ran, and nothing more (ADR-0078). A command's
@@ -1058,15 +987,25 @@ class ProjectRunTool:
     #: than that somebody else is editing the file, which would have it stop
     #: and report instead.
     receipts: ReadReceipts
-    #: What the command inherits, decided in `bootstrap/child_environment.py`
-    #: and handed here already made. Not read from `os.environ` in this module:
+    #: What a *local* command inherits, decided in
+    #: `bootstrap/child_environment.py` and handed here already made. Not read
+    #: from `os.environ` in this module:
     #: `tests/architecture/test_dependency_boundaries.py` allows that in
     #: `bootstrap` and nowhere else, and the rule is right -- a tool whose
     #: behaviour depends on a variable nobody passed it is a tool whose
-    #: behaviour cannot be read off the configuration.
+    #: behaviour cannot be read off the configuration. Unused when `runner` is
+    #: given: the remote process has an environment of its own, and nothing
+    #: of this one's should travel.
     environment: Mapping[str, str]
     #: Injected so a test can drive it down to something a test can wait for.
     timeout_seconds: float = RUN_TIMEOUT_SECONDS
+    #: Where the command executes, when not here (ADR-0115). `None` -- the
+    #: default every caller written before this existed gets -- means a
+    #: `LocalCommandRunner` over `environment`, which is exactly what this tool
+    #: did inline until the second place existed. A deployment that runs its
+    #: coding sessions in a container passes the runner that reaches the
+    #: container beside it (`apps/api/dependencies.py`, `RunnerSlot`).
+    runner: CommandRunner | None = None
 
     def binding(self) -> ToolBinding:
         # No `operation_key`, and that is not an oversight. A key would put this
@@ -1082,15 +1021,22 @@ class ProjectRunTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name=PROJECT_RUN_TOOL,
+            # "The process this session's commands run in" rather than "the
+            # user's real machine", which this said until ADR-0115. Both places
+            # a command can run share every property the sentence has to
+            # carry -- the user's real files, no undo, a person who sees the
+            # command first -- and differ in the one it must not overclaim:
+            # whose toolchain is there. The prompt (`_HAS_SHELL`) says which.
             description=(
-                "Run one shell command in this project's directory, on the "
-                "machine this server runs on. It is the user's real machine: "
-                "there is no sandbox and no undo, and every call stops and asks "
-                "them first. Output is stdout and stderr interleaved in the "
-                "order they were written, capped, and marked where it was cut; "
-                "a non-zero exit code is reported, not treated as a failure. "
-                "The command cannot read input -- anything that prompts will "
-                f"hang until it is killed at {int(RUN_TIMEOUT_SECONDS)} seconds."
+                "Run one shell command in this project's directory, in the "
+                "process this session's commands run in. The files are the "
+                "user's real files: there is no sandbox around them and no "
+                "undo, and every call stops and asks the user first. Output is "
+                "stdout and stderr interleaved in the order they were written, "
+                "capped, and marked where it was cut; a non-zero exit code is "
+                "reported, not treated as a failure. The command cannot read "
+                "input -- anything that prompts will hang until it is killed "
+                f"at {int(RUN_TIMEOUT_SECONDS)} seconds."
             ),
             input_schema={
                 "type": "object",
@@ -1128,57 +1074,37 @@ class ProjectRunTool:
         self.receipts.note_command_ran()
         await invocation.progress("running the command")
 
-        process = await asyncio.create_subprocess_shell(
-            command,
-            cwd=store.working_directory,
-            stdout=asyncio.subprocess.PIPE,
-            # One stream, in the order the command wrote it. `sandbox_run`
-            # keeps the two apart because its caller reads them apart; here the
-            # thing being read is a terminal session, and a test runner's
-            # failing assertion and the line naming the test it belongs to go
-            # to different channels. Separated, they arrive as two lists nobody
-            # can re-interleave.
-            stderr=asyncio.subprocess.STDOUT,
-            # Nothing to read. A command that prompts would otherwise wait on a
-            # human who is not there, look identical to a slow one, and be
-            # killed by the clock with no output explaining why.
-            stdin=asyncio.subprocess.DEVNULL,
-            env=dict(self.environment),
-            start_new_session=True,
+        runner: CommandRunner = (
+            self.runner
+            if self.runner is not None
+            else LocalCommandRunner(environment=self.environment)
         )
-        chunks: list[bytes] = []
-        overflowed = False
-        timed_out = False
-        exit_code: int | None = None
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                overflowed = await _capture(process, chunks)
-                if overflowed:
-                    # Before waiting, not after. Reading stopped at the ceiling,
-                    # so the pipe is full and the command is blocked writing
-                    # into it -- `wait()` here would be waiting for something
-                    # that is waiting for us.
-                    _terminate(process)
-                exit_code = await process.wait()
-        except TimeoutError:
-            timed_out = True
-        finally:
-            # Also on cancellation. The executor races this handler against the
-            # run's cancellation token and cancels the loser, and a cancelled
-            # turn that left a build running is the failure this clause exists
-            # for.
-            _terminate(process)
+            outcome = await runner.run(
+                command,
+                cwd=str(store.working_directory),
+                timeout_seconds=self.timeout_seconds,
+            )
+        except RunnerRefusedError as error:
+            # The runner answered and the answer was not an outcome: a refusal
+            # on the wire, a result that did not parse. Its code is the tool
+            # result's, the way `sandbox_run` carries `SandboxRefusedError`'s.
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(code=error.code, message=str(error), retryable=False),
+            )
+        except AgentWorkbenchError as error:
+            # `RunnerUnavailableError` -- the connection was never opened --
+            # and anything else this project's own errors describe. Carried
+            # as its own sentence rather than the class name, for the reason
+            # `SandboxUnavailableError` gives.
+            return ToolResult.failed(invocation.call, error.to_error_info())
 
-        captured = b"".join(chunks)[:MAX_CAPTURE_BYTES]
-        output = _rendered(captured.decode("utf-8", errors="replace"))
-        if timed_out:
-            # The bytes it managed to print, carried on the error rather than
-            # dropped. This is why the clock here is lower than the spec's: the
-            # executor's `tool_timeout` cancels the handler and has nothing to
-            # say, while a command killed by this one has usually already
-            # printed the interesting part -- three failing tests and then a
-            # hang is a different problem from a hang, and only one of the two
-            # answers tells the model which it is.
+        # Rendered once, here, whichever runner produced it. The runners cap
+        # at `MAX_CAPTURE_BYTES`; this is the ceiling the model sees, with the
+        # marker that says where it was cut.
+        output = render_output(outcome.output)
+        if outcome.timed_out:
             return ToolResult.failed(
                 invocation.call,
                 ErrorInfo(
@@ -1191,20 +1117,16 @@ class ProjectRunTool:
                     retryable=False,
                 ),
             )
-        lines = [f"exit code: {exit_code}"]
+        lines = [f"exit code: {outcome.exit_code}"]
         if output:
             lines.append(output)
-        if overflowed:
+        if outcome.overflowed:
             lines.append(
                 f"[the command was killed after producing more than "
                 f"{MAX_CAPTURE_BYTES} bytes]"
             )
         return ToolResult.succeeded(
             invocation.call,
-            # A non-zero exit is a result, not a failure. The traceback, the
-            # failing assertion, the compiler's line number -- those are the
-            # payload, and a `ToolResult.failed` would hand the model an error
-            # code where the answer it asked for is.
             content="\n".join(lines),
         )
 

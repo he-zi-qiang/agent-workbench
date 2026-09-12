@@ -69,6 +69,27 @@ LOCAL_PROXY_UPSTREAM_PORT=8768 \
     python /app/docker/loopback_proxy.py &
 computer_tunnel_pid=$!
 
+# Two more inward tunnels (ADR-0115), same argument. 8773 is the guarded
+# browser (ADR-0113), which until now this container only *described* as
+# reachable -- `api.browser_frame_url` named the port and nothing listened on
+# it, so the console's 浏览器 panel answered 503 under Compose and F-39 said
+# the tunnel existed. 8774 is the command runner, the container that holds
+# the project directory and nothing else. Both are dialled by this process
+# at startup, so both tunnels come up before the probes below and before
+# `agent-api`.
+LOCAL_PROXY_LISTEN_HOST=127.0.0.1 \
+LOCAL_PROXY_PORT=8773 \
+LOCAL_PROXY_UPSTREAM_HOST="${BROWSER_UPSTREAM_HOST:-browser}" \
+LOCAL_PROXY_UPSTREAM_PORT=8773 \
+    python /app/docker/loopback_proxy.py &
+browser_tunnel_pid=$!
+LOCAL_PROXY_LISTEN_HOST=127.0.0.1 \
+LOCAL_PROXY_PORT=8774 \
+LOCAL_PROXY_UPSTREAM_HOST="${RUNNER_UPSTREAM_HOST:-runner}" \
+LOCAL_PROXY_UPSTREAM_PORT=8774 \
+    python /app/docker/loopback_proxy.py &
+runner_tunnel_pid=$!
+
 # The sandbox, decided per start for the reason web search is: on without a
 # broker that answers is a startup error by design (`SandboxSlot.open`,
 # ADR-057), and the broker may be pulling its image, or the socket mount may
@@ -83,6 +104,40 @@ if [ -z "${AW_CODE__SANDBOX_ENABLED:-}" ] && [ -z "${AW_SANDBOX__ENABLED:-}" ]; 
     fi
 fi
 
+# The runner and the browser, decided per start on the same terms
+# (ADR-0115). Both slots are fail-fast in the API (`RunnerSlot`,
+# `BrowserSlot`), so a profile that set either statically would turn a
+# container that is slow to come up into an API that does not. The probe is
+# the Task Worker's own MCP smoke test: a real client, the server's health
+# route, and the one tool name each is expected to advertise. An explicit
+# value from the operator is left alone; only "nobody decided" is decided.
+if [ -z "${AW_RUNNER__ENABLED:-}" ]; then
+    if python /app/scripts/smoke_mcp_server.py \
+        --label runner \
+        --endpoint "http://127.0.0.1:8774/mcp" \
+        --health-url "http://127.0.0.1:8774/health" \
+        --expect-tool run_command \
+        --wait-seconds 60 >&2; then
+        AW_RUNNER__ENABLED=true
+        export AW_RUNNER__ENABLED
+    else
+        echo "api: no command runner answered; project_run runs in this container's own process for this start" >&2
+    fi
+fi
+if [ -z "${AW_CODE__BROWSER_ENABLED:-}" ]; then
+    if python /app/scripts/smoke_mcp_server.py \
+        --label browser \
+        --endpoint "http://127.0.0.1:8773/mcp" \
+        --health-url "http://127.0.0.1:8773/health" \
+        --expect-tool browser_open \
+        --wait-seconds 60 >&2; then
+        AW_CODE__BROWSER_ENABLED=true
+        export AW_CODE__BROWSER_ENABLED
+    else
+        echo "api: no browser answered; coding sessions have no browser for this start" >&2
+    fi
+fi
+
 # --web-dir makes this stack a demo somebody can open rather than a set of
 # routes somebody has to know. The API refuses to start if the directory is
 # missing, so a broken image fails here rather than in a browser.
@@ -92,18 +147,22 @@ python /app/docker/loopback_proxy.py &
 proxy_pid=$!
 
 cleanup() {
-  kill -TERM "$api_pid" "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" 2>/dev/null || true
+  kill -TERM "$api_pid" "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" "$browser_tunnel_pid" "$runner_tunnel_pid" 2>/dev/null || true
   wait "$api_pid" 2>/dev/null || true
   wait "$proxy_pid" 2>/dev/null || true
   wait "$sandbox_tunnel_pid" 2>/dev/null || true
   wait "$computer_tunnel_pid" 2>/dev/null || true
+  wait "$browser_tunnel_pid" 2>/dev/null || true
+  wait "$runner_tunnel_pid" 2>/dev/null || true
 }
 
 trap 'cleanup; exit 0' INT TERM
 wait "$api_pid"
 status=$?
-kill -TERM "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" 2>/dev/null || true
+kill -TERM "$proxy_pid" "$sandbox_tunnel_pid" "$computer_tunnel_pid" "$browser_tunnel_pid" "$runner_tunnel_pid" 2>/dev/null || true
 wait "$proxy_pid" 2>/dev/null || true
 wait "$sandbox_tunnel_pid" 2>/dev/null || true
 wait "$computer_tunnel_pid" 2>/dev/null || true
+wait "$browser_tunnel_pid" 2>/dev/null || true
+wait "$runner_tunnel_pid" 2>/dev/null || true
 exit "$status"

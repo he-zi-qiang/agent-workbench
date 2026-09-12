@@ -309,12 +309,16 @@ key 和「运行状态」页上的开关都只对**下一次启动**生效
   （[ADR-0109](adr/0109-a-container-lays-the-page-out-and-hands-a-session-one-folder.md)）。
   把要编码的项目放进去，或者从终端里 `set AGENT_WORKBENCH_PROJECTS_DIR=D:\projects`
   再跑 `stack.cmd`。选择器里能看到 `/app` 之类别的目录，别选——那是镜像自己的只读树。
-- **这里的编码会话没有 shell，也开不了浏览器。** Mac 上原生跑（`scripts/dev.sh up`）的
-  demo 档给项目会话一条 `project_run`——你机器上的真 shell，能 `open` 网页、能跑你装的任何
-  工具；容器里没有你的工具链、没有桌面，给一个这样的 shell 是给一个兑现不了的工具，所以不给
-  （ADR-0109 §3.3，已知缺口 F-37）。有的是：读写项目文件的五件工具，不挂项目时的 `sandbox_run`
-  （一次性容器、断网），以及打开「联网搜索」后的 `web_search`。Code 起始屏在你敲第一句之前
-  会把这三样列出来，缺的划掉；「运行状态」页说怎么补。
+- **这里的编码会话有一把 shell，但不是你这台机器的。** `project_run` 跑在 `runner` 容器里
+  （[ADR-0115](adr/0115-a-shell-that-holds-no-key-and-a-browser-that-knows-where-the-page-is.md)）：
+  它只挂着 `var\projects`、没有 key、没有数据库地址，里面是 Python 3.12 和常规 Unix 工具，
+  **没有 Node、没有你装在 Windows 上的任何东西**。每条命令先出现在审批卡上，你点了才跑。
+  Mac 上原生跑（`scripts/dev.sh up`）的 demo 档给的才是你机器上的真 shell（ADR-0077）。
+  浏览器也有：ADR-0113 的受控 Chromium 在 `browser` 容器里，模型能打开它刚写的页面、读
+  可访问性树、截图、看控制台错误——但它出网只经守卫代理，这台机器的桌面浏览器它开不了。
+  两样都由 `stack.cmd` 起栈时探一次：`runner` 或 `browser` 容器没起来，那一次启动就没有对应
+  的工具，「运行状态」页会说。其余照旧：读写项目文件的五件工具，不挂项目时的 `sandbox_run`
+  （一次性容器、断网），以及打开「联网搜索」后的 `web_search`。
 
 ---
 
@@ -465,7 +469,7 @@ scripts\docker-unstick.cmd
 | 「计算机」页说服务器没应答 | 没跑 `scripts\computer.cmd`，或它退出了。看那个窗口 |
 | Code 里点开 .docx 只有文字，任务页说「没有可用的文档转换器」 | 用 `lite` 构建的，或是 2026-09-04 之前构建的镜像。`scripts\stack.cmd` 重新构建，「运行状态」页 `Word 版面预览` 那一行会变成可用 |
 | Code 的文件夹选择器里只有 `/app` 这类目录，写文件报只读 | 镜像是 ADR-0109 之前的。重新跑 `scripts\stack.cmd`；选 `/projects` 下的文件夹 |
-| Code 会话说「本环境没有 shell 与网络」 | 说的是实话。shell 与浏览器这条路上没有（§6）；联网搜索要开「联网搜索」开关并 restart |
+| Code 会话说「本环境没有 shell」或「没有浏览器」 | 起栈时 `runner` 或 `browser` 容器没探到（§6）。`scripts\stack.cmd status` 看它们是不是 healthy，然后 `scripts\stack.cmd restart`；「运行状态」页 `code.host_commands` 那一行说当前是哪种情况。联网搜索要开「联网搜索」开关并 restart |
 | 控制台开了但 Chat 说它没有联网功能 | 没 key，或 key 存了没 `restart`。见 §5 |
 | 任务秒过、报告像模像样但引用是假的 | 合成 Worker。见 §5 那一段 |
 | 手敲 `docker compose up --build` 直接死在 gRPC header 上 | §2。用 `stack.cmd`，别用 `--build` |

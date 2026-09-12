@@ -1829,3 +1829,52 @@ def test_delegation_guidance_follows_what_the_turn_holds_not_the_deployment() ->
     narrowed = observed(keeping=frozenset(CODE_TOOLS))
     assert DELEGATE_TOOL not in narrowed.tool_names
     assert "delegate_agent" not in narrowed.system_prompt
+
+
+def test_a_turn_holding_the_run_tool_is_told_both_places_a_command_can_run() -> None:
+    """ADR-0115. `_HAS_SHELL` used to say "it is the user's own machine, their
+    installed tools", which became false the day a Compose coding session got
+    a shell -- the runner container has Python 3.12 and coreutils and none of
+    the user's installs. ADR-0058's rule is that the prompt describes the world
+    the turn is in; with two worlds possible and the process unable to tell
+    which, the honest sentence names both and the difference between them.
+    """
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        with_host_commands,
+        with_web_search,
+    )
+
+    prompt = with_host_commands(CODER_SYSTEM_PROMPT_PROJECT)
+
+    assert "user's own machine" in prompt
+    assert "container built from this project's image" in prompt
+    assert "no Node" in prompt
+    assert "There is no shell" not in prompt
+    # The sentence ADR-0114 could not write: with a shell, the instrument a
+    # search is not is one approved command away.
+    assert "approved command beats twenty searches" in prompt
+    # The web-search arm still finds its anchor over the reworded paragraph;
+    # `_assert_every_prompt_combination_resolves` checks this at import, and
+    # this is the same fact stated where a reader of the prompt would look.
+    searched = with_web_search(prompt)
+    assert "`web_search`" in searched
+    assert "prefer it for reading" in searched
+
+
+def test_a_turn_holding_the_browser_is_told_to_open_its_file_by_relative_path() -> None:
+    """ADR-0115 §3.3. A project turn never learns its absolute root, so the one
+    way it can open the page it just wrote is the relative path it wrote it
+    under -- and the prompt has to say so, or the model guesses a `file://`."""
+
+    from agent_workbench.application.code_prompt import (
+        CODER_SYSTEM_PROMPT_PROJECT,
+        with_browser,
+    )
+
+    prompt = with_browser(CODER_SYSTEM_PROMPT_PROJECT)
+
+    assert "`workspace_path`" in prompt
+    assert "not an absolute path" in prompt
+    assert "same relative path you" in prompt
