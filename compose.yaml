@@ -168,7 +168,26 @@ services:
     build:
       context: .
     command: ["agent-encoder", "--host", "0.0.0.0", "--port", "8769"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      # Read the cache; do not phone home (2026-09-13). `weights-init` below is
+      # a `service_completed_successfully` dependency and it `snapshot_download`s
+      # both models at the configured revisions, so by the time this container
+      # starts every file it will open is already in the volume. Without this,
+      # `huggingface_hub` still makes about thirty HEAD requests to
+      # huggingface.co on every start, purely to re-validate files it is about
+      # to read from disk -- and on 2026-09-13 one of those died inside the
+      # library (`RuntimeError: Cannot send a request, as the client has been
+      # closed`, through a proxy), the container exited 1, and the API, both
+      # Workers and the ingestion worker never started because they wait on
+      # this one being healthy. A stack that cannot restart without a working
+      # route to huggingface.co is not the stack this file describes.
+      #
+      # The failure mode this creates is the one the design already prefers:
+      # `docker/fetch_weights.py` opens by saying the sparse arm refuses to
+      # start on a cold cache rather than filling it. A missing file now raises
+      # here with the file named instead of being fetched silently.
+      HF_HUB_OFFLINE: "1"
     depends_on:
       weights-init:
         condition: service_completed_successfully

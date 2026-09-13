@@ -1021,8 +1021,18 @@ def test_a_code_turn_must_outlast_one_approval() -> None:
     waiting.
     """
 
+    # Both halves named here rather than one of them borrowed from whatever
+    # the shipped default happens to be: this test asserts a *relationship*,
+    # and the version that set only the approval allowance to 600 stopped
+    # testing anything the day the turn default moved to 900 (ADR-0119) --
+    # 600 was simply below the new default, so nothing was refused and the
+    # failure read as a broken invariant rather than a stale fixture.
     payload = valid_payload()
-    payload["code"] = {**payload["code"], "approval_timeout_seconds": 600}
+    payload["code"] = {
+        **payload["code"],
+        "turn_timeout_seconds": 600,
+        "approval_timeout_seconds": 600,
+    }
 
     with pytest.raises(ValidationError, match="turn_timeout_seconds must exceed"):
         Settings(**payload)

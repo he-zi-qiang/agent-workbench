@@ -54,7 +54,8 @@ tool_calling_required = false
 # 2026-09-12 在这套 Compose 栈上实测到一次：一个编码回合跑到第 48 步、上下文约
 # 37k token 时，一次模型调用过了 120 秒，整轮以这句话收场（ADR-0114 §1 记的那个
 # 会话的第二轮）。240 照抄 demo-local 的依据：约 2.2 倍于那边实测最长的成功调用，
-# 且仍只有 `code.turn_timeout_seconds`（出厂 600）的一半。
+# 且仍远低于 `code.turn_timeout_seconds`（出厂 2026-09-13 起是 900，ADR-0119；在那之前
+# 是 600，这句话当时写的是「一半」）。
 timeout_seconds = 240
 
 [runtime]

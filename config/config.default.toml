@@ -69,12 +69,31 @@ coordination = "none"
 # The wall clock for one turn, which becomes the run's deadline -- a code run
 # is required to carry one, because nothing else is watching it. The approval
 # allowance must stay below it, or one held call could consume the whole turn.
-turn_timeout_seconds = 600
+#
+# 900 since 2026-09-13 (ADR-0119), moved with the step ceiling below: a turn
+# that may take 120 steps at the measured ~4 seconds a step needs about eight
+# minutes, and the deadline is the one ceiling that cannot buy itself a turn to
+# write a report in. Trading a `max_steps` stop (which now reports) for a
+# `deadline` stop (which cannot) would undo that fix. The two native profiles
+# keep 600: they set it themselves and nothing measured there has asked for
+# more.
+turn_timeout_seconds = 900
 approval_timeout_seconds = 300
 # Independent ceilings (ADR-022): fewer tool calls than steps says "this many
 # tool calls, and a turn left over to write the report from them".
-max_steps = 60
-max_tool_calls = 120
+#
+# Doubled on 2026-09-13 against a measured turn (ADR-0119). `ses_a42b…` wrote a
+# 31 KB game as eight pieces, checked the level with `python3`, opened it in the
+# guarded browser and found and fixed three real bugs -- 60 steps, 61 tool
+# calls, 246 seconds -- and was cut off mid-verification by the old 60. Two of
+# this project's own decisions push step counts up: ADR-0118 asks for a large
+# file in pieces rather than one call, and verifying in the browser is several
+# steps per claim (open, snapshot, eval, interact). The ceiling is a backstop
+# against a loop, and since ADR-0116 a loop is caught on its own evidence -- a
+# repeat is answered from the record and the tools come off after two -- so the
+# backstop can sit where honest work does not reach it.
+max_steps = 120
+max_tool_calls = 240
 # How many turns this process runs at once, across all sessions. A turn holds a
 # model connection and a workspace for minutes.
 max_concurrent_turns = 4
