@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrincipalIdentity } from "../../api/types";
 import { BrowserFrame } from "./BrowserFrame";
@@ -74,7 +74,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
       screen.getByAltText("浏览器当前画面").getAttribute("src"),
     ).toBe("blob:frame-1");
     // ADR-0113 §4：只读是写在面上的，不是靠读者猜的。
-    expect(screen.getByText(/点不动它/)).toBeTruthy();
+    expect(screen.getByText(/点一下画面就能操作它/)).toBeTruthy();
     // 帧那条路由先认身份头，和其他每一条一样（ADR-044）；不带头的那一版在
     // Compose 栈上一秒一次 401，面板永远说「没在跑」。
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -103,5 +103,93 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     });
     view.unmount();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:frame-1");
+  });
+});
+
+
+describe("BrowserFrame 可以操作（ADR-0117）", () => {
+  const frameResponse = {
+    ok: true,
+    status: 200,
+    blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
+  };
+
+  function answering(input: { ok: boolean; status: number; body: unknown }) {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/v1/browser/input")
+          ? {
+              ok: input.ok,
+              status: input.status,
+              headers: { get: () => "application/json" },
+              json: () => Promise.resolve(input.body),
+              text: () => Promise.resolve(JSON.stringify(input.body)),
+            }
+          : frameResponse,
+      ),
+    );
+  }
+
+  it("点一下画面，就把视口坐标上的一次点击送进浏览器", async () => {
+    answering({ ok: true, status: 200, body: { done: ["action 0 (click) ok"] } });
+    render(<BrowserFrame identity={IDENTITY} />);
+    const image = await waitFor(() => screen.getByAltText("浏览器当前画面"));
+
+    // jsdom 里图没有尺寸，换算退回到浏览器那一侧的视口大小（1280×800）——
+    // 比例 1，所以点在 (40, 30) 就是视口的 (40, 30)。
+    fireEvent.click(image, { clientX: 40, clientY: 30 });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).endsWith("/v1/browser/input")),
+      ).toBe(true);
+    });
+    const [, init] = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/v1/browser/input"),
+    ) as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      actions: [{ kind: "click", x: 40, y: 30 }],
+    });
+  });
+
+  it("焦点在画面里时，方向键送进去，Ctrl 组合键不送", async () => {
+    answering({ ok: true, status: 200, body: { done: ["action 0 (key) ok"] } });
+    render(<BrowserFrame identity={IDENTITY} />);
+    await waitFor(() => screen.getByAltText("浏览器当前画面"));
+    const stage = screen.getByRole("application");
+
+    fireEvent.keyDown(stage, { key: "ArrowRight" });
+    fireEvent.keyDown(stage, { key: "r", ctrlKey: true });
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith("/v1/browser/input"),
+        ),
+      ).toHaveLength(1);
+    });
+    const [, init] = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/v1/browser/input"),
+    ) as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      actions: [{ kind: "key", text: "ArrowRight" }],
+    });
+  });
+
+  it("模型在跑的那一轮里被拒，那句话画出来而不是悄悄丢掉", async () => {
+    answering({
+      ok: false,
+      status: 409,
+      body: { detail: "the model is driving the browser: 1 coding turn(s) in flight" },
+    });
+    render(<BrowserFrame identity={IDENTITY} />);
+    const image = await waitFor(() => screen.getByAltText("浏览器当前画面"));
+
+    fireEvent.click(image, { clientX: 5, clientY: 5 });
+
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toMatch(/模型正在操作/);
+    });
   });
 });

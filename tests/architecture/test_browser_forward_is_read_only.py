@@ -21,7 +21,7 @@ import ast
 from pathlib import Path
 from typing import Final
 
-from agent_workbench.apps.api.routes import browser
+from agent_workbench.apps.api.routes import browser, browser_input
 
 SOURCE: Final[Path] = Path(browser.__file__)
 
@@ -119,3 +119,63 @@ def test_the_console_is_never_handed_a_way_to_steer() -> None:
     # `Request` is Starlette's, and it is how the identity adapter is reached.
     # A pydantic body model would be something else entirely.
     assert annotations <= {"Request"}, annotations
+
+
+# --- ADR-0117: the person's input has a module of its own, and it is narrow --
+
+INPUT_SOURCE: Final[Path] = Path(browser_input.__file__)
+
+
+def _computed_literals(path: Path) -> set[str]:
+    """String constants a module computes with, its own docstrings aside."""
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = {
+        ast.get_docstring(node, clean=False)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.AsyncFunctionDef | ast.FunctionDef)
+    }
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value not in docstrings
+    }
+
+
+def test_the_input_module_names_no_acting_tool_itself() -> None:
+    """The person's route computes with none of the acting names.
+
+    ADR-0113 §4's refusal is replaced by a rule, not by an opening: a person
+    points and presses in the model's browser, and never opens a page or
+    evaluates an expression in it. The one `browser_interact` call lives on the
+    slot (`dependencies.py`), behind a method that takes gestures and nothing
+    else -- so the route module itself must hold no tool name at all, and a
+    second verb would have to be smuggled past both this test and the slot.
+    """
+
+    named = ACTING_TOOL_NAMES & _computed_literals(INPUT_SOURCE)
+    assert named == set(), named
+
+
+def test_the_input_module_is_the_only_one_with_a_body() -> None:
+    """A pydantic body model is the shape of "something to send"; only here."""
+
+    tree = ast.parse(INPUT_SOURCE.read_text(encoding="utf-8"))
+    bodies = {
+        ast.unparse(argument.annotation)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+        for argument in node.args.args
+        if argument.annotation is not None
+    }
+    assert "BrowserInputRequest" in bodies
+
+
+def test_the_frame_module_is_still_a_read_after_the_input_route_arrived() -> None:
+    """The widening went into its own file; the read stayed a read."""
+
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "browser_input" not in source
+    assert ACTING_TOOL_NAMES & _computed_literals(SOURCE) == set()

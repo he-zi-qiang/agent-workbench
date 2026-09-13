@@ -27,6 +27,65 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第八十五批）：人可以操作模型那个浏览器、右栏的文件可以删和改名、收起的右栏叫得回来、一台部署只画三档（ADR-0117）
+
+第八十四批合入、栈重建之后，用户早上发了一轮「验证马里奥」（模型靠 HUD 与画布像素验证，报告说
+`MarioGame` 没挂在 `window` 上），然后说：「不是我理想中的状态，浏览器还是不能操作，预览就是大部分
+情况就可以在浏览器中预览，但是现在不可以，文件夹中的文件也不可以删除，四种权限有交叉请取舍」，
+方向不准就参照本机 Claude Code desktop。逐条查实之后是四件不同的事，写在
+[ADR-0117](./adr/0117-a-person-may-drive-the-browser-while-no-turn-is.md) §1：右栏「浏览器」那一张按
+ADR-0113 §4 是只读回流；「预览不可以」是右栏被收起之后**没有看得见的路回去**（开关只在会话产出过文件
+时才画，只读了目录的项目会话收起就没了）；`deleteProjectFile` 在 `api/client.ts` 里一直存在但没有任何
+组件调用它，改名连接口都没有；四档的提示四句都以「这一轮」开头、后两句都说「只有……例外」。
+
+### 1. 改了什么
+
+- **人可以操作那个浏览器，条件是没有编码回合在跑。** 浏览器端 `browser_interact` 的 `click` 多一种
+  写法 `x`/`y`（视口 CSS 像素；模型照旧用 ref）。控制面新模块 `routes/browser_input.py`，
+  `POST /v1/browser/input` 把一组手势（点击 / 按键 / 输入 / 滚动，一次最多 10 个）作为**一次**
+  `browser_interact` 送进 `BrowserSlot.interact`；三道拒绝：没有 `mcp:browser` 403、浏览器不在 503、
+  **有回合在跑 409**（`CodeSessionService.turns_in_flight`）——这就是 ADR-0113 §4 要的那条仲裁：
+  模型在跑的那一轮里页面归模型，其余时候归人。只转发 `browser_interact`，不转发 `browser_open` /
+  `browser_eval`；路由模块本身不含任何工具名（架构测试多三条守住这一点）。面板 `BrowserFrame` 的画面
+  变成可聚焦的 `role="application"`：点一下把画面像素换算成视口像素送点击，有焦点时方向键、回车、
+  空格、字母送按键，滚轮送滚动，Ctrl / Meta / Alt 组合不送；有焦点时 250 ms 一帧，否则照旧一秒一帧；
+  409 那句话画在画面底下。**不是一次 tool call**：没有信封、没有策略回合、没有事件。
+- **右栏打开的项目文件可以删、可以改名。** `PreviewPanel` 页眉对项目文件给「重命名」「删除」（会话
+  产出照旧只有「下载」）；删除 `window.confirm`，改名 `window.prompt` 新路径；走 `DELETE …/file` 与
+  新增的 `POST /v1/projects/{id}/file/move`（调 ADR-0116 给 `project_move` 加的那个 `ProjectFileStore.move`，
+  目标已存在 409、源不在 404）。成功之后目录树按项目键失效重取，打开的那一栏关掉或换到新路径。
+- **收起的右栏叫得回来。** 那颗 `aria-expanded` 开关对有目录的会话也画：有产出文件时叫「工作区 N」，
+  否则叫「文件夹」，点开落到目录那一张。
+- **一台部署只画三档。** `offeredPermissions`：第三档永远是这台部署允许的最自动的那一档——
+  `code.unattended` 为 available 的部署画「放手做」不画「自动改动」，原生路径上反过来。四档的语义
+  （信封那两半）一个字没动，取舍的是同时画出来的数量。三档提示改成说清**问什么**：「每一次写入、
+  每一条命令都先问你」／「写入不问，命令先问你」／「写入和命令都不问，只有会毁掉工作的几种命令例外」。
+- ADR-0113 §4 第一条保留原文并加一行指向 ADR-0117；登记 F-43（人操作浏览器走 250 ms 截图轮询、仲裁
+  按进程不按会话）；`docs/windows-quickstart.md` 补一段面板能操作、重命名/删除、「文件夹」开关在哪。
+
+### 2. 证据
+
+- 后端新增：`tests/api/test_browser_input_api.py`（五条：转发、409、503、403、只认四种手势）；
+  `test_browser_mcp_server.py` +2（按点点击、ref 或点二选一）；`test_browser_forward_is_read_only.py`
+  +3（输入模块不计算任何工具名、只有它带请求体、帧模块仍然是一次 GET）；`test_project_api.py` +1
+  （改名、落到已有文件 409、源不在 404）。前端 `BrowserFrame.test.tsx` +3（点击换算、方向键送 /
+  Ctrl 组合不送、409 那句话画出来），`CodePage.test.tsx` +5（删、不答应不删、改名、右栏叫回来、三档）。
+- 门禁：`ruff format --check` / `ruff check` 通过（后者一度报 `dependencies.py` 一处 import 未排序，
+  `--fix` 之后零）；`pyright` 仍是那 14 条 Windows 平台错误，零新增。Windows 本机跑本批碰到的目录
+  （browser input API、system capabilities、code API、browser MCP、architecture、code session、runtime）
+  `540 passed`；沙箱路径那几份在 Windows 上照旧死于盘符路径，在 Linux 容器里
+  （`agent-workbench:local` 挂载检出、`/tmp/venv`）跑 `test_project_api.py` / `test_project_file_store.py` /
+  `test_project_tools.py` / `test_browser_mcp_server.py` / `test_browser_input_api.py`：`200 passed`。
+  前端 lint、typecheck、build 过，vitest **964 条**（上一批 956，+8 全是本批的）。
+- 实测：见 §2.1（合入并重建栈之后补）。
+
+### 3. 顺带看到、没修
+
+- 仲裁按进程：任何会话有回合在跑，人都点不了这个浏览器（F-43 已记）。
+- `PermissionRequested` 的审批卡在「放手做」拦下一条命令时仍然只显示命令，理由只在
+  `PermissionResolved.reason_code` 上——第八十四批 §3 记的那条，本批没动。
+
+---
 ## 2026-09-13（第八十四批）：重复的调用按记录作答、命令的门可以由回合预先答、文件可以删和改名（ADR-0116）
 
 用户睡前贴了一轮的事件记录（`run_3444…3232`，deepseek-chat，23 步 25 次调用）和三句话：

@@ -51,6 +51,7 @@ from agent_workbench.apps.api.routes import (
     approvals,
     artifacts,
     browser,
+    browser_input,
     chat,
     code,
     computer,
@@ -282,6 +283,11 @@ def create_app(
     # "the browser is not up right now", and a router that disappeared would
     # collapse them into one 404.
     app.include_router(browser.router)
+    # The person's way into the same browser (ADR-0117): its own module, so
+    # the read-only forward above keeps the narrowness its test pins, and
+    # mounted unconditionally for the same two-states reason -- the route
+    # answers 503 where there is no browser, which is a fact and not a 404.
+    app.include_router(browser_input.router)
     # Unconditional, and for a sharper version of computer.router's reason: a
     # settings page that vanished when no key was configured would be a page
     # nobody could reach in order to configure one.

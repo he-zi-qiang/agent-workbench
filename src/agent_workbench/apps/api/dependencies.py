@@ -26,6 +26,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from qdrant_client import AsyncQdrantClient
@@ -44,7 +45,7 @@ from agent_workbench.adapters.filesystem.browser import FilesystemDirectoryBrows
 from agent_workbench.adapters.filesystem.project_files import (
     FilesystemProjectFileStoreFactory,
 )
-from agent_workbench.adapters.mcp.client import connect_mcp_client
+from agent_workbench.adapters.mcp.client import MCPClientPort, connect_mcp_client
 from agent_workbench.adapters.mcp.registry_source import discover_bindings
 from agent_workbench.adapters.memory.event_log import InMemoryEventLog
 from agent_workbench.adapters.persistence import (
@@ -189,6 +190,7 @@ from agent_workbench.domain.browser import BROWSER_ALIAS, BROWSER_REMOTE_TOOLS
 from agent_workbench.domain.runner import RUNNER_REMOTE_TOOL
 from agent_workbench.domain.runs import AgentRunRequest, RunBudget
 from agent_workbench.domain.sandbox import SANDBOX_REMOTE_TOOL
+from agent_workbench.domain.schema import JsonObject
 from agent_workbench.domain.tools import ToolName, ToolSpec
 from agent_workbench.ports.agent_executor import AgentExecutor
 from agent_workbench.ports.approval_gate import InteractiveApprovalGate
@@ -445,6 +447,9 @@ class BrowserSlot:
     #: without the project capability, where every session is a flat
     #: workspace and the server's root is the right one.
     project_scope: ProjectFileScope | None = None
+    #: The connection itself, once `open` has made one, for the one caller
+    #: that is not a tool binding (`routes/browser_input.py`, ADR-0117).
+    client: MCPClientPort | None = None
     _resources: AsyncExitStack | None = None
 
     @property
@@ -507,6 +512,12 @@ class BrowserSlot:
             )
 
         self._resources = resources
+        # Kept for the one caller outside the tool loop (ADR-0117): the route
+        # that forwards a person's click into this same browser. The tools
+        # reach the client through their bindings; the person's input has no
+        # binding to go through and is not a tool call, so it takes the
+        # client itself -- and only ever asks it for `browser_interact`.
+        self.client = client
         # Wrapped exactly as the Worker wraps them: a screenshot is bytes the
         # turn should be able to name afterwards, and the workspace is where
         # every other tool in this session leaves one.
@@ -521,11 +532,49 @@ class BrowserSlot:
             ]
         self.bindings.extend(bound)
 
+    async def interact(self, actions: list[dict[str, Any]]) -> list[str]:
+        """Forward a person's input as one ``browser_interact`` call (ADR-0117).
+
+        Not a tool call: no envelope, no policy round, no event. The person is
+        acting on a browser this process runs for them, the way they act on
+        the sandbox preview beside it, and the audit of that is the route's own
+        access log plus what the model sees on its next snapshot. What *is*
+        checked is upstream of here -- the scope, and that no turn is driving.
+        """
+
+        if self.client is None:
+            raise BrowserUnavailableError("the browser connection is not open")
+        answered = await self.client.call_tool(
+            "browser_interact", cast(JsonObject, {"actions": actions})
+        )
+        if answered.is_error:
+            raise BrowserUnavailableError(
+                _first_text(answered.content) or "the browser refused the input"
+            )
+        body = answered.structured_content
+        if isinstance(body, dict):
+            done = cast(dict[str, Any], body).get("done")
+            if isinstance(done, list):
+                return [str(item) for item in cast(list[Any], done)]
+        text = _first_text(answered.content)
+        return [text] if text else []
+
     async def aclose(self) -> None:
         if self._resources is not None:
             await self._resources.aclose()
             self._resources = None
+        self.client = None
         self.bindings.clear()
+
+
+def _first_text(content: object) -> str:
+    """The first text block of an MCP result, or ``""``."""
+
+    for block in cast(tuple[Any, ...], content) if isinstance(content, tuple) else ():
+        text = getattr(block, "text", None)
+        if isinstance(text, str) and text:
+            return text
+    return ""
 
 
 class RerankerRequiredError(RuntimeError):

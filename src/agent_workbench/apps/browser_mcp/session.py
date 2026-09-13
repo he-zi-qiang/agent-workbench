@@ -363,6 +363,11 @@ class PlaywrightSession:
         if action.ref is not None:
             x, y = await self._centre_of(action.ref)
             await page.mouse.click(x, y)
+        elif action.x is not None and action.y is not None:
+            # A point rather than a ref (ADR-0117): the console panel's
+            # forward of a person's click on the frame. Viewport CSS pixels,
+            # the same space the screencast frame is in.
+            await page.mouse.click(action.x, action.y)
         if action.kind == "type":
             await page.keyboard.type(action.text or "")
 

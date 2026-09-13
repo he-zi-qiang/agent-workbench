@@ -298,3 +298,35 @@ def test_an_unreachable_guard_is_not_reported_as_nothing_refused() -> None:
     body = _text(asyncio.run(scenario()))
     assert "could not be reached" in body
     assert "does not say whether any request was refused" in body
+
+
+# --- a click by point (ADR-0117) ---------------------------------------------
+
+
+def test_a_click_may_name_a_point_instead_of_a_ref() -> None:
+    """The console forwards a person's click; a person points at pixels."""
+
+    from agent_workbench.apps.browser_mcp.contract import parse_interact
+
+    request = parse_interact({"actions": [{"kind": "click", "x": 640, "y": 300}]})
+
+    (action,) = request.actions
+    assert action.kind == "click"
+    assert action.ref is None
+    assert (action.x, action.y) == (640, 300)
+
+
+def test_a_click_still_needs_a_ref_or_a_point_and_a_point_needs_both() -> None:
+    from agent_workbench.apps.browser_mcp.contract import (
+        BrowserInputError,
+        parse_interact,
+    )
+
+    with pytest.raises(BrowserInputError, match="ref or a point"):
+        parse_interact({"actions": [{"kind": "click"}]})
+    with pytest.raises(BrowserInputError, match="both x and y"):
+        parse_interact({"actions": [{"kind": "click", "x": 10}]})
+    # A ref still works exactly as before; the point is an addition.
+    request = parse_interact({"actions": [{"kind": "click", "ref": "ref_1"}]})
+    assert request.actions[0].ref == "ref_1"
+    assert request.actions[0].x is None

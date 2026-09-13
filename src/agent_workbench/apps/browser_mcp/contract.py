@@ -109,6 +109,13 @@ _ACTION_SCHEMA: Final[dict[str, Any]] = {
         },
         "text": {"type": "string", "maxLength": MAX_TEXT_CHARS},
         "delta_y": {"type": "integer", "minimum": -20_000, "maximum": 20_000},
+        # A point in the viewport, for a click that has no ref to name
+        # (ADR-0117): the console panel forwards a person's click on the
+        # frame, and a person points at pixels, not at snapshot refs. The
+        # model keeps using refs -- a point is meaningless to something that
+        # reads the page as a tree.
+        "x": {"type": "integer", "minimum": 0, "maximum": 10_000},
+        "y": {"type": "integer", "minimum": 0, "maximum": 10_000},
     },
 }
 
@@ -183,6 +190,10 @@ class Action:
     ref: str | None
     text: str | None
     delta_y: int | None
+    #: A viewport point, the other way to say where a click lands
+    #: (ADR-0117). Both or neither; a click carries a ref or a point.
+    x: int | None = None
+    y: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,8 +254,13 @@ def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
         ref = _optional_string(entry, "ref", 32)
         text = _optional_string(entry, "text", MAX_TEXT_CHARS)
         delta: Any = entry.get("delta_y")
-        if kind == "click" and ref is None:
-            raise BrowserInputError(f"action {index}: click needs a ref")
+        x: Any = entry.get("x")
+        y: Any = entry.get("y")
+        point = isinstance(x, int) and isinstance(y, int)
+        if (x is None) != (y is None):
+            raise BrowserInputError(f"action {index}: a point needs both x and y")
+        if kind == "click" and ref is None and not point:
+            raise BrowserInputError(f"action {index}: click needs a ref or a point")
         if kind in ("type", "key") and text is None:
             raise BrowserInputError(f"action {index}: {kind} needs text")
         if kind == "scroll" and not isinstance(delta, int):
@@ -255,6 +271,8 @@ def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
                 ref=ref,
                 text=text,
                 delta_y=delta if isinstance(delta, int) else None,
+                x=x if point else None,
+                y=y if point else None,
             )
         )
     return InteractRequest(actions=tuple(actions), timeout_ms=_timeout(payload))
