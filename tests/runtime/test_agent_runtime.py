@@ -1996,7 +1996,11 @@ def test_the_same_run_under_a_generous_cost_ceiling_is_stopped_by_steps() -> Non
                     READ_CALL.model_copy(
                         update={
                             "tool_call_id": f"toolu_step_{step}",
-                            "arguments": {"document_id": f"doc_{step}"},
+                            # Lettered, not numbered (ADR-0121): `doc_0` ...
+                            # `doc_19` differ only in a digit, which is one
+                            # shape, refused from the eighth -- and a run
+                            # stopped for looping is no control for cost.
+                            "arguments": {"document_id": f"doc_{_lettered(step)}"},
                         }
                     ),
                 ),
@@ -3229,6 +3233,12 @@ def _asking_many(times: int, tool: str = "read_document") -> FakeModel:
     identical-call breaker never sees them, which is exactly the loop
     ADR-0114 is about -- one tool, a fresh pattern each time, in pursuit of an
     answer that tool cannot give.
+
+    The ids differ in letters, not digits (`_lettered`). `doc_0` ... `doc_25`
+    differ only in a number, and since ADR-0121 that is one *shape* -- the
+    Mario loop's `s[40:80]`, `s[80:120]` -- refused from the eighth. A fresh
+    question per call is the thing this helper exists to model, so it must
+    not collide with the loop the shape guard exists to stop.
     """
 
     return FakeModel(
@@ -3239,7 +3249,7 @@ def _asking_many(times: int, tool: str = "read_document") -> FakeModel:
                     ToolCall(
                         tool_call_id=f"toolu_{turn}",
                         tool_name=tool,
-                        arguments={"document_id": f"doc_{turn}"},
+                        arguments={"document_id": f"doc_{_lettered(turn)}"},
                     ),
                 ),
                 usage=USAGE,
@@ -3248,6 +3258,12 @@ def _asking_many(times: int, tool: str = "read_document") -> FakeModel:
         ]
         + [ScriptedTurn(text="Done.", usage=USAGE)]
     )
+
+
+def _lettered(number: int) -> str:
+    """``number`` spelled in letters (0 -> a, 12 -> bc): unique, and digit-free."""
+
+    return "".join(chr(ord("a") + int(digit)) for digit in str(number))
 
 
 def _tool_texts(model: FakeModel) -> list[str]:
@@ -3317,7 +3333,9 @@ def test_two_tools_do_not_add_up_to_one_nudge() -> None:
                     ToolCall(
                         tool_call_id=f"toolu_{turn}",
                         tool_name="read_document" if turn % 2 else "grep_document",
-                        arguments={"document_id": f"doc_{turn}"},
+                        # Lettered for the reason `_asking_many` gives
+                        # (ADR-0121): numbered ids are one shape per tool.
+                        arguments={"document_id": f"doc_{_lettered(turn)}"},
                     ),
                 ),
                 usage=USAGE,
@@ -3364,3 +3382,178 @@ def test_the_nudge_is_written_to_the_message_and_not_to_the_event() -> None:
     assert len(completed) == 25
     assert {payload.output_bytes for payload in completed} == {len("ok")}
     assert len(_tool_texts(model)[24]) > len("ok")
+
+
+# -- a loop that only moves a number (ADR-0121) ------------------------------
+
+
+def _moving_a_number(tool: str, times: int, argument: str) -> FakeModel:
+    """A model that asks `tool` the same thing `times` times, one number moved.
+
+    `argument` is a template with `{n}` in it. The Mario turn this models ran
+    `python3 -c` over a slice of `AGENTS.md` with the offset moved each time,
+    113 calls, and never wrote a byte.
+    """
+
+    return FakeModel(
+        [
+            ScriptedTurn(
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_shape_{turn}",
+                        tool_name=tool,
+                        arguments={"command": argument.format(n=turn * 40)},
+                    ),
+                ),
+                usage=USAGE,
+            )
+            for turn in range(times)
+        ]
+        + [
+            ScriptedTurn(
+                text="I kept measuring one thing; here is what I have.", usage=USAGE
+            )
+        ]
+    )
+
+
+def test_a_read_loop_that_only_moves_a_number_is_refused_from_the_eighth_call() -> None:
+    """Seven run; the eighth and ninth are refused and told why; the tenth
+    withdraws the tools, and the run writes what it has."""
+
+    recorder = _Recorder("read_document")
+    model = _moving_a_number("read_document", 10, "print(s[{n}:{n}+40])")
+
+    run = _execute(
+        model,
+        request=_request(budget=RunBudget(max_steps=30, max_tool_calls=30)),
+        bindings=[recorder.binding],
+    )
+
+    assert len(recorder.calls) == 7
+    texts = _tool_texts(model)
+    refused = [text for text in texts if "only in its numbers" in text]
+    assert len(refused) == 3
+    assert "call 8 of read_document" in refused[0]
+    assert "tools are withdrawn" not in refused[1]
+    assert "tools are withdrawn" in refused[2]
+    # The request after the third refusal carried no tools, and the run ended
+    # on the model's own words rather than on a ceiling.
+    assert model.requests[-1].tools == ()
+    assert run.outcome.status == "completed"
+    assert run.outcome.output_text == "I kept measuring one thing; here is what I have."
+
+
+def test_a_command_loop_is_not_reset_by_its_own_dispatch() -> None:
+    """The Mario loop exactly: the looping call is itself non-read.
+
+    Every `python3 -c` dispatch moves the world version, so a count that reset
+    on any change would never see a command loop at all. A shape's own effect
+    must not count against its own repeat.
+    """
+
+    runner = _Recorder("run_command", risk="write")
+    model = _moving_a_number(
+        "run_command",
+        10,
+        "python3 -c \"s=open('AGENTS.md').read(); print(s[{n}:{n}+40])\"",
+    )
+
+    _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=30, max_tool_calls=30),
+            tool_names=("run_command",),
+            max_tool_risk="write",
+            approval_required_risks=(),
+        ),
+        bindings=[runner.binding],
+    )
+
+    assert len(runner.calls) == 7
+    assert sum("only in its numbers" in text for text in _tool_texts(model)) == 3
+
+
+def test_run_edit_run_is_not_a_loop() -> None:
+    """The control: the same test command around an edit, twelve times.
+
+    `pytest tests/test_1.py`, edit, `pytest tests/test_2.py`, edit, ... is one
+    shape repeated, and it is the ordinary rhythm of fixing things. The edit
+    between each run changes the files, so each run is a fresh question.
+    """
+
+    runner = _Recorder("run_command", risk="write")
+    editor = _Recorder("edit_file", risk="write")
+    turns: list[ScriptedTurn] = []
+    for index in range(12):
+        turns.append(
+            ScriptedTurn(
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_run_{index}",
+                        tool_name="run_command",
+                        arguments={"command": f"pytest tests/test_{index}.py"},
+                    ),
+                ),
+                usage=USAGE,
+            )
+        )
+        turns.append(
+            ScriptedTurn(
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id=f"toolu_edit_{index}",
+                        tool_name="edit_file",
+                        arguments={"find": "bug", "replace": f"fix number {index}"},
+                    ),
+                ),
+                usage=USAGE,
+            )
+        )
+    turns.append(ScriptedTurn(text="All fixed.", usage=USAGE))
+    model = FakeModel(turns)
+
+    run = _execute(
+        model,
+        request=_request(
+            budget=RunBudget(max_steps=40, max_tool_calls=40),
+            tool_names=("run_command", "edit_file"),
+            max_tool_risk="write",
+            approval_required_risks=(),
+        ),
+        bindings=[runner.binding, editor.binding],
+    )
+
+    assert len(runner.calls) == 12
+    assert len(editor.calls) == 12
+    assert all("only in its numbers" not in text for text in _tool_texts(model))
+    assert run.outcome.status == "completed"
+
+
+def test_a_shape_blanks_numbers_and_digits_and_keeps_everything_else() -> None:
+    from agent_workbench.runtime.agent_runtime import _call_shape
+
+    def shape(arguments: dict[str, object]) -> str:
+        return _call_shape(
+            ToolCall(tool_call_id="toolu_x", tool_name="t", arguments=arguments)
+        )
+
+    # Digits inside a string are numbers: a command is one string.
+    assert shape({"command": "print(s[40:80])"}) == shape(
+        {"command": "print(s[120:160])"}
+    )
+    assert shape({"path": "a.txt", "offset": 0}) == shape(
+        {"path": "a.txt", "offset": 500}
+    )
+    # Anything that is not a digit still distinguishes two questions.
+    assert shape({"command": "print(s[40:80])"}) != shape(
+        {"command": "print(t[40:80])"}
+    )
+    assert shape({"path": "a.txt", "offset": 0}) != shape(
+        {"path": "b.txt", "offset": 0}
+    )
+    # Booleans are not numbers here, and nesting is followed.
+    assert shape({"recursive": True}) != shape({"recursive": False})
+    assert shape({"actions": [{"x": 1, "y": 2}]}) == shape(
+        {"actions": [{"x": 9, "y": 8}]}
+    )

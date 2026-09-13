@@ -97,6 +97,7 @@ import type { StepGroup } from "../../components/stepGroups";
 import { splitThought } from "../../components/thought";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
+import { foldSteps, type FoldedStep } from "./foldSteps";
 import { stopNote } from "./stopNote";
 import type { CodeTurnBlock, TurnStep } from "./turnBlocks";
 
@@ -169,23 +170,35 @@ export function CodeTurn({
 
       {block.steps.length === 0 ? null : (
         <ol aria-label="这一轮做了什么" className="aw-code-steps">
-          {block.steps.map((step) => (
-            <TurnStepRow
-              // Keyed by the model call, not the group. The same call is
-              // `model:mc_2` while it is open and `tool:call_x` once its
-              // ModelCompleted merges it into the call it named -- keying by
-              // the group would remount at exactly that moment and reset the
-              // disclosure the reader is mid-sentence in.
-              key={step.modelCallId ?? step.key}
-              live={
-                step.modelCallId !== "" &&
-                step.modelCallId === liveThinkingCallId
-              }
-              liveThinking={liveThinking}
-              step={step}
-              toolProgress={toolProgress}
-            />
-          ))}
+          {/* 连着做同一件事的几步折成一行（ADR-0121）：一轮 113 步一样的命令，
+              此前是 113 行。 */}
+          {foldSteps(block.steps, { liveCallId: liveThinkingCallId }).map((item) =>
+            item.kind === "fold" ? (
+              <FoldRow
+                fold={item}
+                key={item.key}
+                liveThinking={liveThinking}
+                liveThinkingCallId={liveThinkingCallId}
+                toolProgress={toolProgress}
+              />
+            ) : (
+              <TurnStepRow
+                // Keyed by the model call, not the group. The same call is
+                // `model:mc_2` while it is open and `tool:call_x` once its
+                // ModelCompleted merges it into the call it named -- keying by
+                // the group would remount at exactly that moment and reset the
+                // disclosure the reader is mid-sentence in.
+                key={item.step.modelCallId ?? item.step.key}
+                live={
+                  item.step.modelCallId !== "" &&
+                  item.step.modelCallId === liveThinkingCallId
+                }
+                liveThinking={liveThinking}
+                step={item.step}
+                toolProgress={toolProgress}
+              />
+            ),
+          )}
         </ol>
       )}
 
@@ -271,6 +284,88 @@ export function CodeTurn({
           </ol>
         </details>
       )}
+    </li>
+  );
+}
+
+/**
+ * 连着做同一件事的那几步，收成一行（ADR-0121）。
+ *
+ * 收着时是一行摘要：动作、次数、最后那一步的对象、结局。展开是逐条，和没折时一模
+ * 一样的行。**正在跑的那一步收着也看得见**，就挂在摘要底下——它的命令、进度是读者
+ * 此刻在等的东西，这是「流式输出」那一半：列表不再一步长一行，摘要上的数字在涨，
+ * 正在发生的那一条始终在眼前。
+ *
+ * 展开与否是这一行自己的状态，按 `fold.key` 挂着；key 由第一步派生，一串正在跑的
+ * 命令多一步时这一行不重新挂载，读者展开过它就不会被收回去。
+ */
+function FoldRow({
+  fold,
+  liveThinking,
+  liveThinkingCallId,
+  toolProgress,
+}: {
+  fold: Extract<FoldedStep, { kind: "fold" }>;
+  liveThinking: string;
+  liveThinkingCallId: string;
+  toolProgress: ReadonlyMap<string, ToolProgressView>;
+}) {
+  const [open, setOpen] = useState(false);
+  const last = fold.steps[fold.steps.length - 1];
+  const running = fold.steps.find((step) => step.group?.outcome === "running");
+  const toolName =
+    last?.group === null || last?.group === undefined
+      ? null
+      : presentActivity(last.group).toolName;
+  const subject = last?.group?.subject ?? null;
+  const row = (step: TurnStep) => (
+    <TurnStepRow
+      key={step.modelCallId ?? step.key}
+      live={step.modelCallId !== "" && step.modelCallId === liveThinkingCallId}
+      liveThinking={liveThinking}
+      step={step}
+      toolProgress={toolProgress}
+    />
+  );
+
+  return (
+    <li
+      aria-current={running === undefined ? undefined : "step"}
+      className={`aw-code-step aw-code-fold${running === undefined ? "" : " is-running"}`}
+    >
+      <details className={`aw-code-action-fold is-${fold.outcome}`} open={open}>
+        <summary
+          className={`aw-code-action is-${fold.outcome}`}
+          // 开合由这一行自己说了算，不交给 `<details>` 的原生切换：原生切换加上
+          // 受控的 `open`，一次点击会被切两次；键盘在摘要上按回车或空格，浏览器
+          // 派发的也是这一个 click，所以键盘照样能开合。
+          onClick={(event) => {
+            event.preventDefault();
+            setOpen((held) => !held);
+          }}
+        >
+          <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+          <ActionIcon outcome={fold.outcome} toolName={toolName} />
+          <span className="aw-code-action-title">{fold.title}</span>
+          <span className="aw-code-fold-count">×{fold.steps.length}</span>
+          {subject === null ? null : (
+            <span className="aw-code-action-subject" title={subject}>
+              {subject}
+            </span>
+          )}
+          <span className="aw-code-action-outcome">{OUTCOME_LABELS[fold.outcome]}</span>
+        </summary>
+        {open ? (
+          <ol aria-label={`${fold.title}，共 ${String(fold.steps.length)} 次`} className="aw-code-fold-steps">
+            {fold.steps.map(row)}
+          </ol>
+        ) : null}
+      </details>
+      {!open && running !== undefined ? (
+        <ol aria-label="正在进行的这一步" className="aw-code-fold-live">
+          {row(running)}
+        </ol>
+      ) : null}
     </li>
   );
 }
