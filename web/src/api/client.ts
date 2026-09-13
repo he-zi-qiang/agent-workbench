@@ -822,12 +822,42 @@ export async function fetchBrowserFrame(
   });
 }
 
-/** 送进模型那个浏览器的一次输入：一个视口坐标上的点击、一个按键或一次滚动。 */
+/**
+ * 送进模型那个浏览器的一次输入。
+ *
+ * `key` 是一次轻点（按下和抬起一口气做完）；`key_down` / `key_up` 是它的两半，
+ * 面板用的是两半（ADR-0120）：游戏每一帧读一次「这个键是不是按着」，一次轻点在
+ * 下一帧之前就结束了，所以按住方向键马里奥一步也不走。鼠标的三件同理——按住、
+ * 拖动、松开。
+ */
 export type BrowserInputAction =
   | { kind: "click"; x: number; y: number }
   | { kind: "key"; text: string }
+  | { kind: "key_down"; text: string }
+  | { kind: "key_up"; text: string }
   | { kind: "type"; text: string }
+  | { kind: "mouse_down"; x: number; y: number }
+  | { kind: "mouse_move"; x: number; y: number }
+  | { kind: "mouse_up"; x: number; y: number }
   | { kind: "scroll"; delta_y: number };
+
+/**
+ * 在模型的浏览器里打开项目里的一个文件（ADR-0120）。
+ *
+ * 给的是项目 id 和相对路径，没有地址：人拿到的是「打开这个我在文件夹里看得见
+ * 的文件」，不是一条地址栏。`file://` 地址在服务端拼，和模型的 `browser_open`
+ * 走同一道先查后拼。
+ */
+export async function openProjectFileInBrowser(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+): Promise<{ title: string; turns_in_flight: number }> {
+  return apiRequest(identity, "/v1/browser/open", {
+    method: "POST",
+    body: { project_id: projectId, path },
+  });
+}
 
 /**
  * 把人的输入送进模型的浏览器（ADR-0117，仲裁见 ADR-0119）。

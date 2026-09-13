@@ -179,3 +179,19 @@ def test_the_frame_module_is_still_a_read_after_the_input_route_arrived() -> Non
     source = SOURCE.read_text(encoding="utf-8")
     assert "browser_input" not in source
     assert ACTING_TOOL_NAMES & _computed_literals(SOURCE) == set()
+
+
+def test_a_person_may_open_a_project_file_but_never_name_an_address() -> None:
+    """ADR-0120's widening, and its edge.
+
+    A person may put one of their own project files on screen -- the folder
+    view and the browser tab were two halves that could not reach each other.
+    What they get is "open this file", not an address bar: the request is a
+    project id and a relative path, and the `file://` URL is built on the API
+    side through the same check-then-join the model's `browser_open` uses. A
+    `url` field appearing here is the day that stopped being true.
+    """
+
+    fields = set(browser_input.BrowserOpenRequest.model_fields)
+    assert fields == {"project_id", "path"}, fields
+    assert browser_input.BrowserOpenRequest.model_config.get("extra") == "forbid"

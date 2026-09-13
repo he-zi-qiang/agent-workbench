@@ -37,9 +37,10 @@ from dataclasses import replace
 from agent_workbench.adapters.mcp.naming import tool_name_for
 from agent_workbench.application.project_file_scope import ProjectFileScope
 from agent_workbench.domain.browser import BROWSER_ALIAS
-from agent_workbench.domain.errors import ErrorInfo
+from agent_workbench.domain.errors import ErrorInfo, NotFoundError
 from agent_workbench.domain.project_files import ProjectPathError
 from agent_workbench.domain.tools import ToolResult
+from agent_workbench.ports.project_files import ProjectFileStore
 from agent_workbench.ports.tools import ToolBinding, ToolInvocation
 
 #: The local name discovery gives the server's ``browser_open`` -- derived by
@@ -51,6 +52,28 @@ _open_name = tool_name_for(BROWSER_ALIAS, "browser_open")
 # unreachable, and the assertion is what tells the type checker so.
 assert isinstance(_open_name, str), _open_name
 OPEN_TOOL_LOCAL_NAME: str = _open_name
+
+
+async def project_file_url(store: ProjectFileStore, path: str) -> str:
+    """The ``file://`` URL the browser opens for one project file.
+
+    **The one place a project path becomes a browser address**, and it has two
+    callers: the model's ``browser_open`` below, and -- since ADR-0120 -- the
+    console's "open in browser" on a file a person picked in the folder view.
+    Written once because ``ProjectFileStore.working_directory`` says, in its own
+    docstring, that it is never a base to join a path onto: the join below is
+    only safe *behind* ``store.exists``, which runs the sandbox's lexical and
+    physical checks, and a second copy of these three lines is a second place
+    that ordering could be lost.
+
+    Raises ``ProjectPathError`` for a path the store refuses (``..``, an
+    absolute path, a symlink out of the root) and ``NotFoundError`` for one that
+    is simply not there; both callers already speak those two errors.
+    """
+
+    if not await store.exists(path):
+        raise NotFoundError(f"{path} is not in the project directory")
+    return (store.working_directory / path).as_uri()
 
 
 def open_within_project(binding: ToolBinding, scope: ProjectFileScope) -> ToolBinding:
@@ -76,7 +99,7 @@ def open_within_project(binding: ToolBinding, scope: ProjectFileScope) -> ToolBi
         if store is None or not isinstance(path, str) or "url" in arguments:
             return await inner(invocation)
         try:
-            present = await store.exists(path)
+            target = await project_file_url(store, path)
         except ProjectPathError as error:
             return ToolResult.failed(
                 invocation.call,
@@ -86,20 +109,15 @@ def open_within_project(binding: ToolBinding, scope: ProjectFileScope) -> ToolBi
                     retryable=False,
                 ),
             )
-        if not present:
+        except NotFoundError as error:
             # Said here, in the tool's own vocabulary, rather than left to the
             # browser's `ERR_FILE_NOT_FOUND`: the model wrote this path a
             # moment ago with `project_write`, and the sentence it needs is
             # the one every other project tool would give it.
             return ToolResult.failed(
                 invocation.call,
-                ErrorInfo(
-                    code="not_found",
-                    message=f"{path} is not in the project directory",
-                    retryable=False,
-                ),
+                ErrorInfo(code="not_found", message=str(error), retryable=False),
             )
-        target = (store.working_directory / path).as_uri()
         rewritten = invocation.call.model_copy(
             update={
                 "arguments": {
@@ -117,4 +135,4 @@ def open_within_project(binding: ToolBinding, scope: ProjectFileScope) -> ToolBi
     return ToolBinding(spec=binding.spec, handler=handle)
 
 
-__all__ = ["OPEN_TOOL_LOCAL_NAME", "open_within_project"]
+__all__ = ["OPEN_TOOL_LOCAL_NAME", "open_within_project", "project_file_url"]

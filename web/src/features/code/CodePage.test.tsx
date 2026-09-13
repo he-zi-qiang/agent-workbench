@@ -27,6 +27,7 @@ import {
   listCodeSessions,
   listProjectFiles,
   moveProjectFile,
+  openProjectFileInBrowser,
   putCodeWorkspaceFile,
   readProjectFile,
   renameCodeSession,
@@ -66,6 +67,10 @@ vi.mock("../../api/client", async () => ({
       size_bytes: 12,
       modified_at: "2026-09-13T00:00:00Z",
     }),
+  ),
+  // 文件夹里的 `.html` 在浏览器里打开（ADR-0120）。默认成功。
+  openProjectFileInBrowser: vi.fn(() =>
+    Promise.resolve({ title: "超级马里奥", turns_in_flight: 0 }),
   ),
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
@@ -4204,5 +4209,89 @@ describe("一台部署只画三档", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "只做计划" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "改前问我" })).toBeInTheDocument();
+  });
+});
+
+describe("文件夹里的网页在浏览器里打开（ADR-0120）", () => {
+  // 用户的原话：「浏览器要和文件夹里的文件进行互通，比如文件夹中的html文件可以
+  // 点击预览在浏览器中」。
+  function withFiles() {
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "这个文件夹里的",
+          last_activity_at: "2026-08-22T09:00:00Z",
+          project_id: PROJECT.project_id,
+        },
+      ],
+    });
+    vi.mocked(listProjectFiles).mockResolvedValue({
+      path: "",
+      entries: [
+        {
+          path: "mario.html",
+          kind: "file",
+          size_bytes: 20,
+          modified_at: "2026-08-22T00:00:00Z",
+        },
+        {
+          path: "notes.txt",
+          kind: "file",
+          size_bytes: 12,
+          modified_at: "2026-08-22T00:00:00Z",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(readProjectFile).mockImplementation((_identity, _project, path) =>
+      Promise.resolve({
+        path,
+        text: path.endsWith(".html") ? "<h1>mario</h1>" : "hello notes",
+        size_bytes: 12,
+        is_text: true,
+        modified_at: "2026-08-22T00:00:00Z",
+      }),
+    );
+  }
+
+  it("点开一个 .html，「在浏览器中打开」把它送进浏览器，并跳到浏览器那一张", async () => {
+    withFiles();
+    const user = userEvent.setup();
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /mario\.html/ }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    await user.click(
+      await within(pane).findByRole("button", { name: "在浏览器中打开" }),
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(openProjectFileInBrowser)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(openProjectFileInBrowser).mock.calls[0]?.[1]).toBe(
+      PROJECT.project_id,
+    );
+    expect(vi.mocked(openProjectFileInBrowser).mock.calls[0]?.[2]).toBe("mario.html");
+    await waitFor(() => {
+      expect(within(pane).getByRole("tab", { name: "浏览器" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+  });
+
+  it("不是网页的文件没有这颗按钮", async () => {
+    withFiles();
+    const user = userEvent.setup();
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    await within(pane).findByText("hello notes");
+
+    expect(
+      within(pane).queryByRole("button", { name: "在浏览器中打开" }),
+    ).not.toBeInTheDocument();
   });
 });

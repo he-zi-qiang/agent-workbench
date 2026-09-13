@@ -60,6 +60,17 @@ OPEN_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "maximum": MAX_TIMEOUT_MS,
             "description": f"Default {DEFAULT_TIMEOUT_MS}.",
         },
+        # Who opened it (ADR-0120), the same flag and the same reason as on
+        # `browser_interact`: the console sets it when a person asks for one
+        # of their project's files in this browser, so the model's next call
+        # can be told the page it was working on is no longer the one on
+        # screen.
+        "by_person": {
+            "type": "boolean",
+            "description": (
+                "Set by the console when a person opened this page. Leave it out."
+            ),
+        },
     },
 }
 
@@ -101,7 +112,25 @@ _ACTION_SCHEMA: Final[dict[str, Any]] = {
     "additionalProperties": False,
     "required": ["kind"],
     "properties": {
-        "kind": {"type": "string", "enum": ["click", "type", "key", "scroll"]},
+        # `key` is a tap: down and up in one breath. `key_down` / `key_up`
+        # are the two halves, for a page that reads a key's *state* every
+        # frame -- a game loop that walks while ArrowRight is held never sees
+        # a tap, because no frame runs between its down and its up (ADR-0120).
+        # The mouse halves are the same fact for a press-and-hold or a drag.
+        "kind": {
+            "type": "string",
+            "enum": [
+                "click",
+                "type",
+                "key",
+                "scroll",
+                "key_down",
+                "key_up",
+                "mouse_down",
+                "mouse_up",
+                "mouse_move",
+            ],
+        },
         "ref": {
             "type": "string",
             "maxLength": 32,
@@ -126,9 +155,13 @@ INTERACT_INPUT_SCHEMA: Final[dict[str, Any]] = {
     "description": (
         "Run a short batch of input actions in order, stopping at the first "
         "failure. `click` needs a ref; `type` needs text and usually a ref; "
-        "`key` sends one key name such as Enter or Tab; `scroll` takes "
-        "delta_y. Take a fresh snapshot afterwards -- refs from before the "
-        "batch may no longer mean anything."
+        "`key` taps one key name such as Enter or Tab; `scroll` takes "
+        "delta_y. To *hold* a key -- a game that moves while ArrowRight is "
+        "down -- send `key_down`, let time pass (a `browser_eval` that "
+        "waits), then `key_up`: a tap is over before the page's next frame. "
+        "`mouse_down` / `mouse_move` / `mouse_up` take an x, y point for a "
+        "press-and-hold or a drag. Take a fresh snapshot afterwards -- refs "
+        "from before the batch may no longer mean anything."
     ),
     "properties": {
         "actions": {
@@ -189,6 +222,8 @@ class OpenRequest:
     url: str | None
     workspace_path: str | None
     timeout_ms: int
+    #: Whether a person opened this page from the console (ADR-0120).
+    by_person: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,7 +234,17 @@ class EvalRequest:
 
 @dataclass(frozen=True, slots=True)
 class Action:
-    kind: Literal["click", "type", "key", "scroll"]
+    kind: Literal[
+        "click",
+        "type",
+        "key",
+        "scroll",
+        "key_down",
+        "key_up",
+        "mouse_down",
+        "mouse_up",
+        "mouse_move",
+    ]
     ref: str | None
     text: str | None
     delta_y: int | None
@@ -234,7 +279,12 @@ def parse_open(arguments: dict[str, Any]) -> OpenRequest:
         raise BrowserInputError(
             "workspace_path must be relative and must not contain '..'"
         )
-    return OpenRequest(url=url, workspace_path=path, timeout_ms=_timeout(payload))
+    return OpenRequest(
+        url=url,
+        workspace_path=path,
+        timeout_ms=_timeout(payload),
+        by_person=bool(payload.get("by_person") or False),
+    )
 
 
 def parse_eval(arguments: dict[str, Any]) -> EvalRequest:
@@ -246,6 +296,20 @@ def parse_eval(arguments: dict[str, Any]) -> EvalRequest:
     if len(expression) > MAX_EXPRESSION_CHARS:
         raise BrowserInputError(f"expression exceeds {MAX_EXPRESSION_CHARS} characters")
     return EvalRequest(expression=expression, timeout_ms=_timeout(payload))
+
+
+#: Every action kind `browser_interact` performs, in the schema's order.
+_ACTION_KINDS: Final[tuple[str, ...]] = (
+    "click",
+    "type",
+    "key",
+    "scroll",
+    "key_down",
+    "key_up",
+    "mouse_down",
+    "mouse_up",
+    "mouse_move",
+)
 
 
 def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
@@ -264,7 +328,7 @@ def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
             raise BrowserInputError(f"action {index} is not an object")
         entry = cast(dict[str, Any], item)
         kind: Any = entry.get("kind")
-        if kind not in ("click", "type", "key", "scroll"):
+        if kind not in _ACTION_KINDS:
             raise BrowserInputError(f"action {index} has an unknown kind {kind!r}")
         ref = _optional_string(entry, "ref", 32)
         text = _optional_string(entry, "text", MAX_TEXT_CHARS)
@@ -276,8 +340,10 @@ def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
             raise BrowserInputError(f"action {index}: a point needs both x and y")
         if kind == "click" and ref is None and not point:
             raise BrowserInputError(f"action {index}: click needs a ref or a point")
-        if kind in ("type", "key") and text is None:
+        if kind in ("type", "key", "key_down", "key_up") and text is None:
             raise BrowserInputError(f"action {index}: {kind} needs text")
+        if kind in ("mouse_down", "mouse_up", "mouse_move") and not point:
+            raise BrowserInputError(f"action {index}: {kind} needs x and y")
         if kind == "scroll" and not isinstance(delta, int):
             raise BrowserInputError(f"action {index}: scroll needs delta_y")
         actions.append(
