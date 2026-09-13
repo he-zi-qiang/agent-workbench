@@ -64,6 +64,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
+      headers: { get: () => null },
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     render(<BrowserFrame identity={IDENTITY} />);
@@ -95,6 +96,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
+      headers: { get: () => null },
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     const view = render(<BrowserFrame identity={IDENTITY} />);
@@ -111,6 +113,7 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
   const frameResponse = {
     ok: true,
     status: 200,
+    headers: { get: () => null },
     blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
   };
 
@@ -177,11 +180,14 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
     });
   });
 
-  it("模型在跑的那一轮里被拒，那句话画出来而不是悄悄丢掉，之后自己退下去", async () => {
+  it("模型这一轮也在动这个页面时，输入照样送进去，只是说一声", async () => {
+    // ADR-0119：这条测试的上一版断言的是 409 和「等这一轮结束再点」。一个
+    // 「写完页面再去浏览器里验」的回合要跑几分钟，而人想按方向键的正是那几
+    // 分钟——所以那条规则每次该放行的时候都在拒绝。
     answering({
-      ok: false,
-      status: 409,
-      body: { detail: "the model is driving the browser: 1 coding turn(s) in flight" },
+      ok: true,
+      status: 200,
+      body: { done: ["action 0 (click) ok"], turns_in_flight: 1 },
     });
     render(<BrowserFrame identity={IDENTITY} refusalMs={50} />);
     const image = await waitFor(() => screen.getByAltText("浏览器当前画面"));
@@ -189,12 +195,39 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
     fireEvent.click(image, { clientX: 5, clientY: 5 });
 
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toMatch(/模型正在操作/);
+      expect(screen.getByRole("status").textContent).toMatch(/送进去了/);
     });
-    // 实测里那一轮 11 秒就完了，这句话却挂到下一次点击——读者看到的是「还是
-    // 不能操作」。到时候它要自己退回平常的提示。
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).endsWith("/v1/browser/input"),
+      ),
+    ).toBe(true);
+    // 说完自己退下去，和别的那几句一样。
     await waitFor(() => {
-      expect(screen.getByRole("status").textContent).not.toMatch(/模型正在操作/);
+      expect(screen.getByRole("status").textContent).not.toMatch(/送进去了/);
+    });
+  });
+
+  it("画面底下写着这一页在那台机器上的路径", async () => {
+    // 读者问这块面的第一个问题是「这是哪个文件」。地址跟着帧一起来（ADR-0119），
+    // 百分号编码在这一层解开——`windows测试` 是这件事被报上来的那个目录。
+    fetchMock.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === "X-Browser-Url"
+              ? "file:///projects/windows%E6%B5%8B%E8%AF%95/mario.html"
+              : null,
+        },
+        blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
+      }),
+    );
+    render(<BrowserFrame identity={IDENTITY} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("/projects/windows测试/mario.html")).toBeTruthy();
     });
   });
 });

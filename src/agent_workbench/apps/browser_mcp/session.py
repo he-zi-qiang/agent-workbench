@@ -88,11 +88,13 @@ class BrowserSession(Protocol):
 
     async def open(self, target: str, timeout_ms: int) -> OpenOutcome: ...
     def workspace_url(self, relative: str) -> str: ...
+    def current_url(self) -> str | None: ...
     async def snapshot(self, max_chars: int) -> str: ...
     async def evaluate(self, expression: str, timeout_ms: int) -> Any: ...
     async def interact(
-        self, actions: tuple[Action, ...], timeout_ms: int
+        self, actions: tuple[Action, ...], timeout_ms: int, *, by_person: bool = False
     ) -> list[str]: ...
+    def take_person_note(self) -> str | None: ...
     async def screenshot(self, *, full_page: bool, quality: int) -> bytes: ...
     def drain_logs(self, limit: int) -> tuple[tuple[LogEntry, ...], int]: ...
     def latest_frame(self) -> bytes | None: ...
@@ -121,6 +123,12 @@ class PlaywrightSession:
     _dropped: int = 0
     _refs: dict[str, int] = field(default_factory=dict[str, int])
     _frame: bytes | None = None
+    #: How many of a person's gestures have landed on this page since the last
+    #: time a model call was told about them (ADR-0119). The person and the
+    #: model drive the same page now, and this is the whole of what keeps that
+    #: honest: not a lock, but a sentence on the model's next result saying the
+    #: page it is about to reason over was touched by somebody else.
+    _person_actions: int = 0
     #: Strong references to fire-and-forget tasks. Without them the event loop
     #: holds only a weak one and a frame acknowledgement can be collected before
     #: it is sent -- which does not raise, it just stops the screencast.
@@ -338,7 +346,9 @@ class PlaywrightSession:
             ),
         )
 
-    async def interact(self, actions: tuple[Action, ...], timeout_ms: int) -> list[str]:
+    async def interact(
+        self, actions: tuple[Action, ...], timeout_ms: int, *, by_person: bool = False
+    ) -> list[str]:
         done: list[str] = []
         for index, action in enumerate(actions):
             try:
@@ -349,7 +359,50 @@ class PlaywrightSession:
                 # this one landed.
                 break
             done.append(f"action {index} ({action.kind}) ok")
+            if by_person:
+                # Counted per action that landed, not per request: what the
+                # model needs to be told is that the page moved under it, and
+                # one request carrying six arrow keys moved it six times.
+                self._person_actions += 1
         return done
+
+    def take_person_note(self) -> str | None:
+        """What a person did to this page since the model was last told.
+
+        Read once and cleared, so the note lands on exactly one model call --
+        the first one after the person's gesture. Repeating it every call
+        afterwards would train the model to skip it, and the fact it carries
+        is about a moment, not a state.
+        """
+
+        landed = self._person_actions
+        if not landed:
+            return None
+        self._person_actions = 0
+        return (
+            f"Note: a person operated this page directly ({landed} "
+            f"action{'s' if landed != 1 else ''}) from the console panel while "
+            "you were working. Anything you read before that may have moved, "
+            "and refs from your last browser_snapshot may name different "
+            "elements or none. Take a fresh snapshot before acting on one."
+        )
+
+    def current_url(self) -> str | None:
+        """Where the page is, for the console panel (ADR-0119).
+
+        A panel that shows a rendered page and not its address cannot answer
+        the first question a person asks of it -- *which* file is this? -- and
+        on this deployment the answer is a path inside the browser container,
+        which is not a thing the person can otherwise see. ``about:blank`` is
+        reported as nothing, because a browser that has opened nothing is the
+        204 the frame route already has a shape for.
+        """
+
+        page = self._page
+        if page is None:
+            return None
+        url = str(page.url or "")
+        return url or None if url != "about:blank" else None
 
     async def _perform(self, action: Action) -> None:
         page = self._page

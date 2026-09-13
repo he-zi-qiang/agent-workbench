@@ -539,13 +539,20 @@ class BrowserSlot:
         acting on a browser this process runs for them, the way they act on
         the sandbox preview beside it, and the audit of that is the route's own
         access log plus what the model sees on its next snapshot. What *is*
-        checked is upstream of here -- the scope, and that no turn is driving.
+        checked is upstream of here -- the scope, and that the browser is up.
+
+        ``by_person`` is a constant and not a parameter, because this method is
+        the person's path by construction: the model reaches the same browser
+        through its tool bindings, which never come through here. The flag is
+        what lets the browser tell the model, once, that the page moved under
+        it (ADR-0119) -- the arbitration that replaced the lock.
         """
 
         if self.client is None:
             raise BrowserUnavailableError("the browser connection is not open")
         answered = await self.client.call_tool(
-            "browser_interact", cast(JsonObject, {"actions": actions})
+            "browser_interact",
+            cast(JsonObject, {"actions": actions, "by_person": True}),
         )
         if answered.is_error:
             raise BrowserUnavailableError(

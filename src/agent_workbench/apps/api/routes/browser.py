@@ -39,6 +39,13 @@ from agent_workbench.apps.api.state import dependencies_of
 
 BROWSER_PREFIX: Final[str] = "/v1/browser"
 
+#: The header the browser server puts the frame's own address on, forwarded
+#: here under the same name (ADR-0119). Spelled here rather than imported from
+#: `apps/browser_mcp/server.py`: the API process does not import the browser
+#: server -- it talks to it over loopback -- and `tests/architecture` holds
+#: that separation. A test asserts the two spellings agree.
+URL_HEADER: Final[str] = "X-Browser-Url"
+
 #: A frame is tens of kilobytes over loopback. Short, because a console polling
 #: this must not stack requests against a wedged server -- the same reasoning
 #: and very nearly the same number as the computer forward.
@@ -86,14 +93,20 @@ async def frame(request: Request) -> Response:
             content=b"",
             headers={"X-Browser-Detail": f"browser server said {answered.status_code}"},
         )
-    return Response(
-        answered.content,
-        media_type="image/jpeg",
+    headers = {
         # The frame changes several times a second and a cached one is worse
         # than none: a panel showing a stale screenshot of a page that has
         # since navigated is actively misleading.
-        headers={"Cache-Control": "no-store"},
-    )
+        "Cache-Control": "no-store"
+    }
+    # Forwarded, not derived (ADR-0119). This process does not know what page
+    # the browser is on -- it holds a URL to a frame endpoint, not a browser --
+    # and the one component that does know puts the answer on the frame it
+    # composed, so the address and the picture cannot disagree.
+    where = answered.headers.get(URL_HEADER)
+    if where:
+        headers[URL_HEADER] = where
+    return Response(answered.content, media_type="image/jpeg", headers=headers)
 
 
 __all__ = ["BROWSER_PREFIX", "router"]

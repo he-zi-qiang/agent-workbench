@@ -10038,3 +10038,15 @@ p.aw-code-step-thought {
 .aw-browser-stage.is-busy {
   cursor: progress;
 }
+
+/* 画面底下那一行地址（ADR-0119）：浏览器所在那台机器上的路径。等宽，因为它是
+   一个路径；一行截断加 title，因为它可能很长而画面比它重要。 */
+.aw-browser-where {
+  color: var(--aw-text-muted, #8b949e);
+  font-family: var(--aw-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  margin: 4px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

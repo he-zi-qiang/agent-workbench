@@ -1,9 +1,11 @@
-"""A person's input into the guarded browser (ADR-0117).
+"""A person's input into the guarded browser (ADR-0117, ADR-0119).
 
-Three refusals and one forward, and the refusals are the design: the scope
-the model needs, the browser being there at all, and -- the arbitration
-ADR-0113 §4 asked for before it would allow this -- no coding turn driving
-the page at that moment.
+Two refusals and one forward. The third refusal -- no coding turn driving the
+page -- is gone (ADR-0119): it made the panel refuse at the one moment it was
+wanted, since the turn that opens a page is the turn that keeps it open for
+minutes. What replaced it is a fact travelling both ways: the person is told
+the model is working on this page too, and the model is told, on its next
+browser call, that a person touched it.
 """
 
 from __future__ import annotations
@@ -96,19 +98,38 @@ def test_a_click_is_forwarded_as_one_interact_call() -> None:
     ]
 
 
-def test_the_model_has_the_page_while_a_turn_runs() -> None:
-    """The arbitration rule, and the whole of it."""
+def test_a_turn_in_flight_no_longer_refuses_it_reports() -> None:
+    """ADR-0119 replaced the lock with a fact, and this is the reversal.
+
+    The previous version of this test asserted 409 and an empty forward. A
+    turn that writes a page and then verifies it in the browser runs for
+    minutes, and those are exactly the minutes a person wants to press the
+    arrow keys in -- so the rule refused every time it mattered and never
+    when it did not. Now the input lands and the count comes back, for the
+    panel to say "the model is working on this page too".
+    """
 
     slot = _Slot()
 
     answered = _post(
-        _dependencies(slot=slot, turns=1),
+        _dependencies(slot=slot, turns=2),
         {"actions": [{"kind": "click", "x": 1, "y": 1}]},
     )
 
-    assert answered.status_code == 409
-    assert "driving the browser" in answered.json()["detail"]
-    assert slot.forwarded == []
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["turns_in_flight"] == 2
+    assert slot.forwarded == [[{"kind": "click", "x": 1, "y": 1}]]
+
+
+def test_a_quiet_process_reports_no_turns() -> None:
+    """The control: the same field, and it is not a constant."""
+
+    answered = _post(
+        _dependencies(slot=_Slot()), {"actions": [{"kind": "key", "text": "a"}]}
+    )
+
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["turns_in_flight"] == 0
 
 
 def test_no_browser_is_503_not_404() -> None:

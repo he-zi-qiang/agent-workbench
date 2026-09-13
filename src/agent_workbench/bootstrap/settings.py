@@ -412,7 +412,7 @@ class CodeSettings(StrictModel):
     #: The wall clock for one turn, which becomes the run's ``deadline``. A code
     #: run is required by the domain to carry one, because nothing else is
     #: watching it.
-    turn_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    turn_timeout_seconds: int = Field(default=900, ge=30, le=3600)
     #: How long one held call may wait for a person. Bounded again, at the
     #: gateway, by whatever the turn has left.
     approval_timeout_seconds: int = Field(default=300, ge=5, le=1800)
@@ -421,8 +421,23 @@ class CodeSettings(StrictModel):
     #: allowance below the step ceiling is a budget rather than a mistake --
     #: it says "this many tool calls, and a turn left over to write the report
     #: from them".
-    max_steps: int = Field(default=60, ge=2, le=1000)
-    max_tool_calls: int = Field(default=120, ge=1, le=500)
+    #:
+    #: **Doubled on 2026-09-13 against a measured turn, not a guess**
+    #: (ADR-0119). `ses_a42b…` wrote a 31 KB game as eight pieces, checked the
+    #: level with `python3`, opened the page in the guarded browser and found
+    #: and fixed three real bugs -- 60 steps, 61 tool calls, 246 seconds -- and
+    #: was cut off mid-verification by this ceiling. Two of this repository's
+    #: own decisions push step counts up: ADR-0118 asks for a large file in
+    #: pieces rather than one call, and the browser tools verify by looking
+    #: (open, snapshot, eval, interact), which is several steps per claim. The
+    #: ceiling is a backstop against a loop, and since ADR-0116 a loop is
+    #: caught on its own evidence -- a repeat is answered from the record and
+    #: the tools come off after two -- so the backstop can sit where honest
+    #: work does not reach it. The timeout above moved with them: 120 steps at
+    #: the measured ~4 seconds a step is ~8 minutes, and a deadline is the one
+    #: ceiling that cannot buy a closing turn.
+    max_steps: int = Field(default=120, ge=2, le=1000)
+    max_tool_calls: int = Field(default=240, ge=1, le=500)
     max_total_tokens: int | None = Field(default=None, ge=1)
     max_cost_micro_usd: int | None = Field(default=None, ge=1)
 

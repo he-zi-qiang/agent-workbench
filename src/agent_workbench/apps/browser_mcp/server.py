@@ -9,6 +9,7 @@ ADR-095 made for the computer-use page.
 from __future__ import annotations
 
 from typing import Any, Final
+from urllib.parse import quote
 
 from mcp import types
 from mcp.server import Server, ServerRequestContext
@@ -41,6 +42,11 @@ SERVER_VERSION: Final[str] = "1.0.0"
 MCP_PATH: Final[str] = "/mcp"
 HEALTH_PATH: Final[str] = "/health"
 FRAME_PATH: Final[str] = "/frame"
+#: Where the frame's page is, carried on the frame itself (ADR-0119).
+URL_HEADER: Final[str] = "X-Browser-Url"
+#: Every character a URL may already carry, so an address that arrived
+#: percent-encoded is not encoded twice. `%` is in the set for that reason.
+_URL_SAFE: Final[str] = "!#$&'()*+,/:;=?@[]~-._%"
 MAX_MCP_REQUEST_BYTES: Final[int] = 256 * 1024
 
 OPEN_TOOL: Final[str] = "browser_open"
@@ -155,7 +161,7 @@ def create_server(
         del context
         arguments = params.arguments or {}
         try:
-            return await _dispatch(session, decisions, params.name, arguments)
+            answered = await _dispatch(session, decisions, params.name, arguments)
         except BrowserInputError as error:
             return _error(f"invalid {params.name} request: {error}")
         except TimeoutError:
@@ -165,6 +171,16 @@ def create_server(
             )
         except Exception as error:
             return _error(f"{params.name} failed: {error}")
+        # A person and the model drive the same page (ADR-0119), and this is
+        # where that is made survivable: the first model call after somebody
+        # clicked in the console panel carries a line saying so. Not on the
+        # person's own call -- it is addressed to the model, and taking the
+        # note there would consume the one delivery.
+        if not bool(arguments.get("by_person")):
+            note = session.take_person_note()
+            if note is not None:
+                answered.content = [*answered.content, types.TextContent(text=note)]
+        return answered
 
     return Server(
         name=SERVER_NAME,
@@ -213,7 +229,9 @@ async def _dispatch(
 
     if name == INTERACT_TOOL:
         request = parse_interact(arguments)
-        done = await session.interact(request.actions, request.timeout_ms)
+        done = await session.interact(
+            request.actions, request.timeout_ms, by_person=request.by_person
+        )
         return _text("\n".join(done))
 
     if name == SCREENSHOT_TOOL:
@@ -300,11 +318,19 @@ def create_app(
         image = session.latest_frame()
         if image is None:
             return Response(status_code=204)
-        return Response(
-            image,
-            media_type="image/jpeg",
-            headers={"Cache-Control": "no-store"},
-        )
+        headers = {"Cache-Control": "no-store"}
+        # Where the frame comes from, beside the frame (ADR-0119). A panel
+        # showing a rendered page without its address cannot answer "which
+        # file is this?", and here the answer is a path inside this container
+        # that the person has no other way to see. A header rather than a
+        # second endpoint: the console is already polling this one, and an
+        # address that arrives a poll apart from its picture can describe a
+        # page the picture is not of. Percent-encoded so a path with Chinese
+        # in it survives a latin-1 header.
+        where = session.current_url()
+        if where is not None:
+            headers[URL_HEADER] = quote(where, safe=_URL_SAFE)
+        return Response(image, media_type="image/jpeg", headers=headers)
 
     return create_server(session, decisions).streamable_http_app(
         streamable_http_path=MCP_PATH,
