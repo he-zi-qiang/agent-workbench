@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StepGroup, StepOutcome } from "../../components/stepGroups";
-import { FOLD_MIN, foldSteps } from "./foldSteps";
+import { FOLD_MIN, VISIBLE_TAIL, foldHead, foldSteps } from "./foldSteps";
 import type { TurnStep } from "./turnBlocks";
 
 function step(
@@ -106,5 +106,62 @@ describe("foldSteps（ADR-0121）", () => {
     const folded = foldSteps([...commands(3), thought, ...commands(2)]);
 
     expect(folded.map((item) => item.kind)).toEqual(["fold", "step", "step", "step"]);
+  });
+});
+
+/** 交替做好几种事的一轮：编辑、求值、打开页面……没有哪一种连着三次。 */
+function varied(count: number): TurnStep[] {
+  const titles = ["修改项目目录文件", "在页面里求值", "打开页面", "在本机执行命令"];
+  return Array.from({ length: count }, (_, index) =>
+    step(`tool:varied_${String(index)}`, titles[index % titles.length] ?? "x"),
+  );
+}
+
+describe("foldHead（ADR-0121 第二层）", () => {
+  it("短的一轮原样不动", () => {
+    const items = foldSteps(varied(VISIBLE_TAIL + 2));
+
+    expect(foldHead(items)).toEqual(items);
+  });
+
+  it("折完还长的一轮，前面收成一行，最后几行留在眼前", () => {
+    // 那一轮成功重写马里奥的回合：101 次调用，折完同一动作之后还有 59 行。
+    const items = foldSteps(varied(40));
+
+    const folded = foldHead(items);
+
+    expect(folded).toHaveLength(VISIBLE_TAIL + 1);
+    const head = folded[0];
+    expect(head?.kind).toBe("head");
+    if (head?.kind !== "head") return;
+    expect(head.stepCount).toBe(40 - VISIBLE_TAIL);
+    expect(head.summary).toContain("修改项目目录文件 ×");
+    // 留在眼前的就是最后那几步。
+    expect(folded.slice(1).map((item) => item.kind === "step" && item.step.key)).toEqual(
+      varied(40)
+        .slice(-VISIBLE_TAIL)
+        .map((one) => one.key),
+    );
+  });
+
+  it("一轮往下长的时候，这一行的 key 不变", () => {
+    const before = foldHead(foldSteps(varied(20)));
+    const after = foldHead(foldSteps(varied(21)));
+
+    expect(before[0]?.kind === "head" && before[0].key).toBe(
+      after[0]?.kind === "head" && after[0].key,
+    );
+  });
+
+  it("失败的种类排在摘要最前", () => {
+    const steps = [
+      ...varied(12),
+      step("tool:broken", "读取项目目录", "failed"),
+      ...varied(8).map((one, index) => ({ ...one, key: `tool:more_${String(index)}` })),
+    ];
+
+    const folded = foldHead(foldSteps(steps));
+
+    expect(folded[0]?.kind === "head" && folded[0].summary.startsWith("读取项目目录")).toBe(true);
   });
 });
