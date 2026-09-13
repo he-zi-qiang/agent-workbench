@@ -255,6 +255,11 @@ class _RunLedger:
     #: run. Set by the repeat that crossed `MAX_REPLAYS`; read where the
     #: request is built, the same place the spent tool allowance is read.
     tools_withdrawn: bool = False
+    #: How many of this run's calls arrived cut off at the provider's output
+    #: ceiling (ADR-0118). Each is answered with a refusal that says so; the
+    #: one past `MAX_CUT_OFFS` ends the run instead, because two answers that
+    #: each said "send it in pieces" were not read.
+    cut_offs: int = 0
     #: How many times this run has shortened its own conversation.
     compactions: int = 0
     #: The provider's count for the *last* prompt this run sent, which is the
@@ -281,6 +286,40 @@ async def _aclose(stream: AsyncIterator[ModelEvent]) -> None:
 
     if isinstance(stream, _Closable):
         await stream.aclose()
+
+
+#: How many calls cut off at the provider's output ceiling one run may be
+#: answered for before it ends (ADR-0118). Two, on the same reasoning as
+#: `MAX_REPLAYS`: the first refusal is the model learning that what it sent
+#: does not fit, the second is it being told again, and a third identical
+#: attempt is a run that will spend its whole budget the same way. The run
+#: that motivated this sent one 42 KB page whole and was cut at 8192 tokens
+#: -- three runs in a row, because the failure never reached the model.
+MAX_CUT_OFFS: Final[int] = 2
+
+
+def _cut_off_note(tool_name: str, count: int) -> str:
+    """What the model is told when its call did not fit (ADR-0118).
+
+    Written for the model, which is the one reader that can act on it: the
+    provider's own word ("length") is on the `ModelCompleted` event for the
+    operator. It names the tool, says that nothing ran, and says the one
+    thing a retry has to change -- the size. It does not name a parameter of
+    any particular tool: the runtime holds no vocabulary for files, and the
+    tool that accepts pieces says so in its own description, which the
+    model is holding.
+    """
+
+    return (
+        f"your call to {tool_name} was cut off at the model's output ceiling: "
+        "the arguments stopped mid-JSON, so nothing ran and nothing was "
+        "written. What you were sending does not fit in one call, and sending "
+        "it again will not make it fit. Send it in pieces -- several smaller "
+        "calls, each a fraction of this one; a file goes in as a first part "
+        "and then appended parts, never as a whole -- and keep the reasoning "
+        "before a large call short, because it is spent from the same "
+        f"ceiling. (cut off {count} of {MAX_CUT_OFFS} answered in this run)"
+    )
 
 
 def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
@@ -1041,8 +1080,11 @@ class ClaudeLikeAgentRuntime:
                 ledger,
             )
 
-        if turn.finish == "max_tokens":
+        if turn.finish == "max_tokens" and not any(call.cut_off for call in turn.calls):
             # A cut-off answer must not reach its caller looking complete.
+            # A cut-off *call* is different (ADR-0118): the adapter handed it
+            # on marked, and the batch below answers it with a refusal the
+            # model reads, so the run goes on with what it had worked out.
             return await self._failed(
                 request,
                 sink,
@@ -1211,6 +1253,53 @@ class ClaudeLikeAgentRuntime:
                     sink=sink,
                 )
             )
+
+        # A call the provider cut off at its output ceiling is answered, not
+        # run (ADR-0118). Its arguments are not what the model meant, and the
+        # one place the model reads is its tool result -- so the refusal goes
+        # there, in this run, while the level layout and the plan it had
+        # worked out are still in its context. Answered before the counting
+        # below, and that order matters: the record is keyed by (tool,
+        # arguments) and a cut-off call has none, so two of them would be
+        # "the same question" and the second replayed with a note about
+        # repeating itself. The one past `MAX_CUT_OFFS` ends the run instead.
+        cut_off = [call for call in admitted if call.cut_off]
+        if cut_off:
+            ledger.cut_offs += len(cut_off)
+            if ledger.cut_offs > MAX_CUT_OFFS:
+                return await self._failed(
+                    request,
+                    sink,
+                    machine,
+                    "token_budget",
+                    ErrorInfo(
+                        code="budget_exceeded",
+                        message=(
+                            "the model was cut off at its output ceiling inside "
+                            f"a call to {cut_off[-1].tool_name} {ledger.cut_offs} "
+                            f"times in this run: {MAX_CUT_OFFS} times it was told "
+                            "that what it sent does not fit in one call and to "
+                            "send it in pieces, and it sent the whole again"
+                        ),
+                    ),
+                    ledger,
+                )
+            answered_so_far = ledger.cut_offs - len(cut_off)
+            for offset, call in enumerate(cut_off, start=1):
+                results.append(
+                    await self._gateway.refuse(
+                        call,
+                        ErrorInfo(
+                            code="invalid_tool_input",
+                            message=_cut_off_note(
+                                call.tool_name, answered_so_far + offset
+                            ),
+                            retryable=False,
+                        ),
+                        sink=sink,
+                    )
+                )
+            admitted = tuple(call for call in admitted if not call.cut_off)
 
         # What this run was offered, compared against what it took.
         #

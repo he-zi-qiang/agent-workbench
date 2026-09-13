@@ -410,10 +410,14 @@ class ProjectWriteTool:
             name=WRITE_TOOL_NAME,
             description=(
                 "Write a text file into this project's directory, replacing it "
-                "if the path is already taken. Parent directories are created. "
-                "The path is relative to the project root; absolute paths and "
-                "'..' segments are refused. This writes to the user's real "
-                "files."
+                "if the path is already taken. With 'append' true the content "
+                "is added to the end of the file instead (the file is created "
+                "if it is not there) -- use that to write a large file in "
+                "pieces, a few hundred lines per call: a whole file sent in "
+                "one call is cut off at the model's output ceiling, and then "
+                "nothing is written. Parent directories are created. The path "
+                "is relative to the project root; absolute paths and '..' "
+                "segments are refused. This writes to the user's real files."
             ),
             input_schema={
                 "type": "object",
@@ -422,6 +426,7 @@ class ProjectWriteTool:
                 "properties": {
                     "path": _PATH_SCHEMA,
                     "content": {"type": "string", "maxLength": MAX_INLINE_WRITE_CHARS},
+                    "append": {"type": "boolean"},
                 },
             },
             concurrency="exclusive",
@@ -439,11 +444,14 @@ class ProjectWriteTool:
         arguments = invocation.call.arguments
         path = str(arguments.get("path", ""))
         content = str(arguments.get("content", ""))
+        append = bool(arguments.get("append") or False)
         store = _store(self.scope)
         try:
             replacing = await store.exists(path)
         except ProjectPathError as error:
             return _refusal(invocation, error)
+        if replacing and append:
+            return await self._append(invocation, store, path, content)
         # Only a replacement is gated. Creating a file destroys nothing, and
         # requiring a read of a path that is not there would refuse the most
         # ordinary thing a coding agent does -- with a sentence ("read it
@@ -511,6 +519,71 @@ class ProjectWriteTool:
             # the store normalises what it was given, and a console that
             # refetched the argument's spelling would ask for a file under a
             # name the directory does not use.
+            project_writes=(entry.path,),
+        )
+
+    async def _append(
+        self,
+        invocation: ToolInvocation,
+        store: ProjectFileStore,
+        path: str,
+        content: str,
+    ) -> ToolResult:
+        """Add to the end of a file that is there (ADR-0118).
+
+        The piece-wise write. A model whose output ceiling is smaller than
+        the file it is asked for -- 8192 tokens against a 42 KB page, three
+        runs in a row on 2026-09-13 -- has no way to land that file through
+        a tool that takes the whole body at once, and `project_edit` is the
+        wrong shape for it: an edit names a snippet to replace, and "the end
+        of the file" is not a snippet the model can name without reading the
+        file back after every piece.
+
+        Not gated on a receipt, on the reasoning `project_edit` uses: this
+        tool reads the file itself, one statement earlier, so it is never
+        working from a stale copy, and the write is fenced by `if_unchanged`
+        from that read. What the receipt does decide is the *coverage* the
+        model is left with afterwards, and it is carried rather than minted:
+        a file the model created this turn and has only ever appended to is
+        one it has seen whole, so a later `project_write` over it is allowed;
+        a file it never read and appended to once is not.
+        """
+
+        carried = self.receipts.seen(path)
+        try:
+            current = await store.read(path)
+        except (ProjectPathError, NotFoundError, OutputTooLargeError) as error:
+            return _refusal(invocation, error)
+        if not current.is_text:
+            return ToolResult.failed(
+                invocation.call,
+                ErrorInfo(
+                    code="invalid_tool_input",
+                    message=f"{path} is not a text file",
+                    retryable=False,
+                ),
+            )
+        try:
+            entry = await store.write(
+                path,
+                (current.text or "") + content,
+                if_unchanged=ProjectFileVersion(
+                    size_bytes=current.size_bytes,
+                    modified_at=current.modified_at,
+                ),
+            )
+        except ProjectFileChangedError as error:
+            return _stale(invocation, f"{error} {self._who_changed_it()}")
+        except (ProjectPathError, NotFoundError, OutputTooLargeError) as error:
+            return _refusal(invocation, error)
+        _record_written(
+            self.receipts,
+            entry,
+            covers_whole_file=carried is not None and carried.covers_whole_file,
+        )
+        return ToolResult.succeeded(
+            invocation.call,
+            content=f"Appended to {entry.path} ({entry.size_bytes} bytes now).",
             project_writes=(entry.path,),
         )
 

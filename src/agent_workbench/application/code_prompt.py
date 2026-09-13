@@ -346,26 +346,63 @@ _PROJECT_REPORT_TAIL = """\
 #: sandbox variants are: six texts kept in step by hand drift, and the drift
 #: is invisible until somebody reads a transcript. Every anchor below is a
 #: claim rather than a value, and a missed one raises at import.
+#: The "in steps" paragraph, in the two file languages (ADR-0118). The flat
+#: side keeps "put the sections in with edits", because `workspace_write` has
+#: no way to add to a file; the project side names the way it has. The
+#: paragraph was written on 2026-09-12 from one transcript and re-read on
+#: 2026-09-13 against three more: the model had read it, said "skeleton first,
+#: then sections by edit" in its own words -- and then sent the whole page in
+#: one call anyway, because "an edit" is not an instruction it could carry
+#: out for the *end* of a file without reading the file back each time. The
+#: instruction it can carry out is one tool with one flag, so that is what
+#: the paragraph now says, and the tool's own refusal says the same thing
+#: when the paragraph was not enough.
+_FLAT_IN_STEPS = """\
+Build anything sizeable in steps. A file's whole body travels inside one tool
+call, and that call is spent from the same output ceiling as the reasoning you
+did before it -- so a large file emitted in a single write is cut off
+mid-argument, and then *nothing* is written, not even the part that had
+arrived. Write the skeleton first and put the sections in with edits: each call
+is a fresh request with its own ceiling, and a page that exists after four
+calls beats one that does not exist after one."""
+
+_PROJECT_IN_STEPS = """\
+Build anything sizeable in steps. A file's whole body travels inside one tool
+call, and that call is spent from the same output ceiling as the reasoning you
+did before it -- so a large file emitted in a single write is cut off
+mid-argument, and then *nothing* is written, not even the part that had
+arrived. A call cut off like that comes back refused and says so; proposing it
+again cannot make it fit. Write the file in pieces instead: the first piece
+with `project_write`, every later piece with `project_write` and `append` set
+to true, a few hundred lines per call, split where you can name the seam --
+the end of a function, the end of a `<script>` block. Each call is a fresh
+request with its own ceiling, and a page that exists after four calls beats
+one that does not exist after one."""
+
 CODER_SYSTEM_PROMPT_PROJECT: Final[str] = _rewrite(
     _rewrite(
         _rewrite(
             _rewrite(
                 _rewrite(
-                    _rewrite(CODER_SYSTEM_PROMPT, _FLAT_WORLD, _PROJECT_WORLD),
-                    _FLAT_DISCIPLINE_1,
-                    _PROJECT_DISCIPLINE_1,
+                    _rewrite(
+                        _rewrite(CODER_SYSTEM_PROMPT, _FLAT_WORLD, _PROJECT_WORLD),
+                        _FLAT_DISCIPLINE_1,
+                        _PROJECT_DISCIPLINE_1,
+                    ),
+                    _FLAT_DISCIPLINE_2,
+                    _PROJECT_DISCIPLINE_2,
                 ),
-                _FLAT_DISCIPLINE_2,
-                _PROJECT_DISCIPLINE_2,
+                _FLAT_MISSING_FILE,
+                _PROJECT_MISSING_FILE,
             ),
-            _FLAT_MISSING_FILE,
-            _PROJECT_MISSING_FILE,
+            _FLAT_DISCIPLINE_5,
+            _PROJECT_DISCIPLINE_5,
         ),
-        _FLAT_DISCIPLINE_5,
-        _PROJECT_DISCIPLINE_5,
+        _FLAT_REPORT_TAIL,
+        _PROJECT_REPORT_TAIL,
     ),
-    _FLAT_REPORT_TAIL,
-    _PROJECT_REPORT_TAIL,
+    _FLAT_IN_STEPS,
+    _PROJECT_IN_STEPS,
 )
 
 
@@ -497,6 +534,13 @@ def with_plan_only(prompt: str) -> str:
             f"claim to remove (found {len(matched)}); the base prompt has "
             "drifted"
         )
+    # The project side's "in steps" paragraph names `project_write` twice
+    # (ADR-0118), and a plan turn holds no write tool -- the same rule as
+    # discipline 2, applied to the one other paragraph that names one.
+    # Conditional rather than anchored, because the flat bases carry the
+    # tool-free wording and legitimately have nothing here to replace.
+    if _PROJECT_IN_STEPS in prompt:
+        prompt = _rewrite(prompt, _PROJECT_IN_STEPS, _PLAN_ONLY_IN_STEPS)
     return (
         _rewrite(
             _rewrite(prompt, matched[0], _PLAN_ONLY_DISCIPLINE_2),
@@ -505,6 +549,16 @@ def with_plan_only(prompt: str) -> str:
         )
         + _PLAN_ONLY
     )
+
+
+#: What a plan turn is told in place of `_PROJECT_IN_STEPS`: the same fact
+#: about the ceiling, as a thing the plan should account for, naming no tool.
+_PLAN_ONLY_IN_STEPS = """\
+Plan anything sizeable in steps. A file's whole body travels inside one tool
+call in the turn that writes it, and that call is spent from the same output
+ceiling as the reasoning before it -- so a plan for a large file names the
+pieces it would be written in, a few hundred lines each, and where the seams
+fall."""
 
 
 #: Discipline 6's middle, identical in every base prompt (only its last line

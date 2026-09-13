@@ -27,6 +27,64 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第八十六批）：被输出上限截断的调用作答给模型而不是终止运行；`project_write` 可以分段追加（ADR-0118）
+
+第八十五批合入之后，用户新开一段会话说「请你编写马里奥」，三轮都没有写出文件，然后说「连一个基本的
+马里奥都编写不了，请你优化」。三轮的事件记录逐条看（`run_616…9b0b`、`run_6f1…6b96`、`run_ea5…5025`，
+deepseek-chat，「改前问我」）：第一轮读完文件、跑了四条 `python3` 验证关卡几何（四张卡都是「本会话都
+允许」），然后一次 `project_write` 装整个 `mario.html`——`output_tokens: 8192`，供应商 `finish_reason:
+length`，JSON 断在中间，`RunFailed`；第二轮从头重读所有文件（338k 输入 token），试图把 `snake.py` 劈成
+两半「分段读」，误判为没劈开，同一条命令连发三次，ADR-0116 按记录作答、收走工具，模型如实报告没写；
+第三轮又一次整个文件一次发，又在 8192 处截断。**卡在同一处**：截断是一句给控制台看的 `provider_error`，
+模型——唯一能把东西发小一点的那一方——从没读到它；提示词说「骨架先落、段落用 edit 填」，模型复述过
+这句还是整个发，因为「文件末尾」不是 `project_edit` 能命名的锚点；而 deepseek-chat 的上限就是 8K，一个
+42 KB 的页面在它身上**永远**装不进一次调用。写在
+[ADR-0118](./adr/0118-a-cut-off-call-is-answered-and-a-file-is-written-in-pieces.md)，§1.1 是 Claude Code 对照表。
+
+### 1. 改了什么
+
+- **截断的调用是一次带标记的调用，运行时用拒绝作答。** `ToolCall` 多 `cut_off: bool = False`；DeepSeek
+  适配器在 `length` 且参数解析不了时交出 `ToolCall(id, name, arguments={}, cut_off=True)`，流以 `max_tokens`
+  结束、不带错误（半截参数丢弃，不猜）。运行时：`max_tokens` 只在没有 `cut_off` 调用时才是「答案被截断」
+  的失败；批处理里 `cut_off` 的调用在计数与按记录作答**之前**被 `refuse`（`invalid_tool_input`），那句
+  拒绝写给模型——被上限截断、什么都没跑、什么都没写、再发一遍装不下、分几次发、大调用前少推理。
+  `_RunLedger.cut_offs` 计数，`MAX_CUT_OFFS = 2`，第三次结束运行（`token_budget`）。纯文本回答被截断
+  仍是失败，不动。`_completed_tool_calls` 不再接收 `reported`；B-07 那句错误里的 `'length'` 由
+  `ModelCompleted.finish_reason == "max_tokens"` 承担。
+- **`project_write` 多 `append`。** 追加到末尾；文件不存在就是创建，所以每一段同一种写法。不按回执把关
+  （工具自己先读，`if_unchanged` 围住），回执的覆盖范围**沿用**不签发：自己分段建的文件之后可以整个
+  替换，没读过的文件追加后整个替换仍被拒；二进制拒绝。工具描述说清一次发整个文件会被截断、然后什么
+  都没写。
+- **提示词。** `CODER_SYSTEM_PROMPT_PROJECT` 的「分步构建」段改成模型做得到的一句：被截断的调用会以
+  拒绝回来、再发装不下、第一段 `project_write`、之后每段 `project_write` + `append`、每次几百行、在能叫出
+  名字的接缝处分。扁平工作区保留原句（`workspace_write` 没有追加）；「只做计划」换成不点名工具的版本。
+- 登记 F-44（跨回合只带用户消息与最终报告，工具结果不带；Claude Code 带整份 transcript）；B-07 补记。
+  golden `ToolCall` 多一行 `"cut_off": false`（手工按提交时的键序插入，不整份重生成——重生成会把顶层键
+  重排）。
+
+### 2. 证据
+
+- 新增或改写：`test_deepseek_model.py`（截断的调用作为带 `cut_off` 的提案交出、`max_tokens`、参数为空；
+  坏 JSON 对照组不动）；`test_agent_runtime.py` 两条（作答且什么也没跑、下一次请求的工具结果里有那句话、
+  运行完成；第三次截断结束运行、前两次各一条 `ToolFailed`）；`test_project_tools.py`
+  `TestWritingInPieces` 四条；`test_code_session.py` 一条（项目提示词点名 `append`，扁平不点名）；原有
+  「只做计划不点名 `project_write`」那条抓住了第一版——`with_plan_only` 因此多一层替换。
+- 门禁：`ruff format --check` / `ruff check` 过；`pyright` 仍是那 14 条 Windows 平台错误，零新增。
+  Windows 本机：`tests/application` + `tests/runtime` + `test_deepseek_model.py` + `tests/domain`
+  `655 passed`；`tests/cli` + `test_code_api.py` + `test_system_capabilities.py` + `tests/application` +
+  `tests/workflows` + `tests/architecture` + `test_deepseek_web_search.py` `889 passed / 6 skipped`
+  （`application` 两次都在）。Linux 容器（`agent-workbench:local` 挂载检出、`/tmp/venv`）：
+  `test_project_tools.py` + `test_project_file_store.py` + `test_project_api.py` + `tests/runtime` +
+  `test_deepseek_model.py` `534 passed`。前端没动（964）。
+- 实测：见 §2.1（合入并重建栈之后补）。
+
+### 3. 顺带看到、没修
+
+- F-44：第二轮 338k 输入 token 全花在重读上；一轮失败之后下一轮不知道为什么。另一条 ADR。
+- 参数恰好在合法 JSON 边界被截断的调用会被当成完整的派发；没见过，登记在 ADR §4。
+- 第一轮四条 `python3` 都各弹一张卡，是「改前问我」的设计；用户这次没选「放手做」。
+
+---
 ## 2026-09-13（第八十五批）：人可以操作模型那个浏览器、右栏的文件可以删和改名、收起的右栏叫得回来、一台部署只画三档（ADR-0117）
 
 第八十四批合入、栈重建之后，用户早上发了一轮「验证马里奥」（模型靠 HUD 与画布像素验证，报告说

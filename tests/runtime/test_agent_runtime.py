@@ -809,6 +809,79 @@ def test_an_answer_cut_off_by_the_token_ceiling_is_a_failure() -> None:
     assert run.outcome.stop_reason == "token_budget"
 
 
+def test_a_call_cut_off_at_the_ceiling_is_answered_and_the_run_goes_on() -> None:
+    """ADR-0118: the refusal goes to the model, in the same run.
+
+    Three runs in one session on 2026-09-13: a whole game in one
+    `project_write`, cut at 8192 tokens, `RunFailed` with a sentence the
+    console showed and the model never read -- and the next turn, holding no
+    memory of the failure, sent the same file whole again. The adapter now
+    hands the cut-off call on marked and empty; this is the runtime's half:
+    answer it with a refusal that says what to do, run nothing, and let the
+    model act on it with everything it had worked out still in context.
+    """
+
+    cut = ToolCall(tool_call_id="call_cut", tool_name="read_document", cut_off=True)
+    model = FakeModel(
+        [
+            ScriptedTurn(
+                text="Writing the whole page now.",
+                tool_calls=(cut,),
+                finish_reason="max_tokens",
+            ),
+            ScriptedTurn(text="Wrote it in three pieces instead."),
+        ]
+    )
+
+    run = _execute(model)
+
+    assert run.outcome.status == "completed"
+    assert run.outcome.output_text == "Wrote it in three pieces instead."
+    # Nothing ran: the handler never saw a call whose arguments were not the
+    # model's.
+    assert "ToolStarted" not in run.durable_types
+    failure = next(
+        envelope.payload
+        for envelope in run.durable
+        if envelope.event_type == "ToolFailed"
+    )
+    assert isinstance(failure, ToolFailed)
+    assert failure.error.code == "invalid_tool_input"
+    assert "cut off at the model's output ceiling" in failure.error.message
+    assert "cut off 1 of 2" in failure.error.message
+    # And the model read it: the second request carries the refusal as the
+    # answer to the call, where a tool result goes.
+    second = model.requests[1]
+    assert (
+        "cut off at the model's output ceiling" in second.messages[-1].model_dump_json()
+    )
+
+
+def test_the_third_cut_off_call_in_a_run_ends_it() -> None:
+    """Two refusals that each said "send it in pieces" were not read."""
+
+    turns = [
+        ScriptedTurn(
+            tool_calls=(
+                ToolCall(
+                    tool_call_id=f"call_{n}", tool_name="read_document", cut_off=True
+                ),
+            ),
+            finish_reason="max_tokens",
+        )
+        for n in range(3)
+    ]
+
+    run = _execute(FakeModel(turns))
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "token_budget"
+    assert run.outcome.error is not None
+    assert "3 times in this run" in run.outcome.error.message
+    # The first two were answered; the third ended the run before it was.
+    assert run.durable_types.count("ToolFailed") == 2
+
+
 def test_an_answer_longer_than_a_preview_is_not_cut_down_to_one() -> None:
     """An answer is the product of the run, not text recorded about it.
 

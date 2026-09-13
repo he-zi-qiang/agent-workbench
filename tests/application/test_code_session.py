@@ -2019,3 +2019,38 @@ def test_the_project_tools_include_the_two_verbs_a_file_was_missing() -> None:
 
     assert "project_delete" not in read_only(CODE_PROJECT_TOOLS, risks=risks)
     assert "project_move" not in read_only(CODE_PROJECT_TOOLS, risks=risks)
+
+
+def test_the_project_prompt_names_the_piece_wise_write_and_the_flat_one_cannot() -> (
+    None
+):
+    """ADR-0118. The "in steps" paragraph says the thing the turn can do.
+
+    The 2026-09-12 paragraph said "put the sections in with edits", and on
+    2026-09-13 a model that had read it said so back in its own words -- then
+    sent the whole page in one call, because appending to the end of a file
+    is not an edit it can name without reading the file back every time. The
+    project side now names one tool and one flag; the flat side keeps the
+    sentence it had, because `workspace_write` has no way to add to a file
+    and a prompt that named one would be describing a tool the turn is not
+    holding.
+    """
+
+    from agent_workbench.application.code_session import (
+        CODE_PROJECT_TOOLS,
+        CODE_TOOLS,
+        _system_prompt_for,
+    )
+
+    project = " ".join(
+        _system_prompt_for(CODE_PROJECT_TOOLS, external_requires_approval=False).split()
+    )
+    flat = " ".join(
+        _system_prompt_for(CODE_TOOLS, external_requires_approval=False).split()
+    )
+
+    assert "`project_write` and `append` set to true" in project
+    assert "comes back refused and says so" in project
+    assert "put the sections in with edits" not in project
+    assert "put the sections in with edits" in flat
+    assert "append" not in flat

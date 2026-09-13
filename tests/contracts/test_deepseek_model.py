@@ -434,21 +434,20 @@ def test_a_tool_call_without_arguments_is_an_empty_object() -> None:
     assert proposal.call.arguments == {}
 
 
-def test_a_call_cut_off_at_the_ceiling_says_so_instead_of_blaming_the_provider() -> (
-    None
-):
-    """`docs/known-gaps.md` B-07: two failures had been sharing one sentence.
+def test_a_call_cut_off_at_the_ceiling_is_handed_on_marked_not_failed() -> None:
+    """ADR-0118, on top of `docs/known-gaps.md` B-07.
 
     A tool call whose arguments do not parse is either a provider sending
-    malformed JSON or a model cut off mid-argument at `max_tokens`. They need
-    opposite things -- retry or replace the provider, versus ask for something
-    smaller -- and both used to end in "the provider sent unparsable
-    arguments", which points at the one component that was working.
+    malformed JSON or a model cut off mid-argument at `max_tokens`. B-07
+    separated the two sentences; what it still did with the second was end
+    the stream on an error, and an error goes to the console. Three runs in
+    one session on 2026-09-13 showed who needed to read it instead: the model
+    sent a whole game in one `project_write`, was cut at 8192 tokens, the run
+    failed, and the next turn -- with no memory of the failure -- sent it
+    whole again.
 
-    What made it worth separating was Code: a turn writing one self-contained
-    `.html` page carries that whole file inside one call's arguments, and
-    `config.code-local.toml` spends one 32768-token ceiling on the reasoning
-    and the answer together.
+    So the cut-off call is handed on: empty, marked, with the stream's own
+    finish reason. The runtime answers it with a refusal the model reads.
     """
 
     events, _ = _run(
@@ -467,17 +466,17 @@ def test_a_call_cut_off_at_the_ceiling_says_so_instead_of_blaming_the_provider()
     )
     completion = _completion(events)
 
-    assert completion.finish_reason == "error"
-    assert completion.error is not None
-    assert "output ceiling" in completion.error.message
-    assert "project_write" in completion.error.message
-    # The decidable bit, left where somebody reading the transcript will find
-    # it: this is the half of B-07 that said the event stream never recorded
-    # the provider's own finish reason.
-    assert "'length'" in completion.error.message
-    # Nothing ran, exactly as before -- the change is what the reader is told,
-    # not what was executed.
-    assert not any(isinstance(event, ModelToolCallProposed) for event in events)
+    assert completion.finish_reason == "max_tokens"
+    assert completion.error is None
+    proposed = [event for event in events if isinstance(event, ModelToolCallProposed)]
+    assert len(proposed) == 1
+    call = proposed[0].call
+    assert call.tool_call_id == "call_1"
+    assert call.tool_name == "project_write"
+    assert call.cut_off is True
+    # Nothing the model half-sent reaches a handler: the arguments that did
+    # arrive are dropped, not guessed at.
+    assert call.arguments == {}
 
 
 def test_unparsable_tool_arguments_fail_the_stream() -> None:

@@ -294,14 +294,6 @@ class DeepSeekModel:
         partials: dict[int, _PartialToolCall] = {}
         usage = TokenUsage()
         finish: ModelFinishReason | None = None
-        # The provider's own word for why it stopped, kept beside the mapped
-        # one. The mapping is lossy on purpose -- three provider spellings
-        # become three of ours -- but when a tool call does not survive the
-        # stream, *which* word it used is the bit that decides whether the
-        # model was cut off or the provider sent rubbish (`docs/known-gaps.md`
-        # B-07). Keeping it costs a string; deriving it afterwards is not
-        # possible.
-        reported_finish: str | None = None
         failure: ErrorInfo | None = None
         emitted = False
 
@@ -375,7 +367,12 @@ class DeepSeekModel:
 
                     reported = _finish_reason_of(chunk)
                     if reported is not None:
-                        reported_finish = reported
+                        # The mapping is lossy on purpose -- three provider
+                        # spellings become three of ours -- and since
+                        # ADR-0118 nothing downstream needs the provider's
+                        # word back: a call that did not survive the stream
+                        # under `length` is handed on as a cut-off call, not
+                        # described in an error sentence (B-07's other half).
                         finish, failure = _map_finish_reason(reported)
         except httpx.HTTPError as exc:
             # Transport faults stay transport faults: the type is descriptive
@@ -414,9 +411,7 @@ class DeepSeekModel:
             )
             return
 
-        calls, invalid = _completed_tool_calls(
-            partials, finish=finish, reported=reported_finish
-        )
+        calls, invalid = _completed_tool_calls(partials, finish=finish)
         if invalid is not None:
             yield ModelStreamCompleted(
                 finish_reason="error",
@@ -689,7 +684,6 @@ def _completed_tool_calls(
     partials: Mapping[int, _PartialToolCall],
     *,
     finish: ModelFinishReason,
-    reported: str | None,
 ) -> tuple[tuple[ToolCall, ...], ErrorInfo | None]:
     """Turn buffered fragments into whole calls, or explain why they are not.
 
@@ -709,11 +703,14 @@ def _completed_tool_calls(
     simplest node there is. The page did not fit; the JSON stopped mid-string;
     the console said the provider had sent rubbish.
 
-    No new `ErrorCode` for it, on the argument `domain/errors.py` uses to hand
-    one to `provider_refused` and withhold one from a search adapter's network
-    fault: a word of its own is earned by a condition no retry and no smaller
-    prompt can reach. A smaller ask reaches this one. So the code stays
-    `provider_error` and the message says which of the two happened.
+    Since ADR-0118 the ceiling case is not an error at all. It is a call
+    handed on with `cut_off` set and nothing in it, which the runtime answers
+    with a refusal *the model* reads -- the one party that can send something
+    smaller, in the same run, with its plan still in context. The provider's
+    own word for it ("length") is mapped onto the stream's `max_tokens`
+    finish and recorded there. Only the finished-stream case is still an
+    error, and it still names the provider: malformed JSON under a
+    `tool_calls` finish is something to retry or replace.
     """
 
     calls: list[ToolCall] = []
@@ -728,19 +725,27 @@ def _completed_tool_calls(
         if arguments is None:
             # Guessing at the arguments would put something the model never
             # asked for in front of a handler. Either way nothing runs; what
-            # differs is what the reader should do next.
+            # differs is who is told, and what they can do about it.
             if finish == "max_tokens":
-                return (), ErrorInfo(
-                    code="provider_error",
-                    message=(
-                        "the model hit its output ceiling in the middle of its "
-                        f"call to {partial.name} (the provider said "
-                        f"{reported or 'length'!r}), so the arguments stop "
-                        "mid-JSON and nothing ran -- a file's whole body is "
-                        "spent from the same ceiling as the reasoning before "
-                        "it, so ask for it in smaller pieces"
-                    ),
+                # Told to the model, not to the operator (ADR-0118). Until
+                # 2026-09-13 this branch returned an error: the sentence
+                # reached the console, the run failed, and the one party that
+                # could have sent something smaller never read it -- the next
+                # turn, holding no memory of the failure, sent the same file
+                # whole again, three runs in a row. So the call is handed on
+                # with nothing in it and `cut_off` set, and the runtime
+                # answers it with a refusal the model reads in its own tool
+                # result, in the same run, with everything it had worked out
+                # still in its context.
+                calls.append(
+                    ToolCall(
+                        tool_call_id=partial.call_id,
+                        tool_name=partial.name,
+                        arguments={},
+                        cut_off=True,
+                    )
                 )
+                continue
             return (), ErrorInfo(
                 code="provider_error",
                 message=(f"the provider sent unparsable arguments for {partial.name}"),
