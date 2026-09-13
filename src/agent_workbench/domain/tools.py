@@ -119,6 +119,17 @@ class ToolCall(VersionedModel):
     tool_name: ProposedToolName
     arguments: JsonObject = Field(default_factory=dict)
     model_call_id: Identifier | None = None
+    #: The provider stopped at its output ceiling inside this call's arguments
+    #: (ADR-0118). ``arguments`` then holds nothing the model meant -- the
+    #: adapter that sets this leaves it empty -- and the call must never be
+    #: dispatched. It is carried at all so that the *model* is answered: a
+    #: refusal in its own tool result, saying what happened and that the same
+    #: call cannot fit, instead of a provider error the console shows and the
+    #: model never reads. Measured on 2026-09-13, three runs in one session:
+    #: a whole game in one `project_write`, cut at 8192 tokens, the run
+    #: failed, and the next turn -- holding no memory of why -- sent it whole
+    #: again.
+    cut_off: bool = False
 
 
 class ToolResult(VersionedModel):

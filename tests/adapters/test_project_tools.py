@@ -51,7 +51,7 @@ from agent_workbench.domain.policies import (
     PrincipalContext,
     risk_within,
 )
-from agent_workbench.domain.tools import ToolCall, ToolSpec
+from agent_workbench.domain.tools import ToolCall, ToolResult, ToolSpec
 from agent_workbench.domain.workspace import MAX_INLINE_READ_CHARS
 from agent_workbench.ports.cancellation import NullCancellationToken
 from agent_workbench.ports.project_files import (
@@ -1226,6 +1226,105 @@ async def test_a_refused_project_write_names_nothing(
         )
     assert result.error is not None
     assert result.project_writes == ()
+
+
+class TestWritingInPieces:
+    """`project_write` with `append` (ADR-0118).
+
+    The tool a model with a small output ceiling needs and did not have: three
+    runs on 2026-09-13 sent one 42 KB page whole into `project_write`, were
+    cut at 8192 tokens each time, and wrote nothing. `project_edit` cannot
+    stand in -- an edit names a snippet to replace, and "the end of the file"
+    is not a snippet the model can name without reading the file back after
+    every piece.
+    """
+
+    async def _write(
+        self, scope: ProjectFileScope, receipts: ReadReceipts, **arguments: object
+    ) -> ToolResult:
+        return await ProjectWriteTool(scope, receipts).handle(
+            _invocation("project_write", **arguments)
+        )
+
+    async def test_pieces_land_in_order_and_each_one_is_reported(
+        self, project: Path, scope: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            first = await self._write(
+                scope, receipts, path="game.html", content="<html>\n", append=True
+            )
+            second = await self._write(
+                scope, receipts, path="game.html", content="<body/>\n", append=True
+            )
+            third = await self._write(
+                scope, receipts, path="game.html", content="</html>\n", append=True
+            )
+        # The first piece creates the file: `append` on a path that is not
+        # there is a write, so the model can send every piece the same way.
+        assert first.error is None
+        assert first.content is not None and first.content.startswith("Wrote ")
+        assert second.error is None
+        assert second.content == "Appended to game.html (15 bytes now)."
+        assert third.error is None
+        assert (project / "game.html").read_text(encoding="utf-8") == (
+            "<html>\n<body/>\n</html>\n"
+        )
+        # A piece is a write for every reader of this field (ADR-086).
+        assert second.project_writes == ("game.html",)
+
+    async def test_a_file_built_from_pieces_may_then_be_replaced_whole(
+        self, project: Path, scope: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        """The model supplied every byte, so it has seen every byte."""
+
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            await self._write(scope, receipts, path="a.txt", content="one\n")
+            await self._write(
+                scope, receipts, path="a.txt", content="two\n", append=True
+            )
+            replaced = await self._write(
+                scope, receipts, path="a.txt", content="three\n"
+            )
+        assert replaced.error is None
+        assert (project / "a.txt").read_text(encoding="utf-8") == "three\n"
+
+    async def test_appending_to_a_file_never_read_does_not_earn_a_whole_receipt(
+        self, project: Path, scope: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        """Adding to the end destroys nothing; replacing the rest would.
+
+        Coverage is carried, never minted: the append is allowed without a
+        read, and the model is left holding exactly what it held before --
+        nothing -- so the wholesale write that would follow is still refused
+        with the sentence that names the read it needs.
+        """
+
+        (project / "notes.md").write_text("# kept\n", encoding="utf-8")
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            added = await self._write(
+                scope, receipts, path="notes.md", content="more\n", append=True
+            )
+            replaced = await self._write(scope, receipts, path="notes.md", content="x")
+        assert added.error is None
+        assert (project / "notes.md").read_text(encoding="utf-8") == "# kept\nmore\n"
+        assert replaced.error is not None
+        assert "seen only part" in replaced.error.message
+
+    async def test_a_binary_file_is_not_appended_to(
+        self, project: Path, scope: ProjectFileScope, receipts: ReadReceipts
+    ) -> None:
+        (project / "blob.bin").write_bytes(b"\x00\x01\x02\xff")
+        store = FilesystemProjectFileStore(ProjectSandbox(project))
+        with scope.using(store):
+            result = await self._write(
+                scope, receipts, path="blob.bin", content="text", append=True
+            )
+        assert result.error is not None
+        assert "not a text file" in result.error.message
+        assert (project / "blob.bin").read_bytes() == b"\x00\x01\x02\xff"
 
 
 class TestSearchingTheTree:

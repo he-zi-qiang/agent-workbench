@@ -351,6 +351,7 @@
       "query": "vector index",
       "top_k": 8
     },
+    "cut_off": false,
     "model_call_id": "mc_0000000000000000000000000000001",
     "schema_version": 1,
     "tool_call_id": "toolu_01demo",
