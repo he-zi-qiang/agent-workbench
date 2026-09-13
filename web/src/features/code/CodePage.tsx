@@ -295,7 +295,7 @@ export function CodePage() {
   //: for the whole of the next session's fetch.
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
-  //: 输入框左边那颗「+」开着没有，以及开着的时候展开的是哪一栏。
+  //: 输入框下面那颗「+」开着没有，以及开着的时候展开的是哪一栏。
   //:
   //: 提到这里而不是留在 `Menu` 里，是为了那条 `/`：在空输入框里打一个斜杠，开的
   //: 是同一个菜单的同一栏，而不是第二份长得像它的清单。两份清单会分叉，而它们说的
@@ -1695,7 +1695,7 @@ export function CodePage() {
             <strong>{project.data?.name ?? "项目"}</strong>
           </span>
           {/* 「看这个文件夹」和「换文件夹」曾经就在这一行上，长成两枚会动的 chip。
-              它们搬进了输入框左边那颗「+」，而这一行退回它本来的样子：**只说这一
+              它们搬进了输入框下面那颗「+」，而这一行退回它本来的样子：**只说这一
               轮落在哪**，不做事。
               两个理由。一是这一行原来同时是状态和动作——两枚灰底的 chip 里，前两枚
               点不动、后两枚点得动，而它们长得一样。二是那两件事和「上传文件」「换
@@ -1709,43 +1709,45 @@ export function CodePage() {
         usage={sumTurnUsage(blocks.map((block) => block.usage))}
       />
       <div className="aw-code-composer-row aw-mode-composer-card">
-        {/* 一个三档的选择器，不是一个「只做计划」的复选框。
-            复选框只答得出一个是非题，而读者要问的是三档里的哪一档——它把
-            「谁来拍板一次写入」整个留在了界面之外：没有这个控件的时候，
-            那件事由部署配置决定，而屏幕上没有任何地方说得出它是什么。
-            `aw-segmented` 是这份代码里已有的那个形状（`HtmlPreview` 的
-            渲染／源码用的是同一个类），因为这三个也是「同一件事的几种看法，
-            选一个」，不是三个各自独立的开关。 */}
-        <div
-          aria-label="这一轮的权限"
-          className="aw-segmented aw-code-permission"
-          role="group"
-        >
-          {/* 三档，不是四档：`offeredPermissions` 说了为什么。两份「提不提供
-              放手做」的答案都还没到时按不提供画——一颗在下一帧消失的按钮，和
-              一颗按下去换来 422 的按钮，教给读者的都是错的规则。 */}
-          {offeredPermissions(unattendedOffered).map((choice) => (
-            <button
-              aria-pressed={shownPermission === choice.value}
-              className={shownPermission === choice.value ? "is-active" : ""}
-              disabled={running}
-              key={choice.value}
-              onClick={() => {
-                setPermission(choice.value);
-              }}
-              title={choice.hint}
-              type="button"
-            >
-              {choice.value === "plan" ? (
-                <ClipboardList aria-hidden size={13} />
-              ) : null}
-              {choice.value === "ask" ? <UserCheck aria-hidden size={13} /> : null}
-              {choice.value === "act" ? <Zap aria-hidden size={13} /> : null}
-              {choice.value === "auto" ? <Rocket aria-hidden size={13} /> : null}
-              {choice.label}
-            </button>
-          ))}
-        </div>
+        {/* 输入框在 DOM 里排第一，因为它在版面上也排第一：卡片的第一行归它，
+            「+」、权限、发送在下面一条（为什么不分宽窄都是两行，见 app.css 的
+            `.aw-code-composer-row`）。那条规则只给发送键写了位置，其余三个按这里的
+            顺序落进轨道——这里换顺序，版面就跟着换。 */}
+        <label className="aw-sr-only" htmlFor="aw-code-instruction">
+          要做的事
+        </label>
+        <textarea
+          aria-keyshortcuts="Enter"
+          disabled={running}
+          enterKeyHint="send"
+          id="aw-code-instruction"
+          maxLength={8192}
+          onChange={(event) => {
+            setInstruction(event.target.value);
+          }}
+          onKeyDown={(event) => {
+            // 空输入框里的一个 `/`，开的是「+」菜单的「快捷指令」那一栏——不是第二份
+            // 长得像它的清单。两份会分叉，而它们说的是同一组东西。
+            //
+            // 只在**空**输入框里，且不在拼音输入过程中：一个正在被输入法组合的按键
+            // 会同时报出 `isComposing`，而在一句中文中间打斜杠是完全正常的事。
+            if (
+              event.key === "/" &&
+              instruction === "" &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              setMenuSubmenu(COMMANDS_SUBMENU);
+              setMenuOpen(true);
+              return;
+            }
+            submitTextareaOnEnter(event);
+          }}
+          placeholder="描述你要做的事"
+          ref={instructionRef}
+          rows={3}
+          value={instruction}
+        />
         <ComposerMenu
           catalogue={toolOffer.data}
           catalogueFailed={toolOffer.isError}
@@ -1793,41 +1795,43 @@ export function CodePage() {
           uploading={uploading}
           writeGate={shownPermission === "ask"}
         />
-        <label className="aw-sr-only" htmlFor="aw-code-instruction">
-          要做的事
-        </label>
-        <textarea
-          aria-keyshortcuts="Enter"
-          disabled={running}
-          enterKeyHint="send"
-          id="aw-code-instruction"
-          maxLength={8192}
-          onChange={(event) => {
-            setInstruction(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            // 空输入框里的一个 `/`，开的是「+」菜单的「快捷指令」那一栏——不是第二份
-            // 长得像它的清单。两份会分叉，而它们说的是同一组东西。
-            //
-            // 只在**空**输入框里，且不在拼音输入过程中：一个正在被输入法组合的按键
-            // 会同时报出 `isComposing`，而在一句中文中间打斜杠是完全正常的事。
-            if (
-              event.key === "/" &&
-              instruction === "" &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              setMenuSubmenu(COMMANDS_SUBMENU);
-              setMenuOpen(true);
-              return;
-            }
-            submitTextareaOnEnter(event);
-          }}
-          placeholder="描述你要做的事"
-          ref={instructionRef}
-          rows={3}
-          value={instruction}
-        />
+        {/* 一个三档的选择器，不是一个「只做计划」的复选框。
+            复选框只答得出一个是非题，而读者要问的是三档里的哪一档——它把
+            「谁来拍板一次写入」整个留在了界面之外：没有这个控件的时候，
+            那件事由部署配置决定，而屏幕上没有任何地方说得出它是什么。
+            `aw-segmented` 是这份代码里已有的那个形状（`HtmlPreview` 的
+            渲染／源码用的是同一个类），因为这三个也是「同一件事的几种看法，
+            选一个」，不是三个各自独立的开关。 */}
+        <div
+          aria-label="这一轮的权限"
+          className="aw-segmented aw-code-permission"
+          role="group"
+        >
+          {/* 三档，不是四档：`offeredPermissions` 说了为什么。两份「提不提供
+              放手做」的答案都还没到时按不提供画——一颗在下一帧消失的按钮，和
+              一颗按下去换来 422 的按钮，教给读者的都是错的规则。 */}
+          {offeredPermissions(unattendedOffered).map((choice) => (
+            <button
+              aria-pressed={shownPermission === choice.value}
+              className={shownPermission === choice.value ? "is-active" : ""}
+              disabled={running}
+              key={choice.value}
+              onClick={() => {
+                setPermission(choice.value);
+              }}
+              title={choice.hint}
+              type="button"
+            >
+              {choice.value === "plan" ? (
+                <ClipboardList aria-hidden size={13} />
+              ) : null}
+              {choice.value === "ask" ? <UserCheck aria-hidden size={13} /> : null}
+              {choice.value === "act" ? <Zap aria-hidden size={13} /> : null}
+              {choice.value === "auto" ? <Rocket aria-hidden size={13} /> : null}
+              {choice.label}
+            </button>
+          ))}
+        </div>
         <button
           aria-label={running ? "正在处理" : "发送"}
           className="aw-button is-primary aw-mode-send"

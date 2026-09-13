@@ -1464,7 +1464,7 @@ select {
 }
 
 .aw-code-composer-row {
-  padding: 6px;
+  padding: 4px;
   border: 1px solid var(--aw-border);
   border-radius: 12px;
   background: var(--aw-panel);
@@ -1708,29 +1708,11 @@ select {
   padding: 0;
 }
 
-.aw-code-main.is-start .aw-code-composer-row {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 4px;
-  gap: 4px 8px;
-  border-radius: 16px;
-}
-
-.aw-code-main.is-start .aw-code-composer textarea {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.aw-code-main.is-start .aw-composer-plus {
-  grid-row: 2;
-  grid-column: 1;
-}
-
+/* 起始屏和会话页的输入卡是同一种排法（写在 app.css 的 `.aw-code-composer-row`），
+ * 这里只剩起始屏自己的尺寸：更高更大的输入框（上面和 Chat 新会话共用的那条），以及
+ * 圆的发送键。此前这里另写了三条轨道和三处 `grid-row` / `grid-column`，因为会话页
+ * 那边是四个并排；两边一样之后，那几行说的全是 app.css 已经说过的话。 */
 .aw-code-main.is-start .aw-code-composer-row > .aw-button.is-primary {
-  grid-row: 2;
-  grid-column: 3;
   border-radius: 50%;
 }
 
