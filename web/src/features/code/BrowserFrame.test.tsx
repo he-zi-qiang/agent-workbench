@@ -64,7 +64,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      headers: { get: () => null },
+      headers: { get: (): string | null => null },
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     render(<BrowserFrame identity={IDENTITY} />);
@@ -96,7 +96,7 @@ describe("BrowserFrame（ADR-0113 §3.6）", () => {
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
-      headers: { get: () => null },
+      headers: { get: (): string | null => null },
       blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
     });
     const view = render(<BrowserFrame identity={IDENTITY} />);
@@ -113,7 +113,7 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
   const frameResponse = {
     ok: true,
     status: 200,
-    headers: { get: () => null },
+    headers: { get: (): string | null => null },
     blob: () => Promise.resolve(new Blob([new Uint8Array([0xff, 0xd8])])),
   };
 
@@ -124,7 +124,7 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
           ? {
               ok: input.ok,
               status: input.status,
-              headers: { get: () => "application/json" },
+              headers: { get: (): string | null => "application/json" },
               json: () => Promise.resolve(input.body),
               text: () => Promise.resolve(JSON.stringify(input.body)),
             }
@@ -216,7 +216,7 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
         ok: true,
         status: 200,
         headers: {
-          get: (name: string) =>
+          get: (name: string): string | null =>
             name === "X-Browser-Url"
               ? "file:///projects/windows%E6%B5%8B%E8%AF%95/mario.html"
               : null,
