@@ -76,11 +76,42 @@ length`，JSON 断在中间，`RunFailed`；第二轮从头重读所有文件（
   （`application` 两次都在）。Linux 容器（`agent-workbench:local` 挂载检出、`/tmp/venv`）：
   `test_project_tools.py` + `test_project_file_store.py` + `test_project_api.py` + `tests/runtime` +
   `test_deepseek_model.py` `534 passed`。前端没动（964）。
-- 实测：见 §2.1（合入并重建栈之后补）。
+- 实测：见 §2.1。
+
+### 2.1 合入之后在控制台上重放用户那两句（栈重建，镜像 `01698f5c…`）
+
+新建会话（`ses_a42b…`，项目 `windows测试`，「放手做」），发用户的原话「请你编写马里奥」，再发「开始编写」。
+
+- **第一轮**（15 步、17 次调用、207k 输入 token）：模型没写。它把 `snake.html` 和 `snake.py` 按
+  offset/limit 分窗读（工具说明明写着「不传 offset 和 limit 就整份回来」，两份各 13 KB 与 11 KB 远在
+  48,000 字符的上限之内），又读了上一段会话失败时留在 `scratch/` 里的两个半截文件，然后**同一个**
+  `project_read` 连发四次——后三次 `replayed=true`，第三次收走工具（ADR-0116），模型写了一份如实的报告：
+  「I called `project_read` on `snake.py` with the same arguments four times in a row. The tool told me each
+  time it was the same answer and to stop; I kept going. That was my error」，并列出下一步「分段写：先
+  HTML/CSS 壳，再关卡数据，再游戏逻辑」。零张审批卡。
+- **第二轮**「开始编写」（60 步、61 次调用、246 秒、零张审批卡、零条 `ToolFailed`）：**`mario.html` 写出来了，
+  31,928 字节。** 八段落地——第一段 `project_write`（HTML 壳与 CSS，932 输出 token），之后七段
+  `project_edit`（关卡数据、`Level`、`Mario`、`Goomba`、`MarioGame`、游戏逻辑、渲染，每段 740–2,783 输出
+  token），没有一段接近 8192，所以截断那条路这一轮没被走到（它由测试覆盖）；模型选了 `project_edit`
+  而不是 `append`，对自己刚写的文件它叫得出接缝。然后 `python3` 量行长（15 行都是 160）、`browser_open`
+  打开页面、`browser_diagnostics` 无错、`browser_eval` 查画布、`browser_interact` 按方向键，发现并修了
+  三个真 bug（`onGround` 每帧翻转、重生点比落地高 2px、`_step()` 里 `bumped` 被提前清掉），直到「block
+  bump 生效：瓦片 3→4、得分 0→200」——**在测金币收集时撞上 `max_steps`（60），`RunFailed`**。
+  从帧路由取一张（`GET /v1/browser/frame`）：得分 200、生命 3、马里奥站在地面、一个已用方块、
+  两个问号块、水管、山丘——游戏在跑。本机核对：`LEVEL_ROWS` 15 行、长度集合 `{160}`、一个 `<script>`、
+  没有外链。
+- 两轮合计：用户原来三轮里那种「整个文件一次发、8192 处截断、什么都没写」**没有再发生**；模型照
+  提示词分段写了。
 
 ### 3. 顺带看到、没修
 
 - F-44：第二轮 338k 输入 token 全花在重读上；一轮失败之后下一轮不知道为什么。另一条 ADR。
+- **F-45（新）**：第二轮在 `max_steps` 上 `RunFailed`，而失败的一轮不留报告——文件已经写好、bug 已经
+  修了三个，控制台上却只有「这一轮没有跑完（max_steps）」，下一轮的模型什么也不知道。ADR-0116 给
+  「工具被收走」的一轮留了一次不带工具的收尾调用；步数用尽的一轮值得同一种收尾。
+- 第一轮那个读循环是模型自己的：把 13 KB 的文件分三窗读、再把同一窗读四遍。ADR-0116 的三次上限和
+  如实报告是这里该有的全部；上一段会话留在 `scratch/` 里的两个半截文件（模型自己用 `python3` 劈的，
+  报告里却说「scratch 还是空的」）本批顺手删了，它们又花掉两次读。
 - 参数恰好在合法 JSON 边界被截断的调用会被当成完整的派发；没见过，登记在 ADR §4。
 - 第一轮四条 `python3` 都各弹一张卡，是「改前问我」的设计；用户这次没选「放手做」。
 
