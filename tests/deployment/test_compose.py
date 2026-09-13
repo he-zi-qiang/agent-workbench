@@ -1287,3 +1287,111 @@ def test_the_image_carries_node_for_the_runner_and_nothing_to_install_with() -> 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY --from=web-build /usr/local/bin/node /usr/local/bin/node" in dockerfile
     assert "/usr/local/lib/node_modules" not in dockerfile
+
+
+# --- the dependency layer outlives a change to the code (2026-09-13) ----------
+
+
+def _dockerfile_instructions(path: Path) -> list[str]:
+    """One string per instruction: comments dropped, continuations joined.
+
+    Read in order rather than searched, because what this guards is an
+    ordering -- and every line of it would still be in the file, and still
+    satisfy a substring search, after somebody moved a `COPY` back above the
+    sync.
+    """
+
+    instructions: list[str] = []
+    pending = ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        instructions.append(" ".join((pending + line).split()))
+        pending = ""
+    return instructions
+
+
+def _context_sources(instruction: str) -> list[str]:
+    """What a `COPY` takes from the build context; nothing, for `--from=`."""
+
+    if not instruction.startswith("COPY ") or "--from=" in instruction:
+        return []
+    arguments = [
+        token for token in instruction.split()[1:] if not token.startswith("--")
+    ]
+    return arguments[:-1]
+
+
+def test_a_change_to_the_code_or_the_console_reuses_the_dependency_layer() -> None:
+    """Until 2026-09-13 the image ran one `uv sync` after every `COPY`, so a
+    rebuild whose only change was in `web/` downloaded all 175 packages of the
+    `embedding` extra again -- `Prepared 175 packages in 4m 44s`, then 230s
+    exporting an 11.5 GB layer, 5.2 GB of it uv's own download cache.
+
+    What fixed it is where two lines sit, and a line in the wrong place fails
+    nothing: the build is correct either way, only minutes slower. So the
+    runtime stage is read in order. The first sync may see the lock and
+    `pyproject.toml` and nothing else; the second only what hatchling builds
+    the wheel from; the console lands after both. Both run as `app` with a
+    cache mount, because the alternative -- a `chown -R` once the venv is a
+    layer down -- would copy the venv up into the next layer. And the browser
+    image, whose uv runs as root, keeps its cache under a different `id`.
+    """
+
+    instructions = _dockerfile_instructions(ROOT / "Dockerfile")
+    runtime = instructions[
+        max(i for i, line in enumerate(instructions) if line.startswith("FROM ")) + 1 :
+    ]
+
+    syncs = [
+        i
+        for i, line in enumerate(runtime)
+        if line.startswith("RUN ") and "uv sync" in line
+    ]
+    assert len(syncs) == 2, [runtime[i] for i in syncs]
+    dependencies, project = syncs
+    for i in syncs:
+        for flag in (
+            "--mount=type=cache",
+            "--frozen",
+            "--no-editable",
+            "--extra embedding",
+        ):
+            assert flag in runtime[i], (flag, runtime[i])
+    assert "--no-install-project" in runtime[dependencies]
+    assert "--no-install-project" not in runtime[project]
+
+    before = {s for line in runtime[:dependencies] for s in _context_sources(line)}
+    assert before == {"pyproject.toml", "uv.lock"}, before
+    between = {
+        s for line in runtime[dependencies:project] for s in _context_sources(line)
+    }
+    assert between == {"README.md", "config", "src"}, between
+    after = {s for line in runtime[project:] for s in _context_sources(line)}
+    assert {"alembic.ini", "migrations", "docker"} <= after, after
+    console = next(i for i, line in enumerate(runtime) if "/build/web/dist" in line)
+    assert console > project
+
+    users = [line for line in runtime[:dependencies] if line.startswith("USER ")]
+    assert users and users[-1] == "USER app:app", users
+    assert not any(
+        "chown" in line for line in runtime[dependencies:] if line.startswith("RUN ")
+    )
+
+    def cache_id(instruction: str) -> str:
+        match = re.search(r",id=([^,\s]+)", instruction)
+        assert match, f"a cache mount without an explicit id: {instruction}"
+        return match.group(1)
+
+    browser = [
+        line
+        for line in _dockerfile_instructions(ROOT / "docker" / "browser.Dockerfile")
+        if line.startswith("RUN ") and "uv sync" in line
+    ]
+    assert len(browser) == 1, browser
+    assert cache_id(browser[0]) != cache_id(runtime[dependencies])
+    assert cache_id(runtime[dependencies]) == cache_id(runtime[project])

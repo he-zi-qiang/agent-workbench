@@ -84,6 +84,12 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 | 第八十九批（只改数字的循环被拒 / 步骤两层折叠 / 按下的就是发出去的，**只跑了碰到的目录**） | 4122※※※ | 3573※W / 3681※L | 1408※※※ | **988** |
 | 第九十批（会话输入框独占卡片第一行，**只重测前端**） | 4122※※※ | 3573※W / 3681※L | 1408※※※ | **989** |
 | 第九十一批（Compose 的持久事件轮询 10 → 1 秒，**没有重测任何一列**） | 4122※※※ | 3573※W / 3681※L | 1408※※※ | 989 |
+| 第九十二批（镜像的依赖一层、项目一层，uv 缓存挂载，**没有重测任何一列**） | 4122※※※ | 3573※W / 3681※L | 1408※※※ | 989 |
+
+**第九十二批那一行没有重测任何一列**（2026-09-13）：本批改的是 `Dockerfile`、`docker/browser.Dockerfile`、
+`.dockerignore` 和一条部署测试，跑的是 `tests/deployment`、`tests/architecture` 与
+`tests/api/test_system_capabilities.py`（179 条过，其中 `test_compose.py` 49 条，+1 是本批的），不是全集，四列照抄。
+本批的证据是六次镜像构建，在 status.md 里。
 
 **第九十一批那一行没有重测任何一列**（2026-09-13）：本批只改了 `config/config.compose-local.toml` 的一个值，
 跑的是它碰到的两个文件（`tests/config/test_compose_profile.py`、`tests/deployment/test_compose.py`，57 条过），

@@ -27,6 +27,100 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第九十二批）：改一行代码或前端，镜像不再重下 CUDA 轮子——依赖一层、项目一层，下载留在构建缓存里
+
+第八十九批「顺带看到、没修」里的一条，结尾写着「另开了一段会话去改」：第二层折叠那次重建只改了前端，`Dockerfile`
+却把 `embedding` extra 整个重新下载了一遍。第九十一批验证时也因为这个没有重建镜像，改用环境变量只重建了 API 一个
+容器。
+
+### 1. 改之前的账
+
+- 当天 `var/` 里记下的重建，`uv sync` 那一步跑了十一次，**光下载**（`Prepared 175 packages`）每次 4m 44s 到 10m 09s，
+  一共 67 分钟。它排在 `COPY src`、`COPY docker` 和前端产物之后，也没有缓存挂载，任何一个文件变了都让它重跑。
+- 只改了 `web/` 的那一次（`stack-rebuild-13.log`）：这一步 304.7 s，接着导出它 11.5 GB 的一层 230.3 s；浏览器镜像
+  派生自它，跟着重跑自己的 `uv sync`（15.0 s，其中 10.64 s 在下 Playwright 的 45.5 MiB 轮子）和
+  `playwright install`（75.2 s）。
+- **那 11.5 GB 里有 5.2 GB 是 uv 自己的下载缓存。** 在 `agent-workbench:local` 里 `du -sh` 量的：`/root/.cache/uv`
+  5.2 G，venv 5.6 G；浏览器镜像里那份缓存 5.4 G。运行时没有任何东西读它。
+
+### 2. 改了什么
+
+- **`Dockerfile`：两次 `uv sync`。** 第一次只看得见 `pyproject.toml` 和 `uv.lock`（`--no-install-project`）；第二次在
+  `README.md`、`config/`、`src/` 之后装项目本身——hatchling 构建 wheel 读的正是这三样（readme 字段、force-include 的
+  三份配置、包目录）；`alembic.ini`、`migrations/`、`docker/`、冒烟脚本、评测报告和前端产物都排到两次之后。两次都挂
+  BuildKit 缓存，下载留在构建缓存里，不进镜像。`--frozen`、`--no-editable`、`--extra embedding` 原样。
+- **以 `app` 身份跑，不再 `chown -R`。** 原来那一步结尾的 `chown -R app:app /app` 碰到的文件都是同一步里建的，不占
+  空间；venv 移到下面一层之后，同一行会把它碰到的每个文件复制进上面一层，整个 venv 再来一份。现在两次 sync 之前是
+  `USER app:app`，文件生来就归 `app`；`/var/lib/agent-workbench` 的两个目录挪进建用户那一步（此后再没有以 root 跑的
+  步骤）。挂载的 `uid`/`gid` 让 `app` 写得了缓存；`id` 和浏览器镜像的分开——那边 uv 以 root 跑，写进同一份缓存会
+  留下 `app` 写不了的条目。
+- **`docker/browser.Dockerfile`**：它的 `uv sync` 同样挂缓存，用自己的 `id`。后面的 `playwright install` 见 §4。
+- **`.dockerignore`**：`__pycache__/`、`*.py[cod]` 前加 `**/`。不加的话这两行只匹配构建上下文的根：
+  `agent-workbench:local` 的 `/app/src` 里有 441 个本机测试写出来的 `.pyc`，其中 84 个属于镜像里根本没有的 3.13。
+  现在项目那次 sync 紧跟在 `COPY src` 后面，本机跑一次测试就会让下一次构建重跑它。
+- **`test_compose.py` 新增一条**（`test_a_change_to_the_code_or_the_console_reuses_the_dependency_layer`）：按顺序读
+  运行阶段的指令——第一次 sync 之前的上下文 `COPY` 只能是 `pyproject.toml`、`uv.lock`，两次之间只能是 `README.md`、
+  `config`、`src`，前端产物在两次之后；两次都挂缓存、都以 `app` 跑，之后没有 `chown`；浏览器镜像的缓存 `id` 和这边
+  不同。顺序放错了构建照样成功、只是慢几分钟，没有别的东西会红，所以写成测试。拿六种改法喂过它：HEAD 的
+  `Dockerfile`、`COPY src` 挪到第一次 sync 之前、前端产物挪到前面、补回 `chown -R`、去掉项目那次的挂载、浏览器镜像
+  用同一个 `id`——六种都红，原样的绿。
+- `scripts/stack.cmd` 与 `docs/windows-quickstart.md` 里那张 2026-09-11 的磁盘账各补一段带日期的说明：镜像少了
+  5.2 GB 的缓存，但它挪进了构建缓存，合计没有重新量过，两条下限不动。
+
+### 3. 证据
+
+构建都在这台机器上、从这个工作树、带 `--build-arg WITH_FIDELITY_PREVIEW=1`（和 `stack.cmd` 一样）打临时标签，没有
+碰 `agent-workbench:local`，也没有碰跑着的栈。
+
+| 构建 | 比上一次多改了什么 | 依赖那次 sync | 项目那次 sync | 导出 | 合计 |
+|---|---|---|---|---|---|
+| 1 | 新 `Dockerfile`，缓存挂载是空的 | 516.9 s（`Prepared 174 packages in 8m 17s`） | 5.5 s | 136.5 s | 11m 39s |
+| 2 | `src/` 加一行注释 | **重跑，全部重下**（见下） | 5.1 s | 120.5 s | 7m 50s |
+| 3 | `web/` 加一行 CSS 注释（压缩时被删掉，产物没变） | CACHED | CACHED | — | 11.8 s |
+| 3b | `web/` 加一条留得下来的 CSS 规则 | CACHED | CACHED | 2.9 s | 11.7 s |
+| 4 | `pyproject.toml` 加一行注释 | 重跑，**零次下载**：`Installed 174 packages in 13.12s`，17.9 s | 4.2 s | 118.6 s | 2m 51s |
+| 5 | `src/` 再加一行注释 | CACHED | 2.8 s | 3.0 s | 10.5 s |
+
+- **第 2 次为什么全部重下了。** 第 1 次构建的同时，主检出上正好跑着一次旧 `Dockerfile` 的重建
+  （`docker buildx history ls` 里的 `AgentWorkbench`，13m 5s，紧接着浏览器镜像——正是 `stack.cmd` 的两步；它的日志
+  `stack-rebuild-14.log`：`Prepared 175 packages in 7m 21s`，导出 249.7 s），又往构建缓存里写了一份 11.5 GB 的层。
+  这台 Docker Desktop 的构建缓存上限是 20 GiB（`daemon.json` 的 `builder.gc.defaultKeepStorage`）。
+  `docker buildx du --verbose` 看得出第 1 次的依赖层和缓存挂载都被删了：第 2 次用的缓存挂载，创建时刻就是它自己
+  那一步开始的时刻。BuildKit 自己记的依赖层是 9.0 GB（`docker history` 里是 5.93 GB，差额没有单独量），缓存挂载
+  5.6 GB。**这是本批在这台机器上的边界**：依赖层能复用，前提是 GC 还留着它，缓存挂载是它被删之后的退路；两个一起被
+  挤掉，就回到一次完整下载。写进了 `Dockerfile` 的注释，免得下一个人看到重下就以为顺序坏了。
+- **和旧镜像逐项对过**（第 1 次的镜像对 `agent-workbench:local`，同一次提交）：
+  - `/app` 与 `/var/lib/agent-workbench` 下每条路径的属主、权限位、类型：除了旧镜像 `/app/src` 里那 441 个本机 `.pyc`
+    和它们的 46 个目录，完全一致；`/app` 下不归 `app` 的文件两边都是 0。
+  - venv 里 32,857 个非字节码文件的 md5 只有三处不同：14 个 `bin/agent-*` 的 shebang 从 `/app/.venv/bin/python` 变成
+    `python3`（第二次 sync 是在已有的 venv 上跑的，两个名字在 venv 里都指向 `/usr/local/bin/python3.12`）、记着它们
+    哈希的 `RECORD`、带时间戳的 `uv_cache.json`。17,823 个 `.pyc` 的路径和属主一致。
+  - 新镜像里没有 `/root/.cache/uv`，也没有缓存挂载留下的空目录；以 uid 10001 跑，`agent-config-check` 经那个
+    `python3` shebang 起得来，`agent_workbench` 从 site-packages 导入（非 editable），`torch 2.13.0+cu130`、
+    `sentence_transformers`、`FlagEmbedding` 都导入得了，`/app/web` 里是控制台产物。
+- **大小**（`docker images`）：项目镜像 18.8 GB → 10.3 GB，浏览器镜像 20.5 GB → 11.8 GB。依赖层 5.93 GB、项目层
+  9.96 MB，旧的那一层 11.5 GB。
+- **浏览器镜像**：B1 叠在第 4 次上，`uv sync` 照旧下载 Playwright（缓存挂载是空的，这一步 13.8 s）；B2 叠在第 5 次
+  上，**没有下载**，`Installed 2 packages in 321ms`，这一步 2.0 s。`playwright install` 69.5 s，导出 21.4 s，合计
+  1m 38s。镜像里同样没有 uv 缓存，`playwright` 以 `app` 导入得了。
+- **`.dockerignore`**：工作树 `src/` 下有 8 个跑测试留下的 `__pycache__`，第 5 次镜像的 `/app/src` 里是 0。
+- 后端：`tests/deployment`、`tests/architecture` 与 `tests/api/test_system_capabilities.py` 179 条过（其中
+  `test_compose.py` 49 条，+1 是本批的），`ruff format --check`、`ruff check` 过。用的是主检出那个 venv（同一次
+  提交），工作树里没有建 venv。
+
+### 4. 没做的
+
+- **`playwright install` 每次重建仍然要跑**（69.5–75.2 s，外加约 22 s 导出 939 MB 的层）：浏览器镜像 `FROM` 完成的
+  项目镜像，项目镜像一变它的每一步都重跑，而它装的东西必须留在镜像里，缓存挂载省不掉。要留住，得让 Chromium 装在
+  项目的层下面，也就是这个镜像不再派生自完成的那个——那是 ADR-0113 §3.5b 选的形状，先写 ADR。
+- **没有调这台机器的构建缓存上限。** 经常重建的机器可以在 Docker Desktop → Settings → Docker Engine 里把
+  `builder.gc.defaultKeepStorage` 调大；那是机器的设置，不是仓库的。
+- **没有重建跑着的栈。** 下一次 `scripts\stack.cmd` 第一次按新布局构建，依赖那一步能不能命中，取决于 GC 有没有删掉
+  本批留下的那一条。为此留着 `agent-workbench:layer-probe-3b` 这个标签（它的依赖层和提交里的 `pyproject.toml`、
+  `uv.lock` 对得上），重建之后 `docker rmi agent-workbench:layer-probe-3b` 即可；没命中就是一次完整下载，此后改代码
+  和前端都不再重下。
+
+---
 ## 2026-09-13（第九十一批）：Compose 栈上的步骤不再十秒一跳（`catchup_poll_seconds` 10 → 1）
 
 第八十九批验证折叠时，在一段正在跑的会话里记下控制台步骤列表的每一次变化：一轮十二条三秒的命令，列表在发出后
