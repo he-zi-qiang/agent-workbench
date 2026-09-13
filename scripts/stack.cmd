@@ -208,6 +208,13 @@ rem              pruned, so the build cannot finish. Hard stop.
 rem      50 GB   the measured figure rounded up. Under it the build can still
 rem              run out while the cache is at its peak.
 rem
+rem  2026-09-13: in an image built the same way, 18.8 GB that day, 5.2 GB
+rem  was uv's download cache. It has left the image -- the same build now
+rem  measures 10.3 GB, the browser image 11.8 GB instead of 20.5 -- and
+rem  moved into the build cache as a BuildKit cache mount (see the
+rem  Dockerfile), so the total above is not smaller by the difference. It has
+rem  not been measured again, which is why both floors stay where they are.
+rem
 rem  The failure this prevents does not look like a disk failure. Docker fills
 rem  the volume, the build stops at `unpacking to ...` and stays there: no
 rem  error, no exit, the log simply stops and the daemon begins answering 500

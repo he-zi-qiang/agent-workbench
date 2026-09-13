@@ -4,8 +4,14 @@
 .pytest_cache/
 .ruff_cache/
 .pyright/
-__pycache__/
-*.py[cod]
+# `**/`, because a bare pattern in this file matches at the root of the
+# context and nowhere below it. Until 2026-09-13 these two lines were bare, and
+# the image carried 441 `.pyc` files local test runs had written under `src/`,
+# 84 of them for a Python 3.13 the image does not have. Since the project's
+# `uv sync` sits right after `COPY src`, a test run would also re-run it on
+# the next build without a line of code having changed.
+**/__pycache__/
+**/*.py[cod]
 *.egg-info/
 .env
 .env.*

@@ -37,7 +37,21 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 # one for the API that drives it. `--extra embedding` is repeated because
 # `uv sync` makes the environment match what is asked for -- naming only
 # `browser` here would *remove* the embedding runtime the base image installed.
-RUN uv sync --frozen --no-dev --no-editable --extra embedding --extra browser
+#
+# A cache mount, for the reason the base image has one. This image derives from
+# that one, so every rebuild of it -- every change to `src/` or to the console --
+# re-runs every step below, and without a cache this one downloads Playwright's
+# 45.5 MiB wheel again: 10.64s of a 15.0s step on 2026-09-13. Its own `id`,
+# because this uv runs as root and the base image's cache belongs to `app`.
+#
+# The step after it is the larger cost and no mount removes it: 75.2s that day,
+# and a 939 MB layer to export, because what it installs has to be in the
+# image. Only installing Chromium beneath the project's layers would keep it,
+# which means this image stops deriving from the finished one -- the shape
+# ADR-0113 §3.5b chose, so a change for an ADR rather than for this line.
+RUN --mount=type=cache,id=agent-workbench-uv-root,target=/var/cache/uv \
+    UV_CACHE_DIR=/var/cache/uv \
+    uv sync --frozen --no-dev --no-editable --extra embedding --extra browser
 
 # `--with-deps` is an `apt-get install` of the libraries Chromium links
 # against, chosen by Playwright for this exact browser build rather than by us
