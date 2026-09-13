@@ -177,19 +177,24 @@ describe("BrowserFrame 可以操作（ADR-0117）", () => {
     });
   });
 
-  it("模型在跑的那一轮里被拒，那句话画出来而不是悄悄丢掉", async () => {
+  it("模型在跑的那一轮里被拒，那句话画出来而不是悄悄丢掉，之后自己退下去", async () => {
     answering({
       ok: false,
       status: 409,
       body: { detail: "the model is driving the browser: 1 coding turn(s) in flight" },
     });
-    render(<BrowserFrame identity={IDENTITY} />);
+    render(<BrowserFrame identity={IDENTITY} refusalMs={50} />);
     const image = await waitFor(() => screen.getByAltText("浏览器当前画面"));
 
     fireEvent.click(image, { clientX: 5, clientY: 5 });
 
     await waitFor(() => {
       expect(screen.getByRole("status").textContent).toMatch(/模型正在操作/);
+    });
+    // 实测里那一轮 11 秒就完了，这句话却挂到下一次点击——读者看到的是「还是
+    // 不能操作」。到时候它要自己退回平常的提示。
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).not.toMatch(/模型正在操作/);
     });
   });
 });

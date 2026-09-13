@@ -36,6 +36,13 @@ import type { PrincipalIdentity } from "../../api/types";
  */
 const POLL_MS = 1000;
 const POLL_MS_FOCUSED = 250;
+/**
+ * 一句拒绝挂多久。第一版一直挂到下一次输入，而实测里模型那一轮 11 秒就结束了，
+ * 「模型正在操作这个页面」却留在那里——读者看到的是「还是不能操作」，正是这块
+ * 面要消掉的那句话。四秒够读完，之后退回平常的提示；再点一下当然又会得到
+ * 当时的真实答案。
+ */
+const REFUSAL_MS = 4000;
 
 type Frame =
   | { kind: "loading" }
@@ -49,9 +56,11 @@ interface Props {
    * `fetch` 不带头，在 Compose 栈上一秒一次 401，面板永远说「没在跑」。
    */
   identity: PrincipalIdentity;
+  /** 拒绝那句话挂多久；测试里传得短，产品里不传。 */
+  refusalMs?: number;
 }
 
-export function BrowserFrame({ identity }: Props) {
+export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
   const [frame, setFrame] = useState<Frame>({ kind: "loading" });
   // 上一帧的 object URL，拿到新的之后要撤销——一秒一张，不撤销就是一分钟六十
   // 个 blob 挂在文档上。
@@ -80,6 +89,12 @@ export function BrowserFrame({ identity }: Props) {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (refusal === null) return;
+    const timer = window.setTimeout(() => setRefusal(null), refusalMs);
+    return () => window.clearTimeout(timer);
+  }, [refusal, refusalMs]);
 
   useEffect(() => {
     let cancelled = false;
