@@ -10095,3 +10095,20 @@ p.aw-code-step-thought {
   margin: 4px 0 0 18px;
   padding: 0;
 }
+
+/* 「前面 N 步」那一行（ADR-0121 第二层）：它说的是「已经过去的」，所以比留在眼前的
+   那几行退一档；摘要可能很长，截断而不换行。 */
+.aw-code-head > .aw-code-action-fold > .aw-code-action {
+  color: var(--aw-text-muted, #8b949e);
+}
+
+.aw-code-head .aw-code-action-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 同一动作折成的那一行：和普通的一步同样的缩进与间距，只是多一个次数。 */
+.aw-code-fold > .aw-code-action-fold > .aw-code-action {
+  cursor: pointer;
+}

@@ -97,7 +97,7 @@ import type { StepGroup } from "../../components/stepGroups";
 import { splitThought } from "../../components/thought";
 import type { ToolProgressView } from "./useCodeStream";
 import { FileCard } from "./FileCard";
-import { foldSteps, type FoldedStep } from "./foldSteps";
+import { foldHead, foldSteps, type FoldedStep } from "./foldSteps";
 import { stopNote } from "./stopNote";
 import type { CodeTurnBlock, TurnStep } from "./turnBlocks";
 
@@ -144,6 +144,42 @@ export function CodeTurn({
     activeStep?.group === null || activeStep?.group === undefined
       ? undefined
       : toolProgress.get(toolCallIdOf(activeStep.group));
+  // 一项怎么画：一步、同一动作的一串、或者「前面 N 步」。写成一个函数交给
+  // `HeadRow`，因为被收起来的那些项展开之后要画成和没收时一模一样的行。
+  const renderItem = (item: FoldedStep): React.ReactNode => {
+    if (item.kind === "head") {
+      return <HeadRow head={item} key={item.key} renderItem={renderItem} />;
+    }
+    if (item.kind === "fold") {
+      return (
+        <FoldRow
+          fold={item}
+          key={item.key}
+          liveThinking={liveThinking}
+          liveThinkingCallId={liveThinkingCallId}
+          toolProgress={toolProgress}
+        />
+      );
+    }
+    return (
+      <TurnStepRow
+        // Keyed by the model call, not the group. The same call is
+        // `model:mc_2` while it is open and `tool:call_x` once its
+        // ModelCompleted merges it into the call it named -- keying by
+        // the group would remount at exactly that moment and reset the
+        // disclosure the reader is mid-sentence in.
+        key={item.step.modelCallId ?? item.step.key}
+        live={
+          item.step.modelCallId !== "" &&
+          item.step.modelCallId === liveThinkingCallId
+        }
+        liveThinking={liveThinking}
+        step={item.step}
+        toolProgress={toolProgress}
+      />
+    );
+  };
+
   const liveStatus = codeLiveStatus({
     activeProgress,
     activeStep,
@@ -170,34 +206,11 @@ export function CodeTurn({
 
       {block.steps.length === 0 ? null : (
         <ol aria-label="这一轮做了什么" className="aw-code-steps">
-          {/* 连着做同一件事的几步折成一行（ADR-0121）：一轮 113 步一样的命令，
-              此前是 113 行。 */}
-          {foldSteps(block.steps, { liveCallId: liveThinkingCallId }).map((item) =>
-            item.kind === "fold" ? (
-              <FoldRow
-                fold={item}
-                key={item.key}
-                liveThinking={liveThinking}
-                liveThinkingCallId={liveThinkingCallId}
-                toolProgress={toolProgress}
-              />
-            ) : (
-              <TurnStepRow
-                // Keyed by the model call, not the group. The same call is
-                // `model:mc_2` while it is open and `tool:call_x` once its
-                // ModelCompleted merges it into the call it named -- keying by
-                // the group would remount at exactly that moment and reset the
-                // disclosure the reader is mid-sentence in.
-                key={item.step.modelCallId ?? item.step.key}
-                live={
-                  item.step.modelCallId !== "" &&
-                  item.step.modelCallId === liveThinkingCallId
-                }
-                liveThinking={liveThinking}
-                step={item.step}
-                toolProgress={toolProgress}
-              />
-            ),
+          {/* 两层折叠（ADR-0121）：连着做同一件事的几步折成一行——一轮 113 步
+              一样的命令此前是 113 行；折完还长的一轮，只留最后几行，前面的收成
+              「前面 N 步」一行。 */}
+          {foldHead(foldSteps(block.steps, { liveCallId: liveThinkingCallId })).map(
+            renderItem,
           )}
         </ol>
       )}
@@ -284,6 +297,52 @@ export function CodeTurn({
           </ol>
         </details>
       )}
+    </li>
+  );
+}
+
+/**
+ * 一轮前面的那些步，收成一行「前面 N 步」（ADR-0121 第二层）。
+ *
+ * 同一动作的折叠对「很多种动作交替做」没用：那一轮成功重写马里奥的回合折完还有 59
+ * 行。所以只留最后几行在眼前，前面的收成一行，写着一共几步、每种做了几次（失败的
+ * 种类排在最前，那是读者翻这张列表的首要原因）。展开之后是原样的行，同一动作的
+ * 折叠照样在里面。
+ */
+function HeadRow({
+  head,
+  renderItem,
+}: {
+  head: Extract<FoldedStep, { kind: "head" }>;
+  renderItem: (item: FoldedStep) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="aw-code-step aw-code-head">
+      <details className="aw-code-action-fold is-ok" open={open}>
+        <summary
+          className="aw-code-action is-ok"
+          onClick={(event) => {
+            event.preventDefault();
+            setOpen((held) => !held);
+          }}
+        >
+          <ChevronRight aria-hidden="true" className="aw-step-caret" size={12} />
+          <span className="aw-code-action-title">
+            前面 {head.stepCount} 步
+          </span>
+          {head.summary === "" ? null : (
+            <span className="aw-code-action-subject" title={head.summary}>
+              {head.summary}
+            </span>
+          )}
+        </summary>
+        {open ? (
+          <ol aria-label={`前面 ${String(head.stepCount)} 步`} className="aw-code-fold-steps">
+            {head.items.map(renderItem)}
+          </ol>
+        ) : null}
+      </details>
     </li>
   );
 }

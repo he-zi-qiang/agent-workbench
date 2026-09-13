@@ -20,13 +20,38 @@
  * - **至少三步才折。** 两行一样的动作排在一起本身不碍眼，折成一行反而多一次点击。
  */
 
-import type { StepGroup, StepOutcome } from "../../components/stepGroups";
+import {
+  summariseGroups,
+  type StepGroup,
+  type StepOutcome,
+} from "../../components/stepGroups";
 import type { TurnStep } from "./turnBlocks";
 
 /** 连续几步起折。 */
 export const FOLD_MIN = 3;
 
+/**
+ * 同一动作折完之后，一轮最后留在眼前的行数（第二层折叠，ADR-0121）。
+ *
+ * 同一动作的折叠对「一个动作做一百遍」有效，对「很多种动作交替做」无效：那一轮成功
+ * 重写马里奥的回合 101 次调用，折完同一动作之后还有 59 行——编辑、求值、打开页面、
+ * 求值、编辑，没有哪一种连着三次以上。所以再往上一层：只留最后几行，前面的收成一行
+ * 「前面 N 步」加上每种做了几次。跑着的时候，留下的这几行就是正在发生的事。
+ */
+export const VISIBLE_TAIL = 6;
+
 export type FoldedStep =
+  | {
+      kind: "head";
+      /** 由第一项派生：一轮往下长的时候，这一行不重新挂载。 */
+      key: string;
+      /** 被收起来的那些项，同一动作的折叠照样在里面。 */
+      items: FoldedStep[];
+      /** 这些项底下一共多少步，而不是多少行。 */
+      stepCount: number;
+      /** 「在页面里求值 ×24 · 修改项目目录文件 ×12」，失败的种类排在最前。 */
+      summary: string;
+    }
   | { kind: "step"; step: TurnStep }
   | {
       kind: "fold";
@@ -114,4 +139,44 @@ function outcomeOf(run: readonly TurnStep[]): StepOutcome {
   const outcomes = run.map((step) => step.group?.outcome ?? "ok");
   if (outcomes.includes("running")) return "running";
   return outcomes.find((outcome) => outcome === "failed" || outcome === "denied") ?? "ok";
+}
+
+
+/** 一项底下的所有步骤，按出现的顺序。 */
+function stepsOf(item: FoldedStep): TurnStep[] {
+  if (item.kind === "step") return [item.step];
+  if (item.kind === "fold") return item.steps;
+  return item.items.flatMap(stepsOf);
+}
+
+/**
+ * 一轮太长时，把最后 `tail` 项之前的收成一行（第二层，ADR-0121）。
+ *
+ * 只在收得起至少三项时才收：前面只有一两行的话，把它们收起来反而多一次点击。
+ */
+export function foldHead(
+  items: readonly FoldedStep[],
+  options: { tail?: number } = {},
+): FoldedStep[] {
+  const tail = options.tail ?? VISIBLE_TAIL;
+  const headLength = items.length - tail;
+  if (headLength < FOLD_MIN) return [...items];
+  const head = items.slice(0, headLength);
+  const first = head[0];
+  if (first === undefined) return [...items];
+  const steps = head.flatMap(stepsOf);
+  const groups = steps
+    .map((step) => step.group)
+    .filter((group): group is StepGroup => group !== null);
+  const firstKey = first.kind === "step" ? first.step.key : first.key;
+  return [
+    {
+      kind: "head",
+      key: `head:${firstKey}`,
+      items: head,
+      stepCount: steps.length,
+      summary: summariseGroups(groups),
+    },
+    ...items.slice(headLength),
+  ];
 }

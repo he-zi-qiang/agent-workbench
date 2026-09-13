@@ -81,3 +81,36 @@ describe("CodeTurn 把连着的同一件事折成一行（ADR-0121）", () => {
     expect(within(live).getByText("进行中")).toBeInTheDocument();
   });
 });
+
+describe("CodeTurn 把太长的一轮前面收成一行（ADR-0121 第二层）", () => {
+  it("交替做好几件事的 30 步：一行「前面 24 步」加最后 6 行，点开是前面那些", () => {
+    const titles = ["修改项目目录文件", "在页面里求值", "打开页面"];
+    const steps = Array.from({ length: 30 }, (_, index): TurnStep => {
+      const key = `tool:mixed_${String(index)}`;
+      return {
+        key,
+        modelCallId: `mc_mixed_${String(index)}`,
+        thinking: "",
+        group: {
+          key,
+          title: titles[index % titles.length] ?? "x",
+          subject: null,
+          outcome: "ok",
+          gate: null,
+          events: [],
+        },
+      };
+    });
+
+    renderTurn(steps);
+    const list = screen.getByRole("list", { name: "这一轮做了什么" });
+
+    expect(list.children).toHaveLength(7);
+    expect(within(list).getByText("前面 24 步")).toBeInTheDocument();
+
+    fireEvent.click(within(list).getByText("前面 24 步"));
+
+    const earlier = screen.getByRole("list", { name: "前面 24 步" });
+    expect(earlier.children).toHaveLength(24);
+  });
+});
