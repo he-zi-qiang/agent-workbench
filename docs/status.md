@@ -27,6 +27,68 @@
 后者说的是没做成，改错了就把一条如实的缺口记录抹成了成绩。
 
 ---
+## 2026-09-13（第八十八批）：按住的键在页面里一直按着；文件夹里的网页可以在浏览器里打开（ADR-0120）
+
+栈用最新代码重建之后，用户说：「浏览器要和文件夹里的文件进行互通，比如文件夹中的html文件可以点击
+预览在浏览器中，但是项目完成后，人还是无法控制在浏览器中的项目预览」。写在
+[ADR-0120](./adr/0120-a-held-key-stays-held-and-the-folder-opens-in-the-browser.md)，§1.1 是 Claude Code 对照表。
+
+**「无法控制」是控制本身坏了，不是没权限。** ADR-0119 之后人的输入随时送得进去。但项目里的
+`mario.html` 在 keydown 上把 `keys.right` 置真、keyup 上置假，游戏循环每一帧读一次；面板把每个键送成
+一次 `key`，浏览器那一侧是 `keyboard.press`——按下和抬起一口气做完，两者之间一帧都没跑，按住方向键
+马里奥一步也不走。面板还会在上一次没回来时丢掉新输入。**两张标签互不相识**：右栏点开的 `.html` 只在
+沙箱 iframe 里预览，「浏览器」那一张只能显示模型打开过的页面，一轮结束或栈重启之后人没有办法把自己
+的网页放进去。
+
+### 1. 改了什么
+
+- **按下和抬起是两个动作。** `browser_interact` 多 `key_down` / `key_up`（Playwright `keyboard.down` /
+  `up`）和 `mouse_down` / `mouse_up` / `mouse_move`（先移到点上再按）。面板：keydown 送按下、按住期间的
+  重复不送、keyup 送抬起（不看修饰键）；鼠标按下、按着移动（合并，只留最新位置）、松开，拖出画面在
+  离开处松开；`onClick` 去掉，图片不可拖。**输入排队按序送**，不再丢（丢一个 `key_up` 就是一个松不开的
+  键）；失去焦点或卸载时把按着的都松开。焦点下取帧 250 ms → 100 ms，上一张回来才排下一张。
+- **文件夹里的网页可以在浏览器里打开。** `POST /v1/browser/open` 只收 `project_id` 与 `path`
+  （`extra="forbid"`，没有 `url`——不是地址栏）；拒绝 403 / 503 / 404（别人的项目、文件不在）/ 400（越出
+  项目）/ 502（浏览器打不开）。地址经 `adapters/tools/browser.py` 新抽出的 `project_file_url` 拼——先
+  `store.exists` 后 `working_directory / path`，**模型的 `browser_open` 与人的这条路由共用这一个函数**。
+  `BrowserSlot.open_for_person` 带 `by_person` 调 `browser_open`，浏览器会话记下「有人打开了 X」，模型
+  下一次浏览器调用被告知。右栏 `.html` 页眉多「在浏览器中打开」（成功后跳到浏览器那一张）；画面底下
+  的路径落在项目目录之下时多「在文件夹中打开」。
+- F-43 再补记（「逐个送」描述的是一个坏掉的控制）；`windows-quickstart.md` 补一段。
+
+### 2. 证据
+
+- 测试：browser MCP +6、browser input API +8、架构守卫 +1（打开请求正好两个字段且 `extra="forbid"`）；
+  前端 `BrowserFrame.test.tsx` 改写后 13 条（按下/松开、按住只送一次、按序不丢、失焦松开、路径连回
+  文件夹、`relativeToProject` 不认前缀相同的另一个目录），`CodePage.test.tsx` +2。
+- 门禁：`ruff format --check` / `ruff check` 过；`pyright` 仍是那 14 条 Windows 平台错误（`os.killpg` 那
+  一行如今在 `adapters/filesystem/commands.py`），零新增。Windows 本机 apps、browser input API、code API、
+  browser open、architecture、runtime、application：`1218 passed / 5 failed / 9 skipped`——5 条全是
+  `test_sandbox_bootstrap.py` 的 Windows 行尾，干净 `main` 上同样红。前端 lint 过；**清掉
+  `web/node_modules/.tmp/*.tsbuildinfo` 后 `tsc -b --force`** 过、build 过；**971 条 vitest**（上一批 965）。
+- 栈重建（`agent-workbench:local` `c287d055…`、`agent-workbench-browser:local` `7e357d9f…`），实测：
+  - `POST /v1/browser/open {"project_id": …, "path": "mario.html"}` → `{"title":"超级马里奥"}`，帧头
+    `x-browser-url: file:///projects/windows%E6%B5%8B%E8%AF%95/mario.html`。带 `url` 字段 422、`../x.html`
+    400、`nope.html` 404。
+  - **轻点对照按住**：同一页上先送五次 `key`（旧做法），帧里游戏开始了、马里奥还站在出生点；再
+    `key_down` → 1.5 秒 → `key_up`，帧里马里奥走到了板栗仔跟前、整个画面卷过去一段。
+  - **控制台里**：点开 `mario.html` → 「在浏览器中打开」→ `POST /v1/browser/open 200`、跳到浏览器那一张、
+    路径那一行有「在文件夹中打开」，点它 → 预览那一张打开 `mario.html`。在画面上发一次真实的「按住」
+    （原生 keydown、10 次 `repeat` keydown、1.5 秒后 keyup）→ 网络面板里恰好两次 `/v1/browser/input`，
+    重复被忽略。
+  - 重开页面会真的重载：先按住走到死一次（生命 2），再「在浏览器中打开」→ 生命 3、「按 → 开始游戏」。
+
+### 3. 顺带看到、没修
+
+- 一次控制台实测结尾抓到两张**逐字节相同**的帧（生命 2、马里奥不在画面上），4 秒内帧哈希不变。怀疑过
+  「页面还在动画时导航会让 screencast 等一个永远到不了的 ack」，**实测否定**：动画中重开之后一按键，
+  2 秒 7 帧；死后 6 秒无输入仍有 7 帧；点击加 30 组按下/抬起之后 4 秒 15 帧；按 R 重开也照常。四次针对性
+  重放都没复现，所以不当作平台的问题记。再遇到时按 R 能重开这一局。
+- 部署重建之后，开着的控制台标签页仍然跑旧的前端包——在同一页里改 hash 不会重载文档。`/ui/` 带
+  `etag`、不带 `cache-control`，刷新一次就换上新包。
+- F-43 仍在：10 帧/秒的截图轮询能走能跳，打不了要求反应的游戏。
+
+---
 ## 2026-09-13（第八十七批）：最后一步用来写报告；那一页允许两个操作者；面板上写着它在哪（ADR-0119）
 
 第八十六批的实测跑完，用户看了三句话：「请你修改上面的bug」「浏览器应该显示所在机器的文件路径」
