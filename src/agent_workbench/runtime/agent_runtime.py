@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Protocol, cast, runtime_checkable
 
 from agent_workbench.domain.errors import (
     AgentWorkbenchError,
@@ -255,6 +256,14 @@ class _RunLedger:
     #: run. Set by the repeat that crossed `MAX_REPLAYS`; read where the
     #: request is built, the same place the spent tool allowance is read.
     tools_withdrawn: bool = False
+    #: How many calls of each *shape* this run has made since something of a
+    #: different shape changed the world (ADR-0121). A shape is a call with its
+    #: numbers blanked out, so `print(s[40:80])` and `print(s[80:120])` are one
+    #: shape; see `_call_shape` for why that, and `MAX_SAME_SHAPE` for the bar.
+    shape_counts: dict[str, int] = field(default_factory=dict[str, int])
+    #: How many calls this run has had refused for their shape (ADR-0121). The
+    #: one past `MAX_SHAPE_REFUSALS` withdraws the tools, as `MAX_REPLAYS` does.
+    shape_refusals: int = 0
     #: The step ceiling this run reached, once it has reached one (ADR-0119).
     #: Set instead of ending the run: the last step is spent on a turn with no
     #: tools, so the work the run already did arrives as a report instead of
@@ -393,6 +402,99 @@ def _repeated_call_ids(calls: Sequence[ToolCall]) -> tuple[str, ...]:
 #: an answer once may read it the second time; a model that misses it twice
 #: is not going to read it the third time either.
 MAX_REPLAYS: Final[int] = 2
+
+#: How many calls of one shape a run may make before the next is refused
+#: (ADR-0121).
+#:
+#: The gap this closes is the one `MAX_REPLAYS` names and cannot reach: a loop
+#: that changes one number every time. Measured 2026-09-13 (`ses_9e33…`): asked
+#: to rewrite Mario, a coding turn ran `python3 -c` to print a slice of
+#: `AGENTS.md`, then the same command with the offset moved, 113 times in a
+#: row, and stopped on `max_steps` without writing a byte. Its own report
+#: named it: the same command, only the offset changed, over a hundred times
+#: in a row (`docs/status.md` 第八十九批 quotes it). No two of those
+#: calls shared a signature, so none was replayed; the ADR-0114 nudge fired at
+#: 25, 50, 75 and 100 and was read past four times.
+#:
+#: 7, calibrated on the local event log that day with the proxy the log allows
+#: (arguments are not recorded, so: consecutive calls to one tool whose
+#: argument size moves by at most two bytes). Over the 15 completed runs the
+#: longest such streak had a median of 1 and a maximum of 3; over the 5 failed
+#: runs, a median of 2 and a maximum of 109. Seven sits above every healthy
+#: run with room, and stops that loop 106 calls earlier.
+MAX_SAME_SHAPE: Final[int] = 7
+
+#: How many same-shape refusals a run absorbs before its tools are withdrawn
+#: (ADR-0121). The same 2 as `MAX_REPLAYS`, for the same reason: the first
+#: refusal is news, the second is the model being told again, and a model that
+#: proposes the shape a third time is not reading what it is told.
+MAX_SHAPE_REFUSALS: Final[int] = 2
+
+#: Any run of digits, for `_call_shape`.
+_DIGITS: Final[re.Pattern[str]] = re.compile(r"\d+")
+
+
+def _shape_of(value: object) -> object:
+    """``value`` with every number in it replaced by ``#``."""
+
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int | float):
+        return "#"
+    if isinstance(value, str):
+        return _DIGITS.sub("#", value)
+    if isinstance(value, list):
+        return [_shape_of(item) for item in cast(list[object], value)]
+    if isinstance(value, dict):
+        return {
+            str(key): _shape_of(item)
+            for key, item in cast(dict[object, object], value).items()
+        }
+    return value
+
+
+def _call_shape(call: ToolCall) -> str:
+    """What a call asks with its numbers taken out (ADR-0121).
+
+    Two calls with one shape differ only in the digits: an offset, a length, a
+    line number, a regex quantifier. That is the signature of measuring by
+    hand -- the Mario turn's `s[40:80]`, `s[80:120]`, ...; ADR-0114's grep
+    bisecting a length with `{96}`, `{89}`, `{79}` -- and it is what a loop
+    looks like once `MAX_REPLAYS` has made the literal repeat pointless.
+
+    Digits inside strings count as numbers too, because a command is one
+    string: `python3 -c "print(s[40:80])"` has no JSON number in it at all.
+    """
+
+    shape = json.dumps(_shape_of(call.arguments), sort_keys=True, ensure_ascii=False)
+    return f"{call.tool_name}\x00{shape}"
+
+
+def _same_shape_note(tool_name: str, count: int, *, withdrawn: bool) -> str:
+    """What the model is told when a call is refused for its shape (ADR-0121).
+
+    It names what the harness can see -- the count, and that only numbers
+    changed -- and the one move that answers the question the loop was
+    circling: put the iteration inside one call. It says nothing about whether
+    the question was worth asking; the harness cannot know that.
+    """
+
+    said = (
+        f"Refused: this is call {count} of {tool_name} in this run that differs "
+        "from the ones before it only in its numbers. Changing a number one call "
+        "at a time is measuring by hand, and it has not been getting the answer. "
+        "Do the whole iteration in one call -- one command that loops over every "
+        "value and prints them all -- or act on what you already know. Calls of "
+        "this shape are refused until something else changes the files."
+    )
+    if withdrawn:
+        said += (
+            " The run kept proposing calls of this shape after being told, so its "
+            "tools are withdrawn for the rest of the run. Write your report: what "
+            "you found, what you did, and what is left."
+        )
+    return said
+
 
 #: How many times one run may shorten its own conversation (ADR-081).
 #:
@@ -1495,6 +1597,32 @@ class ClaudeLikeAgentRuntime:
                     )
                 )
                 continue
+            # The same question with its numbers moved (ADR-0121). After the
+            # replay check, so a literal repeat is answered from the record
+            # rather than counted twice; after the offer check, so a tool the
+            # run was never given does not count toward a loop it cannot run.
+            shape = _call_shape(call)
+            shaped = ledger.shape_counts.get(shape, 0) + 1
+            ledger.shape_counts[shape] = shaped
+            if shaped > MAX_SAME_SHAPE:
+                ledger.shape_refusals += 1
+                withdrawn = ledger.shape_refusals > MAX_SHAPE_REFUSALS
+                if withdrawn:
+                    ledger.tools_withdrawn = True
+                results.append(
+                    await self._gateway.refuse(
+                        call,
+                        ErrorInfo(
+                            code="invalid_tool_input",
+                            message=_same_shape_note(
+                                call.tool_name, shaped, withdrawn=withdrawn
+                            ),
+                            retryable=False,
+                        ),
+                        sink=sink,
+                    )
+                )
+                continue
             repeatable.append(call)
 
         prepared: list[PreparedCall] = []
@@ -1627,6 +1755,19 @@ class ClaudeLikeAgentRuntime:
             for candidate in authorized
         ):
             ledger.world_version += 1
+            # A write clears every shape count but the ones this batch ran
+            # (ADR-0121). `run tests`, `edit`, `run tests` is not a loop: the
+            # edit is what the second run is about, so its count starts again.
+            # A shape's *own* dispatch does not reset it -- a `python3 -c` is
+            # non-read, so resetting on it would make every command loop
+            # invisible -- the same rule `answered` keeps: a call's own effect
+            # never counts against its own repeat.
+            dispatched = {_call_shape(candidate.call) for candidate in authorized}
+            ledger.shape_counts = {
+                shape: count
+                for shape, count in ledger.shape_counts.items()
+                if shape in dispatched
+            }
         for call, result in answered:
             if result.error is not None and result.error.retryable:
                 continue

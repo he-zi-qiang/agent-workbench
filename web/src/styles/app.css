@@ -10079,3 +10079,19 @@ p.aw-code-step-thought {
 .aw-browser-reveal:hover {
   text-decoration: underline;
 }
+
+/* 连着同一件事的几步折成的那一行（ADR-0121）。次数跟在标题后面，和标题同一行、
+   颜色退一档：它说的是「多少次」，不是另一个名字。 */
+.aw-code-fold-count {
+  color: var(--aw-text-muted, #8b949e);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+}
+
+.aw-code-fold-steps,
+.aw-code-fold-live {
+  list-style: none;
+  margin: 4px 0 0 18px;
+  padding: 0;
+}
