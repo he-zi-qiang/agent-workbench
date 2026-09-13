@@ -121,6 +121,18 @@ projects_root = "/projects"
 [multi_agent]
 delegation_enabled = true
 
+[event_stream]
+# 1, as in config.demo-local.toml and every other local overlay; this file was
+# the one that did not say it, so it ran the shipped 10. Only transient frames
+# (token deltas, `ToolProgress`) are pushed; every durable event -- a step
+# starting, a step finishing, the approval card's event -- reaches the console
+# on this poll (`apps/api/sse.py`). Measured on 2026-09-13 in a Code turn of
+# twelve three-second commands: the step list changed at +6.8 s and +16.8 s,
+# exactly ten seconds apart, four rows at a time. The cost of 1 is one indexed
+# read per second per open console tab, which is what the native profile has
+# always paid.
+catchup_poll_seconds = 1
+
 [policy]
 # `search_tools_enabled` is the projection's left half; the right half is
 # whether `[research]` exists at all, and that is decided at start by
