@@ -4364,3 +4364,34 @@ describe("文件夹里的网页在浏览器里打开（ADR-0120）", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("输入卡的排法", () => {
+  // `.aw-code-composer-row` 只给发送键写了轨道，其余三个按 DOM 顺序自动落位：输入框
+  // 横跨第一行，「+」和权限排进下面一条。jsdom 没有布局，宽度量不出来；守得住的是那条
+  // 规则依赖的顺序。谁把权限挪回输入框前面，它就占掉第一行的第一格，输入框被推到第二行
+  // ——版面坏了，而没有一条测试会红。Tab 走的也是这个顺序，所以它同时是键盘的顺序。
+  it("输入框在 DOM 里排在「+」、权限和发送前面", async () => {
+    mounted();
+
+    const input = screen.getByLabelText("要做的事");
+    const plus = await screen.findByRole("button", {
+      name: "添加文件、文件夹与工具",
+    });
+    const permission = screen.getByRole("group", { name: "这一轮的权限" });
+    const send = screen.getByRole("button", { name: "发送" });
+
+    const follows = (earlier: Element, later: Element) =>
+      (earlier.compareDocumentPosition(later) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0;
+    expect(follows(input, plus)).toBe(true);
+    expect(follows(plus, permission)).toBe(true);
+    expect(follows(permission, send)).toBe(true);
+    // 同一张卡片里，不是被别的容器隔开的两组：自动落位只在同一个网格里成立。
+    const card = input.parentElement;
+    expect(card).not.toBeNull();
+    for (const one of [plus, permission, send]) {
+      expect(card?.contains(one)).toBe(true);
+    }
+  });
+});
