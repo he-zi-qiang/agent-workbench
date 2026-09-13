@@ -1393,8 +1393,13 @@ class CodeSessionService:
             )
 
         if outcome.output_text:
-            # Only when there is one. A failed or cancelled run produces no
-            # report, and an empty assistant message would read as one.
+            # Only when there is one, and "one" is no longer the same set as
+            # "succeeded" (ADR-0119). A run that spends its step ceiling fails
+            # *and* reports: its last step is reserved for writing down what it
+            # changed and what is left, and this is the line that puts that
+            # report in the history the next turn reads. Cancelled runs and
+            # runs that died mid-stream still have nothing to say, and an empty
+            # assistant message would read as a report that said nothing.
             await self.conversations.append(
                 session_id=request.session_id,
                 tenant_id=principal.tenant_id,

@@ -78,6 +78,34 @@
   （上一批 964，+1 是净增的那条）。
 - 实测：见 §2.1。
 
+### 2.1 合入之后在这套栈上过了一遍（镜像 `83561aa2…`）
+
+- **面板上的地址**：`GET /v1/browser/frame` 的头里是
+  `x-browser-url: file:///projects/windows%E6%B5%8B%E8%AF%95/mario.html`——解码就是
+  `/projects/windows测试/mario.html`，浏览器容器里的真实路径。没打开过页面时是 204、不带这个头。
+- **回合在跑的时候人能动**：起一轮浏览器会话（`ses_a42b…`），回合跑着的时候
+  `POST /v1/browser/input` 送一个 `ArrowRight`——**200**，`{"done":["action 0 (key) ok"],
+  "turns_in_flight":1}`。ADR-0117 下这里是 409。
+- **模型被告知**：同一轮的报告里模型自己写的：「The browser reported that a person operated this
+  page directly — **40 actions** from the console panel — while I was working. That notice arrived
+  with the `browser_open` result... So the state I sampled is whatever their 40 actions left behind,
+  not a pristine load.」——一句话到了、被读了、被用在结论里。
+- **步数上限那件事**只有单测（要跑满 120 步才看得到），但同一次实测发现了一个**真错**：改了
+  `bootstrap/settings.py` 的字段默认值，`RunStarted` 的 budget 仍然是 `max_steps: 60`——那三个键在
+  `config/config.default.toml` 的 `[code]` 段里是显式写着的，TOML 赢。改到正确的地方之后
+  `agent-config-check` 两个 profile 都 ok。
+
+**顺带修了一个把整套栈拖下水的东西。** 重建之后 `encoder` 容器退出 1，于是 API、两个 Task Worker、
+ingestion 全都没起来（它们 `depends_on: encoder: service_healthy`），控制台整个打不开。日志：
+`huggingface_hub` 在加载模型前照例对 huggingface.co 发了约三十个 HEAD 去**复验它马上要从磁盘读的
+文件**，其中一个死在库里（`RuntimeError: Cannot send a request, as the client has been closed`，
+经代理）。权重是齐的（命名卷 8.5 GB，`weights-init` 退出 0），单独 `docker start` 一下 42 秒就健康了
+——所以那是一次网络抖动，而这套栈的启动不该建立在「到 huggingface.co 的路通」上。修法：compose 里
+给 `encoder` 单独加 `HF_HUB_OFFLINE: "1"`（`weights-init` 是它的
+`service_completed_successfully` 依赖，并且 `snapshot_download` 了两个模型的配置版本，所以文件齐是
+构造保证的）。重建后确认：容器环境里有这个变量，日志里对 huggingface.co 的请求**零次**。
+失败模式变成 `docker/fetch_weights.py` 开头就写明的那一种——缺文件当场报出文件名，而不是偷偷去下载。
+
 ### 3. 顺带看到、没修
 
 - F-44（跨回合只带用户消息与最终报告）还在。本批让**失败的那一轮也有报告**，所以它最疼的那一半
