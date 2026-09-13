@@ -10050,3 +10050,32 @@ p.aw-code-step-thought {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 地址那一行里的「在文件夹中打开」（ADR-0120）：路径可能很长而被截断，按钮不能
+   跟着被截掉，所以路径那一段收缩、按钮不收缩。 */
+.aw-browser-where {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.aw-browser-where > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aw-browser-reveal {
+  background: none;
+  border: 0;
+  color: var(--aw-accent, #4f8cff);
+  cursor: pointer;
+  flex: none;
+  font: inherit;
+  padding: 0;
+}
+
+.aw-browser-reveal:hover {
+  text-decoration: underline;
+}

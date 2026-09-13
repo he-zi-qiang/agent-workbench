@@ -20,6 +20,7 @@ application registers no chat route rather than one that cannot answer.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
@@ -565,6 +566,39 @@ class BrowserSlot:
                 return [str(item) for item in cast(list[Any], done)]
         text = _first_text(answered.content)
         return [text] if text else []
+
+    async def open_for_person(self, url: str) -> str:
+        """Put one of the person's project files on screen (ADR-0120).
+
+        The second verb this slot forwards on a person's behalf, and still
+        narrow: ``url`` is never the person's text. The route builds it from a
+        project id and a relative path through ``project_file_url`` -- the same
+        check-then-join the model's own ``browser_open`` goes through -- so what
+        arrives here is a ``file://`` address inside a directory this principal
+        owns. A person cannot type an address into this browser; they can ask
+        for a file they can already see in the folder view.
+
+        Returns the title the browser reports, or ``""``. ``by_person`` is set
+        for the reason ``interact`` sets it: the model's next browser call is
+        told that the page it was working on was replaced.
+        """
+
+        if self.client is None:
+            raise BrowserUnavailableError("the browser connection is not open")
+        answered = await self.client.call_tool(
+            "browser_open", cast(JsonObject, {"url": url, "by_person": True})
+        )
+        text = _first_text(answered.content)
+        if answered.is_error:
+            raise BrowserUnavailableError(text or "the browser could not open the page")
+        try:
+            described: object = json.loads(text) if text else {}
+        except ValueError:
+            return ""
+        if not isinstance(described, dict):
+            return ""
+        title = cast(dict[str, object], described).get("title")
+        return title if isinstance(title, str) else ""
 
     async def aclose(self) -> None:
         if self._resources is not None:

@@ -207,6 +207,11 @@ async def _dispatch(
             else session.workspace_url(request.workspace_path or "")
         )
         outcome = await session.open(target, request.timeout_ms)
+        if request.by_person:
+            # After the open succeeded, and with the address the browser
+            # landed on (ADR-0120): what the model is told is what it will
+            # find, not what somebody asked for.
+            session.record_person_open(outcome.url)
         return _text(
             describe(
                 {

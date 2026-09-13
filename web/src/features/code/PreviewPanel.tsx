@@ -62,12 +62,15 @@ export function PreviewPanel({
   onDownload,
   onFaults,
   onOpen,
+  onOpenInBrowser,
   onRenameFile,
+  onRevealFile,
   onReport,
   onWrote,
   orphanRuns,
   onTab,
   projectFile,
+  projectRoot,
   tab,
   viewing,
 }: {
@@ -101,6 +104,13 @@ export function PreviewPanel({
    */
   onDeleteFile?: (file: OpenedProjectFile) => void;
   onRenameFile?: (file: OpenedProjectFile) => void;
+  /**
+   * 在模型的浏览器里打开右栏里这个项目文件（ADR-0120）。只对 `.html` / `.htm`
+   * 画出来：浏览器那一张能操作的是页面，一份 Python 放进去什么也做不了。
+   */
+  onOpenInBrowser?: (file: OpenedProjectFile) => void;
+  /** 浏览器画面地址落在项目目录里时，回到文件夹里打开它（ADR-0120）。 */
+  onRevealFile?: (path: string) => void;
   onDownload: () => void;
   onOpen: (file: WorkspaceEntryView) => void;
   /**
@@ -120,6 +130,8 @@ export function PreviewPanel({
   onTab: (id: string) => void;
   /** 项目目录里点开的文件，没有就是 null。 */
   projectFile: OpenedProjectFile | null;
+  /** 这段会话的项目目录（服务端看到的路径），给浏览器那一张把地址连回文件夹。 */
+  projectRoot?: string | null;
   /**
    * 现在停在哪一张，`null` 表示读者还没表过态（落到 `fallback` 上）。
    *
@@ -191,6 +203,16 @@ export function PreviewPanel({
                       目录不删，目标不覆盖。 */}
                   {projectFile === null ? null : (
                     <>
+                      {onOpenInBrowser === undefined ||
+                      !/\.html?$/i.test(projectFile.path) ? null : (
+                        <button
+                          className="aw-button"
+                          onClick={() => onOpenInBrowser(projectFile)}
+                          type="button"
+                        >
+                          在浏览器中打开
+                        </button>
+                      )}
                       {onRenameFile === undefined ? null : (
                         <button
                           className="aw-button"
@@ -254,7 +276,13 @@ export function PreviewPanel({
             // 最需要知道它没跑的时候消失。
             id: "browser",
             label: "浏览器",
-            body: <BrowserFrame identity={identity} />,
+            body: (
+              <BrowserFrame
+                identity={identity}
+                onRevealFile={onRevealFile}
+                projectRoot={projectRoot}
+              />
+            ),
           },
           {
             id: "events",

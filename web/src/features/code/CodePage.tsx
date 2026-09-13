@@ -77,6 +77,7 @@ import {
   listProjectFiles,
   listProjects,
   moveProjectFile,
+  openProjectFileInBrowser,
   newIdempotencyKey,
   putCodeWorkspaceFile,
   renameCodeSession,
@@ -499,6 +500,51 @@ export function CodePage() {
     enabled: heldProjectId != null,
   });
   const projectRoot = project.data?.root_path ?? null;
+
+  // 文件夹和浏览器那一张互通（ADR-0120，用户：「浏览器要和文件夹里的文件进行
+  // 互通」）。一头是右栏里点开的 `.html`「在浏览器中打开」：服务端把项目 id 和
+  // 相对路径拼成浏览器容器里的 `file://` 地址打开它，然后跳到「浏览器」那一张——
+  // 读者按下这颗按钮，要看的就是那一张。另一头是浏览器画面底下那行地址落在项目
+  // 目录里时的「在文件夹中打开」。
+  const openInBrowser = useCallback(
+    async (file: OpenedProjectFile) => {
+      try {
+        await openProjectFileInBrowser(identity, file.projectId, file.path);
+        setPanelTab("browser");
+      } catch (cause) {
+        setFault({ scope: sessionId ?? null, text: describe(cause) });
+      }
+    },
+    [identity, sessionId],
+  );
+  // 从浏览器那一张回到文件夹：拿到的只是相对路径，而预览要那一行的字节数才能
+  // 在取正文之前拒绝太大的文件——所以去它所在的那一层列一次，用列出来的那一行
+  // 打开，和在树里点开它走同一条路。
+  const revealFile = useCallback(
+    async (path: string) => {
+      if (heldProjectId == null) return;
+      const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+      try {
+        const listing = await listProjectFiles(identity, heldProjectId, {
+          path: parent,
+        });
+        const entry = listing.entries.find(
+          (one) => one.path === path && one.kind === "file",
+        );
+        if (entry === undefined) {
+          setFault({
+            scope: sessionId ?? null,
+            text: `${path} 不在这个项目的目录里了。`,
+          });
+          return;
+        }
+        openProjectFileAt(entry);
+      } catch (cause) {
+        setFault({ scope: sessionId ?? null, text: describe(cause) });
+      }
+    },
+    [heldProjectId, identity, openProjectFileAt, sessionId],
+  );
 
   // 下一轮会被给出哪些工具（ADR-096）。
   //
@@ -2173,7 +2219,10 @@ export function CodePage() {
             files={files}
             identity={identity}
             onDeleteFile={(file) => void deleteOpenedFile(file)}
+            onOpenInBrowser={(file) => void openInBrowser(file)}
             onRenameFile={(file) => void renameOpenedFile(file)}
+            onRevealFile={(path) => void revealFile(path)}
+            projectRoot={projectRoot}
             onCollapse={() => {
               setPanelChoice(false);
             }}

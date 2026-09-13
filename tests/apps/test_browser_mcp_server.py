@@ -51,6 +51,8 @@ class _StubSession:
     #: A person's gestures that have landed and not yet been reported to the
     #: model. Counted here the way the real session counts them.
     person_actions: int = 0
+    #: A page a person opened and the model has not yet been told about.
+    person_opened: str | None = None
 
     workspace_root: str = "/workspace"
 
@@ -62,10 +64,22 @@ class _StubSession:
 
     def take_person_note(self) -> str | None:
         landed = self.person_actions
-        if not landed:
+        opened = self.person_opened
+        if not landed and opened is None:
             return None
         self.person_actions = 0
-        return f"Note: a person operated this page directly ({landed} actions)."
+        self.person_opened = None
+        said: list[str] = []
+        if opened is not None:
+            said.append(f"Note: a person opened {opened} in this browser.")
+        if landed:
+            said.append(
+                f"Note: a person operated this page directly ({landed} actions)."
+            )
+        return " ".join(said)
+
+    def record_person_open(self, url: str) -> None:
+        self.person_opened = url
 
     async def open(self, target: str, timeout_ms: int) -> OpenOutcome:
         del timeout_ms
@@ -431,3 +445,105 @@ def test_a_click_still_needs_a_ref_or_a_point_and_a_point_needs_both() -> None:
     request = parse_interact({"actions": [{"kind": "click", "ref": "ref_1"}]})
     assert request.actions[0].ref == "ref_1"
     assert request.actions[0].x is None
+
+
+# -- press and release, and a page a person opened (ADR-0120) ---------------
+
+
+def test_a_key_can_be_held_as_two_actions() -> None:
+    """The control bug, at the contract.
+
+    Mario reads `keys.right` once a frame: true from keydown, false from keyup.
+    A `key` tap is both in one breath, so no frame ever saw it held and the
+    arrow a person was pressing in the panel moved nothing. The halves are
+    what let a held key stay held.
+    """
+
+    session = _StubSession()
+    result = _call(
+        session,
+        INTERACT_TOOL,
+        {
+            "actions": [
+                {"kind": "key_down", "text": "ArrowRight"},
+                {"kind": "key_up", "text": "ArrowRight"},
+            ]
+        },
+    )
+
+    assert not result.is_error, _text(result)
+    assert [(a.kind, a.text) for a in session.performed] == [
+        ("key_down", "ArrowRight"),
+        ("key_up", "ArrowRight"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("action", "needs"),
+    [
+        ({"kind": "key_down"}, "needs text"),
+        ({"kind": "key_up"}, "needs text"),
+        ({"kind": "mouse_down"}, "needs x and y"),
+        ({"kind": "mouse_move", "x": 3}, "a point needs both x and y"),
+    ],
+)
+def test_a_half_without_what_it_acts_on_is_refused(
+    action: dict[str, Any], needs: str
+) -> None:
+    session = _StubSession()
+    result = _call(session, INTERACT_TOOL, {"actions": [action]})
+
+    assert result.is_error
+    assert needs in _text(result)
+    assert session.performed == []
+
+
+def test_a_mouse_press_and_release_carry_their_point() -> None:
+    session = _StubSession()
+    _call(
+        session,
+        INTERACT_TOOL,
+        {
+            "actions": [
+                {"kind": "mouse_down", "x": 10, "y": 20},
+                {"kind": "mouse_move", "x": 40, "y": 20},
+                {"kind": "mouse_up", "x": 40, "y": 20},
+            ]
+        },
+    )
+
+    assert [(a.kind, a.x, a.y) for a in session.performed] == [
+        ("mouse_down", 10, 20),
+        ("mouse_move", 40, 20),
+        ("mouse_up", 40, 20),
+    ]
+
+
+def test_a_page_a_person_opened_is_reported_to_the_model_once() -> None:
+    """An open replaces the page; the model is told which one is on screen now."""
+
+    session = _StubSession()
+
+    opened = _call(
+        session,
+        OPEN_TOOL,
+        {"url": "file:///projects/demo/mario.html", "by_person": True},
+    )
+    assert not opened.is_error, _text(opened)
+    # Addressed to the model, so not on the person's own answer.
+    assert "a person opened" not in _text(opened)
+
+    first = _call(session, SNAPSHOT_TOOL, {})
+    second = _call(session, SNAPSHOT_TOOL, {})
+
+    assert "a person opened file:///projects/demo/mario.html" in _text(first)
+    assert "a person opened" not in _text(second)
+
+
+def test_the_models_own_open_is_not_reported_as_a_persons() -> None:
+    session = _StubSession()
+
+    _call(session, OPEN_TOOL, {"url": "file:///projects/demo/mario.html"})
+    after = _call(session, SNAPSHOT_TOOL, {})
+
+    assert "a person opened" not in _text(after)

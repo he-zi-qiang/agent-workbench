@@ -95,6 +95,7 @@ class BrowserSession(Protocol):
         self, actions: tuple[Action, ...], timeout_ms: int, *, by_person: bool = False
     ) -> list[str]: ...
     def take_person_note(self) -> str | None: ...
+    def record_person_open(self, url: str) -> None: ...
     async def screenshot(self, *, full_page: bool, quality: int) -> bytes: ...
     def drain_logs(self, limit: int) -> tuple[tuple[LogEntry, ...], int]: ...
     def latest_frame(self) -> bytes | None: ...
@@ -129,6 +130,11 @@ class PlaywrightSession:
     #: honest: not a lock, but a sentence on the model's next result saying the
     #: page it is about to reason over was touched by somebody else.
     _person_actions: int = 0
+    #: The page a person opened from the console, if they opened one since
+    #: the model was last told (ADR-0120). Kept apart from the count: an
+    #: arrow key moved the page the model is on, an open *replaced* it, and
+    #: the sentence the model needs is different.
+    _person_opened: str | None = None
     #: Strong references to fire-and-forget tasks. Without them the event loop
     #: holds only a weak one and a frame acknowledgement can be collected before
     #: it is sent -- which does not raise, it just stops the screencast.
@@ -376,16 +382,40 @@ class PlaywrightSession:
         """
 
         landed = self._person_actions
-        if not landed:
+        opened = self._person_opened
+        if not landed and opened is None:
             return None
         self._person_actions = 0
-        return (
-            f"Note: a person operated this page directly ({landed} "
-            f"action{'s' if landed != 1 else ''}) from the console panel while "
-            "you were working. Anything you read before that may have moved, "
-            "and refs from your last browser_snapshot may name different "
-            "elements or none. Take a fresh snapshot before acting on one."
-        )
+        self._person_opened = None
+        said: list[str] = []
+        if opened is not None:
+            # First, because it is the larger fact: whatever the model was
+            # looking at is gone, and a page it did not open is on screen.
+            said.append(
+                f"Note: a person opened {opened} in this browser from the "
+                "console panel. The page you were working on is no longer the "
+                "current page; open it again if you still need it."
+            )
+        if landed:
+            said.append(
+                f"Note: a person operated this page directly ({landed} "
+                f"action{'s' if landed != 1 else ''}) from the console panel "
+                "while you were working. Anything you read before that may have "
+                "moved, and refs from your last browser_snapshot may name "
+                "different elements or none. Take a fresh snapshot before "
+                "acting on one."
+            )
+        return " ".join(said)
+
+    def record_person_open(self, url: str) -> None:
+        """A person put a page on screen from the console (ADR-0120).
+
+        Recorded after the open succeeded, with the address the browser
+        reports rather than the one it was asked for -- a redirect or a
+        normalised path is what the model will find when it looks.
+        """
+
+        self._person_opened = url
 
     def current_url(self) -> str | None:
         """Where the page is, for the console panel (ADR-0119).
@@ -411,6 +441,26 @@ class PlaywrightSession:
             return
         if action.kind == "key":
             await page.keyboard.press(action.text or "")
+            return
+        # The two halves of a press (ADR-0120). `press` is down-and-up in one
+        # call, and a page that reads a key's state once a frame -- Mario's
+        # `keys.right`, set on keydown and cleared on keyup -- never sees a
+        # frame in between: the arrow the person was holding moved nothing.
+        if action.kind == "key_down":
+            await page.keyboard.down(action.text or "")
+            return
+        if action.kind == "key_up":
+            await page.keyboard.up(action.text or "")
+            return
+        if action.kind in ("mouse_down", "mouse_up", "mouse_move"):
+            # Moved first, always: Playwright's mouse presses and releases
+            # where the pointer already is, and a press that lands where the
+            # previous gesture left the pointer is a click on the wrong thing.
+            await page.mouse.move(action.x or 0, action.y or 0)
+            if action.kind == "mouse_down":
+                await page.mouse.down()
+            elif action.kind == "mouse_up":
+                await page.mouse.up()
             return
 
         if action.ref is not None:
