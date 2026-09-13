@@ -29,6 +29,7 @@ from agent_workbench.apps.browser_mcp.server import (
     OPEN_TOOL,
     SNAPSHOT_TOOL,
     TOOL_NAMES,
+    URL_HEADER,
     create_app,
     create_server,
 )
@@ -45,11 +46,26 @@ class _StubSession:
     logs: list[LogEntry] = field(default_factory=list)
     frame: bytes | None = None
     tree: str = '[ref_1] RootWebArea: "demo"'
+    #: Where the page is, for the frame route's header (ADR-0119).
+    url: str | None = None
+    #: A person's gestures that have landed and not yet been reported to the
+    #: model. Counted here the way the real session counts them.
+    person_actions: int = 0
 
     workspace_root: str = "/workspace"
 
     def workspace_url(self, relative: str) -> str:
         return f"file://{self.workspace_root}/{relative}"
+
+    def current_url(self) -> str | None:
+        return self.url
+
+    def take_person_note(self) -> str | None:
+        landed = self.person_actions
+        if not landed:
+            return None
+        self.person_actions = 0
+        return f"Note: a person operated this page directly ({landed} actions)."
 
     async def open(self, target: str, timeout_ms: int) -> OpenOutcome:
         del timeout_ms
@@ -64,9 +80,13 @@ class _StubSession:
         self.evaluated.append(expression)
         return {"apexHeight": 76.5, "framesToLand": 34}
 
-    async def interact(self, actions: tuple[Action, ...], timeout_ms: int) -> list[str]:
+    async def interact(
+        self, actions: tuple[Action, ...], timeout_ms: int, *, by_person: bool = False
+    ) -> list[str]:
         del timeout_ms
         self.performed.extend(actions)
+        if by_person:
+            self.person_actions += len(actions)
         return [f"action {index} ({a.kind}) ok" for index, a in enumerate(actions)]
 
     async def screenshot(self, *, full_page: bool, quality: int) -> bytes:
@@ -250,6 +270,87 @@ def test_the_frame_route_serves_the_latest_frame_uncached() -> None:
     assert response.headers["content-type"] == "image/jpeg"
     assert response.headers["cache-control"] == "no-store"
     assert response.content == b"\xff\xd8jpeg-bytes"
+
+
+def test_the_frame_says_where_the_page_is() -> None:
+    """ADR-0119: the address rides on the frame it describes.
+
+    A path with Chinese in it is the case that decides the encoding, and it is
+    not hypothetical -- `var/projects/windows测试` is the folder this was
+    reported from. A header is latin-1, so the address is percent-encoded on
+    the way out and the console decodes it for display.
+    """
+
+    session = _StubSession(
+        frame=b"\xff\xd8jpeg", url="file:///projects/windows测试/mario.html"
+    )
+    with TestClient(create_app(session, LocalDecisions(GuardedProxy()))) as client:
+        response = client.get("/frame")
+
+    assert response.status_code == 200
+    assert (
+        response.headers[URL_HEADER]
+        == "file:///projects/windows%E6%B5%8B%E8%AF%95/mario.html"
+    )
+
+
+def test_an_address_that_is_already_encoded_is_not_encoded_twice() -> None:
+    """The control. `%` is in the safe set, so `%E6` does not become `%25E6`."""
+
+    session = _StubSession(frame=b"\xff\xd8jpeg", url="file:///a%20b/c.html?q=1#top")
+    with TestClient(create_app(session, LocalDecisions(GuardedProxy()))) as client:
+        response = client.get("/frame")
+
+    assert response.headers[URL_HEADER] == "file:///a%20b/c.html?q=1#top"
+
+
+def test_a_browser_on_no_page_sends_no_address() -> None:
+    session = _StubSession(frame=b"\xff\xd8jpeg", url=None)
+    with TestClient(create_app(session, LocalDecisions(GuardedProxy()))) as client:
+        response = client.get("/frame")
+
+    assert URL_HEADER not in response.headers
+
+
+# -- a person and the model on one page (ADR-0119) --------------------------
+
+
+def test_a_persons_gesture_is_reported_to_the_model_once() -> None:
+    """The arbitration that replaced the lock.
+
+    ADR-0117 refused a person's click while a turn ran. ADR-0119 lets it
+    through and tells the model instead -- once, on its next browser call,
+    because the fact is about a moment and a line repeated on every call is a
+    line that stops being read.
+    """
+
+    session = _StubSession()
+
+    person = _call(
+        session,
+        "browser_interact",
+        {"actions": [{"kind": "click", "x": 4, "y": 5}], "by_person": True},
+    )
+    # Not on the person's own result: it is addressed to the model, and taking
+    # it here would consume the one delivery.
+    assert "operated this page" not in _text(person)
+
+    first = _call(session, "browser_snapshot", {})
+    second = _call(session, "browser_snapshot", {})
+
+    assert "a person operated this page directly (1 actions)" in _text(first)
+    assert "operated this page" not in _text(second)
+
+
+def test_the_models_own_input_is_not_reported_as_a_persons() -> None:
+    """The control: `by_person` absent is the model, and it says nothing."""
+
+    session = _StubSession()
+
+    _call(session, "browser_interact", {"actions": [{"kind": "click", "ref": "ref_1"}]})
+    after = _call(session, "browser_snapshot", {})
+
+    assert "operated this page" not in _text(after)
 
 
 def test_health_names_the_tools_it_serves() -> None:

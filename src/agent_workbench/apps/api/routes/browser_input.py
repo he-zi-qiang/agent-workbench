@@ -10,12 +10,16 @@ and it is narrow in a different way: **one tool, and a rule about when.**
   else. No ``browser_open`` (the person does not choose what page the model is
   working on), no ``browser_eval`` (a person typing JavaScript into the
   model's page is a console, not a panel).
-* A rule about when: ADR-0113 §4 refused this because two operators on one
-  page need an arbitration story. The story is the simplest one that is true:
-  **the model has the page while a turn is running, and the person has it
-  otherwise.** A click that arrives mid-turn is refused with 409 and a
-  sentence, not queued and not interleaved -- the model's next snapshot would
-  otherwise describe a page somebody else had just changed.
+* A rule about when -- which, since ADR-0119, is **no rule at all**. ADR-0117
+  arbitrated by refusing a person's click with 409 while any coding turn was
+  running, and a week of use said what that is worth: a turn writing a page
+  and then verifying it in the browser runs for minutes, so the panel was
+  never usable at the one moment somebody wants it, which is while the model
+  has the page open. The arbitration is now the one Claude Code uses for its
+  own Browser pane: both may drive, and the model is *told* -- its next
+  browser call carries a line saying a person touched the page and that its
+  snapshot refs may no longer mean anything. A fact it can act on beats a
+  lock it has to wait out.
 
 Why this exists at all: the panel beside a coding session showed the page the
 model had opened and said 「点不动它」. A person who has just watched a model
@@ -82,6 +86,10 @@ class BrowserInputResponse(BaseModel):
     #: One line per action, in order, the browser's own words -- the same
     #: strings the model reads back from `browser_interact`.
     done: tuple[str, ...]
+    #: How many coding turns are running as this input lands (ADR-0119). Not a
+    #: refusal any more, a fact: the panel says "the model is working on this
+    #: page too" so a person who is surprised by the page moving knows why.
+    turns_in_flight: int = 0
 
 
 @router.post("/input", response_model=BrowserInputResponse)
@@ -103,20 +111,19 @@ async def input_(body: BrowserInputRequest, request: Request) -> BrowserInputRes
             detail="the browser is not running in this deployment",
         )
     code = dependencies.code
-    if code is not None and code.turns_in_flight > 0:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "the model is driving the browser: "
-                f"{code.turns_in_flight} coding turn(s) in flight; "
-                "wait for the turn to finish"
-            ),
-        )
     actions: list[dict[str, Any]] = [
         action.model_dump(exclude_none=True) for action in body.actions
     ]
     done = await slot.interact(actions)
-    return BrowserInputResponse(done=tuple(done))
+    # Told, not refused (ADR-0119). The count is the same fact the 409 used to
+    # carry and the person is the same person; what changed is who decides
+    # what to do about it. They can watch the model work and then take the
+    # keyboard, or press a key while it thinks -- and the model is told, on
+    # its next browser call, that the page moved.
+    return BrowserInputResponse(
+        done=tuple(done),
+        turns_in_flight=code.turns_in_flight if code is not None else 0,
+    )
 
 
 __all__ = ["BROWSER_INPUT_PREFIX", "BROWSER_SCOPE", "MAX_ACTIONS", "router"]

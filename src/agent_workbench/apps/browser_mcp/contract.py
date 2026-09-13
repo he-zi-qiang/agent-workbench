@@ -138,6 +138,19 @@ INTERACT_INPUT_SCHEMA: Final[dict[str, Any]] = {
             "items": _ACTION_SCHEMA,
         },
         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MS},
+        # Who is driving (ADR-0119). The console sets it when it forwards a
+        # person's click or keypress; a model leaves it out. It is in the
+        # schema the model sees because arguments are the only channel an MCP
+        # call has, and the honest thing is to say what it is for. A model
+        # that sets it anyway only mislabels its own action as a person's and
+        # gets told, on its next call, that "somebody" touched the page -- a
+        # confusing answer, not an unsafe one.
+        "by_person": {
+            "type": "boolean",
+            "description": (
+                "Set by the console when a person is driving this page. Leave it out."
+            ),
+        },
     },
 }
 
@@ -200,6 +213,8 @@ class Action:
 class InteractRequest:
     actions: tuple[Action, ...]
     timeout_ms: int
+    #: Whether this batch is a person's, forwarded by the console (ADR-0119).
+    by_person: bool = False
 
 
 def parse_open(arguments: dict[str, Any]) -> OpenRequest:
@@ -275,7 +290,11 @@ def parse_interact(arguments: dict[str, Any]) -> InteractRequest:
                 y=y if point else None,
             )
         )
-    return InteractRequest(actions=tuple(actions), timeout_ms=_timeout(payload))
+    return InteractRequest(
+        actions=tuple(actions),
+        timeout_ms=_timeout(payload),
+        by_person=bool(payload.get("by_person") or False),
+    )
 
 
 def _object(arguments: dict[str, Any]) -> dict[str, Any]:

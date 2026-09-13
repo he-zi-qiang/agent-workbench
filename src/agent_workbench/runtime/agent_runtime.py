@@ -255,6 +255,14 @@ class _RunLedger:
     #: run. Set by the repeat that crossed `MAX_REPLAYS`; read where the
     #: request is built, the same place the spent tool allowance is read.
     tools_withdrawn: bool = False
+    #: The step ceiling this run reached, once it has reached one (ADR-0119).
+    #: Set instead of ending the run: the last step is spent on a turn with no
+    #: tools, so the work the run already did arrives as a report instead of
+    #: being thrown away with the stop. Read in three places -- the loop's
+    #: ceiling check (to let exactly one more turn through), the tool offer
+    #: (to empty it), and the turn's terminal check (to end there, whatever
+    #: the turn produced).
+    closing: StopReason | None = None
     #: How many of this run's calls arrived cut off at the provider's output
     #: ceiling (ADR-0118). Each is answered with a refusal that says so; the
     #: one past `MAX_CUT_OFFS` ends the run instead, because two answers that
@@ -286,6 +294,24 @@ async def _aclose(stream: AsyncIterator[ModelEvent]) -> None:
 
     if isinstance(stream, _Closable):
         await stream.aclose()
+
+
+#: What the run is told on the turn its step ceiling bought it (ADR-0119).
+#:
+#: A user message rather than a system one, because the system prompt is a
+#: description of the world this turn is in and was written before the turn
+#: started; this is news. It says the two things the model can act on: there
+#: are no tools on this request, and this message is the last thing it will
+#: be asked. What it must not say is "summarise": a report of what was done
+#: and what was left is the thing the next turn reads, and a summary of the
+#: conversation is not that.
+_CLOSING_NOTE: Final[str] = (
+    "This run has reached its step ceiling, so this request carries no tools "
+    "and nothing further can be run. Write your report now: what you changed "
+    "and where it is, what you verified and how, what is left unfinished, and "
+    "what the next turn should do first. Do not propose a tool call -- there "
+    "are none, and a proposal here ends the run with nothing written down."
+)
 
 
 #: How many calls cut off at the provider's output ceiling one run may be
@@ -723,6 +749,44 @@ class ClaudeLikeAgentRuntime:
                     ledger,
                 )
 
+            # The last step is spent writing the report, not working (ADR-0119).
+            #
+            # Asked after `halt_reason_for` and never instead of it: a run out
+            # of time, tokens or money has nothing to spend on a report either,
+            # and only the *step* ceiling is a unit this runtime hands out
+            # itself and can therefore hold one back. The reasoning is the one
+            # `halt_reason_for` already gives for leaving `max_tool_calls` out
+            # of itself -- a run that has spent its allowance can still write
+            # what the allowance bought, and it needs a turn to do it -- read
+            # one ceiling across.
+            #
+            # Measured (2026-09-13, `ses_a42b…`): a coding turn wrote a 31 KB
+            # game in eight pieces, checked the level with python3, opened it
+            # in the browser and fixed three real bugs -- then stopped on
+            # `max_steps` as a bare `RunFailed`. Everything it had done was on
+            # disk and invisible: the console showed a ceiling's name, and the
+            # next turn, which inherits the report and nothing else, started by
+            # reading the project again.
+            #
+            # A reservation rather than an extra turn: the run still spends
+            # exactly `max_steps`, so no ceiling is overrun and the loop is
+            # bounded by the same number it always was.
+            # Only when the run still *had* work it could have done. A run
+            # whose tools are already off -- its allowance spent (ADR-022) or
+            # withdrawn after repeats (ADR-0116) -- is on its answering turn
+            # by those rules, and those rules end in `completed`: the run did
+            # everything it was able to do and then wrote from it. Reserving
+            # on top of that would relabel a finished run as one that ran out
+            # of steps, which is the opposite of what this exists for.
+            if (
+                ledger.closing is None
+                and not ledger.tools_withdrawn
+                and not request.budget.tool_allowance_spent(ledger.usage)
+                and request.budget.report_turn_due(ledger.usage)
+            ):
+                ledger.closing = "max_steps"
+                ledger.messages.append(user_message(_CLOSING_NOTE))
+
             # The one ceiling that is not the submitter's (ADR-0080). Asked
             # here, in the same breath as the budget, because it answers the
             # same question -- may this run take another turn -- from the other
@@ -807,6 +871,7 @@ class ClaudeLikeAgentRuntime:
             specs = (
                 ()
                 if ledger.tools_withdrawn
+                or ledger.closing is not None
                 or request.budget.tool_allowance_spent(ledger.usage)
                 else advertised
             )
@@ -1093,6 +1158,40 @@ class ClaudeLikeAgentRuntime:
                 ErrorInfo(
                     code="budget_exceeded",
                     message="the model stopped at its output token ceiling",
+                ),
+                ledger,
+            )
+
+        # The turn the step ceiling bought (ADR-0119). It ends the run whatever
+        # it produced, and it ends it here -- above the overrun check, which
+        # would otherwise fire first (this turn put `steps` one past the
+        # ceiling, by design) and file the run under a bare "passed its
+        # ceiling" with the report still in `turn.text`.
+        #
+        # Still a failure, and deliberately: the run did not finish the work it
+        # was given, and a Task node whose steps ran out must not look to its
+        # graph like one that answered. What changes is that the answer travels
+        # -- `_failed` carries `ledger.answer` out as `output_text`, the
+        # console renders it, and the coding session appends it to the history
+        # the next turn reads.
+        if ledger.closing is not None:
+            ledger.answer = turn.text
+            return await self._failed(
+                request,
+                sink,
+                machine,
+                ledger.closing,
+                ErrorInfo(
+                    code="budget_exceeded",
+                    message=(
+                        f"the run stopped at its ceiling: {ledger.closing}. Its "
+                        "last step was spent writing the report above rather "
+                        "than on more work"
+                        if turn.text
+                        else f"the run stopped at its ceiling: {ledger.closing}, "
+                        "and the turn it was given to write its report produced "
+                        "no text"
+                    ),
                 ),
                 ledger,
             )

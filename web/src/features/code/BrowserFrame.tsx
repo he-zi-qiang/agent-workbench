@@ -1,10 +1,14 @@
 /**
  * 模型此刻在浏览器里看到的那一帧（ADR-0113 §3.6）。
  *
- * **它是只读的，而且这一点是故意做不出别的样子的。** 面板里没有地址栏、没有
- * 可点的区域、没有任何能把输入送回去的东西——ADR-0113 §4 拒绝让人直接操作这个
- * 浏览器，理由是两个操作者同时驱动一个页面需要一套仲裁规则，而那套规则还不
- * 存在。与其写一个"暂时禁用"的按钮，不如让这块面根本没有那条路。
+ * **它能操作，而且什么时候都能（ADR-0117 起，仲裁改于 ADR-0119）。** 点一下把
+ * 视口坐标送进去，焦点在里面时按键和滚轮也送。ADR-0117 的第一版只在没有回合
+ * 在跑的时候接受，而一个「写完页面再去浏览器里验」的回合要跑几分钟——人想操作
+ * 的正是那几分钟，于是这块面在它唯一有用的时刻永远答「等这一轮结束」。现在两
+ * 边都能动，模型在它下一次浏览器调用上被告知页面被人碰过。
+ *
+ * **画面底下有一行地址**：浏览器所在那台机器上的路径（容器栈里是容器里的），
+ * 因为「这是哪个文件」是读者问这块面的第一个问题。
  *
  * **三种状态，不能合并成两种。** 这是 computer 那一页当初较过真的同一件事：
  *
@@ -48,7 +52,29 @@ type Frame =
   | { kind: "loading" }
   | { kind: "absent" }
   | { kind: "idle" }
-  | { kind: "shown"; url: string };
+  | { kind: "shown"; url: string; where: string | null };
+
+/** 帧那条路由把页面自己的地址带在帧上（ADR-0119）。 */
+const URL_HEADER = "X-Browser-Url";
+
+/**
+ * 把浏览器报的地址变成人能认的一行。
+ *
+ * `file://` 的那一半是这件事的重点：模型验证自己刚写的文件时打开的就是它，而
+ * 那是**浏览器所在那台机器上**的路径——容器栈里是容器里的路径，原生路径上就是
+ * 本机的。读者问这块面的第一个问题是「这是哪个文件」，在此之前它答不上来。
+ * 百分号编码要解开：`/projects/windows%E6%B5%8B%E8%AF%95/mario.html` 谁也认不出。
+ */
+export function whereItIs(raw: string | null): string | null {
+  if (raw === null || raw === "") return null;
+  let text = raw;
+  try {
+    text = decodeURIComponent(raw);
+  } catch {
+    // 解不开就照原样显示：一个地址总比没有强。
+  }
+  return text.startsWith("file://") ? text.slice("file://".length) : text;
+}
 
 interface Props {
   /**
@@ -66,8 +92,8 @@ export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
   // 个 blob 挂在文档上。
   const previous = useRef<string | null>(null);
   // 读者的焦点在不在画面里（决定取帧的节奏，也决定滚轮归谁），一次输入是不是
-  // 还在路上，以及服务端上一次为什么拒绝——模型在跑的那一轮里它答 409，那句话
-  // 要画出来，而不是让点击悄悄丢掉（ADR-0117）。
+  // 还在路上，以及上一次送进去之后要说的那句话——它现在只有两种来源：真的出错
+  // （403、网络），或者「模型这一轮也在动这个页面」这个事实（ADR-0119）。
   const [focused, setFocused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -75,15 +101,20 @@ export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
     if (busy) return;
     setBusy(true);
     try {
-      await sendBrowserInput(identity, actions);
-      setRefusal(null);
+      const answered = await sendBrowserInput(identity, actions);
+      // 不是拒绝，是提醒：输入已经进去了，只是模型这一轮也在动这一页，画面可能
+      // 会在人的手底下变。ADR-0117 在这里答 409 并且什么也不做，而一轮要跑几
+      // 分钟——读者看到的就是「浏览器一直被控制，人动不了」。
+      setRefusal(
+        answered.turns_in_flight > 0
+          ? "送进去了。模型这一轮也在动这个页面，画面可能会自己变。"
+          : null,
+      );
     } catch (cause) {
       setRefusal(
-        cause instanceof ApiError && cause.status === 409
-          ? "模型正在操作这个页面；等这一轮结束再点。"
-          : cause instanceof ApiError && cause.status === 403
-            ? "这个身份没有 mcp:browser，动不了它。"
-            : "这一次输入没送进去。",
+        cause instanceof ApiError && cause.status === 403
+          ? "这个身份没有 mcp:browser，动不了它。"
+          : "这一次输入没送进去。",
       );
     } finally {
       setBusy(false);
@@ -120,6 +151,9 @@ export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
           setFrame({ kind: "absent" });
           return;
         }
+        // 读在 `blob()` 之前：地址和它描述的那张图是同一次应答带来的，隔一次
+        // 轮询去取就可能配成另一页的地址（ADR-0119）。
+        const where = whereItIs(response.headers.get(URL_HEADER));
         const blob = await response.blob();
         if (cancelled) {
           return;
@@ -127,7 +161,7 @@ export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
         const url = URL.createObjectURL(blob);
         revoke();
         previous.current = url;
-        setFrame({ kind: "shown", url });
+        setFrame({ kind: "shown", url, where });
       } catch {
         // 取不到和没在跑，对读者是同一件事：这里看不到那个浏览器。
         if (!cancelled) {
@@ -215,11 +249,16 @@ export function BrowserFrame({ identity, refusalMs = REFUSAL_MS }: Props) {
       >
         <img alt="浏览器当前画面" src={frame.url} />
       </div>
+      {frame.where !== null && (
+        <p className="aw-browser-where" title={frame.where}>
+          {frame.where}
+        </p>
+      )}
       <p className="aw-code-value" role="status">
         {refusal ??
           (focused
             ? "键盘和点击正送进模型的浏览器。"
-            : "点一下画面就能操作它；模型在跑的那一轮里它不接受。")}
+            : "点一下画面就能操作它；模型在跑的时候也可以。")}
       </p>
     </div>
   );

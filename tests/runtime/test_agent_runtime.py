@@ -809,6 +809,69 @@ def test_an_answer_cut_off_by_the_token_ceiling_is_a_failure() -> None:
     assert run.outcome.stop_reason == "token_budget"
 
 
+def test_the_step_ceiling_buys_a_turn_to_write_the_report() -> None:
+    """ADR-0119: the work a spent run did must not die with the stop.
+
+    Measured (`ses_a42b…`, 2026-09-13): a coding turn wrote a 31 KB game in
+    eight pieces, checked the level, opened it in the browser and fixed three
+    real bugs -- then hit `max_steps` and was filed as `RunFailed` with a
+    ceiling's name and nothing else. Everything it had done was on disk and
+    invisible, and the next turn inherited none of it.
+
+    Now the last step is spent on a turn with no tools. It is still a failure
+    -- the work was not finished -- but the report travels out as
+    `output_text`, which is what the coding session appends to its history.
+    """
+
+    budget = RunBudget(max_steps=3, max_tool_calls=10)
+    model = FakeModel(
+        [
+            ScriptedTurn(text="Reading.", tool_calls=(READ_CALL,)),
+            ScriptedTurn(text="Reading again.", tool_calls=(READ_CALL,)),
+            ScriptedTurn(text="I read two documents; the third is unread."),
+        ]
+    )
+
+    run = _execute(model, request=_request(budget=budget))
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "max_steps"
+    # The whole point: the report is here, not thrown away with the stop.
+    assert run.outcome.output_text == "I read two documents; the third is unread."
+    assert run.outcome.error is not None
+    assert "writing the report above" in run.outcome.error.message
+    # A reservation, not an extra turn: the ceiling is still the ceiling.
+    assert run.outcome.usage.steps == 3
+    # The closing request carried no tools, and said why.
+    closing = model.requests[-1]
+    assert closing.tools == ()
+    assert "step ceiling" in closing.messages[-1].model_dump_json()
+
+
+def test_the_closing_turn_is_taken_once_and_only_for_steps() -> None:
+    """The backstop, and the line between a loop bound and a spend bound.
+
+    `max_steps` bounds the loop's shape and this runtime hands the units out
+    itself, so it can reserve one. A deadline cannot be reserved against --
+    there is no time left to write anything in -- so it still ends the run
+    where it stands.
+    """
+
+    budget = RunBudget(
+        max_steps=50,
+        max_tool_calls=10,
+        deadline=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    model = FakeModel([ScriptedTurn(text="never asked")])
+
+    run = _execute(model, request=_request(budget=budget))
+
+    assert run.outcome.status == "failed"
+    assert run.outcome.stop_reason == "deadline"
+    assert run.outcome.output_text == ""
+    assert model.call_count == 0
+
+
 def test_a_call_cut_off_at_the_ceiling_is_answered_and_the_run_goes_on() -> None:
     """ADR-0118: the refusal goes to the model, in the same run.
 

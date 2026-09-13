@@ -830,15 +830,15 @@ export type BrowserInputAction =
   | { kind: "scroll"; delta_y: number };
 
 /**
- * 把人的输入送进模型的浏览器（ADR-0117）。
+ * 把人的输入送进模型的浏览器（ADR-0117，仲裁见 ADR-0119）。
  *
- * 只在没有回合在跑的时候被接受：模型正在驱动那个页面时服务端答 409，面板把这
- * 句话画出来而不是让点击悄悄丢掉。
+ * 不再看有没有回合在跑：人随时可以操作，回合数作为一个事实跟着回来
+ * （`turns_in_flight`），模型则在它下一次浏览器调用上被告知页面被人动过。
  */
 export async function sendBrowserInput(
   identity: PrincipalIdentity,
   actions: readonly BrowserInputAction[],
-): Promise<{ done: string[] }> {
+): Promise<{ done: string[]; turns_in_flight: number }> {
   return apiRequest(identity, "/v1/browser/input", {
     method: "POST",
     body: { actions },

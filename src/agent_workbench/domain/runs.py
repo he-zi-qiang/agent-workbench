@@ -292,6 +292,28 @@ class RunBudget(DomainModel):
             return "max_tool_calls"
         return self.halt_reason_for(usage, now=now)
 
+    def report_turn_due(self, usage: BudgetUsage) -> bool:
+        """Whether the only step left should be spent writing the report.
+
+        The fourth question, and the one that keeps a spent run's work (ADR-
+        0119). ``halt_reason_for`` answers "may this run take another turn";
+        this one answers "should the turn it takes be the last, and about what
+        it has already done". One step before the ceiling, so the run still
+        spends exactly ``max_steps`` and nothing is overrun -- a reservation,
+        not an extra.
+
+        ``max_steps >= 2`` because a one-step run has nothing to reserve
+        *from*: its single turn is both the work and the answer, and holding
+        that step back would leave it no step to do anything in.
+
+        Only the step ceiling gets this. Time, tokens and money are spent by
+        the closing turn as much as by a working one, so a run that has run
+        out of them has run out for the report too; steps are a unit this
+        system hands out to bound a loop, and a bound can reserve.
+        """
+
+        return self.max_steps >= 2 and usage.steps >= self.max_steps - 1
+
     def tool_allowance_spent(self, usage: BudgetUsage) -> bool:
         """Whether this run may still dispatch a tool call.
 
