@@ -248,6 +248,27 @@ function offeredPermissions(unattendedOffered: boolean) {
   );
 }
 
+/**
+ * 按下的那一颗一定是画出来的三颗之一（ADR-0117 §2.4 补记）。
+ *
+ * `offeredPermissions` 取舍的是画几颗，缺省却还是 `act`——而提供「放手做」的部署上
+ * `act` 不画。2026-09-13 在 Compose 栈上打开一段会话：三颗的 `aria-pressed` 全是
+ * false，不点任何一颗就发出去的一轮是一档看不见的「自动改动」，写入不问、命令先问，
+ * 正是那一节取舍掉的十张审批卡。所以「去做」这个槽位跟着第三档走：`act` 与 `auto`
+ * 在不画自己的部署上换成对方。计划和改前问我每台部署都画，原样不动。
+ *
+ * 换的是发出去的那一档，不是存着的那一份：两份「提不提供」的答案都还没到时画的是
+ * 「自动改动」，答案一到，同一个位置上换成「放手做」，读者不用再点一次。
+ */
+function drawnPermission(
+  held: CodePermission,
+  unattendedOffered: boolean,
+): CodePermission {
+  if (held === "act" && unattendedOffered) return "auto";
+  if (held === "auto" && !unattendedOffered) return "act";
+  return held;
+}
+
 /** The three answers, and the one that is not always offered. */
 const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
   { decision: "approve_once", label: "允许一次" },
@@ -577,6 +598,8 @@ export function CodePage() {
       (row) => row.id === "code.unattended" && row.state === "available",
     ) ??
     false;
+  // 按下的那一颗，也是随这一轮发出去的那一档——两者是同一个值，不是两个。
+  const shownPermission = drawnPermission(permission, unattendedOffered);
 
   // 被勾掉的工具，按会话记。
   //
@@ -901,7 +924,7 @@ export function CodePage() {
   }, [identity, pollingSession]);
 
   const send = useCallback(
-    async (turnPermission: CodePermission = permission, override?: string) => {
+    async (turnPermission: CodePermission = shownPermission, override?: string) => {
       const { mode: turnMode, approvals: turnApprovals } =
         TURN_OF[turnPermission];
       const text = (override ?? instruction).trim();
@@ -1065,11 +1088,11 @@ export function CodePage() {
       instruction,
       keptTools,
       navigate,
-      permission,
       queries,
       reload,
       running,
       sessionId,
+      shownPermission,
       startingIn,
     ],
   );
@@ -1325,13 +1348,13 @@ export function CodePage() {
       // 这句话原样进转录，所以读者看得见是谁问的、问了什么——一次没有人按下的
       // 模型调用，必须在它花掉之后能被指认出来。
       void send(
-        permission,
+        shownPermission,
         `（自动验证，第 ${String(pass.rounds + 1)}/${String(AUTO_ROUNDS)} 轮）` +
           `${name} 在预览里运行时报了这些错误，请修掉它们：\n` +
           list.map((fault) => `- ${fault}`).join("\n"),
       );
     },
-    [permission, running, send, sessionId],
+    [running, send, sessionId, shownPermission],
   );
 
   const decide = useCallback(
@@ -1643,8 +1666,9 @@ export function CodePage() {
             onClick={() => {
               // 同一条指令重发一次，模式换成 act。**不是**把计划正文发过去：
               // 计划是散文，它不授权任何东西（ADR-0079 不变量 3），后面这一轮
-              // 拿到的是它自己的信封，和没有先计划过时一模一样。
-              void send("act", planned.text);
+              // 拿到的是它自己的信封，和没有先计划过时一模一样。「去做」是这台
+              // 部署画出来的那一档（`drawnPermission`）。
+              void send(drawnPermission("act", unattendedOffered), planned.text);
             }}
             type="button"
           >
@@ -1702,8 +1726,8 @@ export function CodePage() {
               一颗按下去换来 422 的按钮，教给读者的都是错的规则。 */}
           {offeredPermissions(unattendedOffered).map((choice) => (
             <button
-              aria-pressed={permission === choice.value}
-              className={permission === choice.value ? "is-active" : ""}
+              aria-pressed={shownPermission === choice.value}
+              className={shownPermission === choice.value ? "is-active" : ""}
               disabled={running}
               key={choice.value}
               onClick={() => {
@@ -1762,12 +1786,12 @@ export function CodePage() {
           }}
           open={menuOpen}
           openSubmenu={menuSubmenu}
-          planning={permission === "plan"}
+          planning={shownPermission === "plan"}
           sessionId={sessionId}
           starters={CODE_STARTERS}
-          unattended={permission === "auto"}
+          unattended={shownPermission === "auto"}
           uploading={uploading}
-          writeGate={permission === "ask"}
+          writeGate={shownPermission === "ask"}
         />
         <label className="aw-sr-only" htmlFor="aw-code-instruction">
           要做的事

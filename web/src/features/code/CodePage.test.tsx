@@ -4210,6 +4210,75 @@ describe("一台部署只画三档", () => {
     expect(screen.getByRole("button", { name: "只做计划" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "改前问我" })).toBeInTheDocument();
   });
+
+  // 补记：取舍了画几颗，缺省却还是 `act`。Compose 栈上打开一段会话，三颗全没按下，
+  // 不点就发出去的是一档看不见的「自动改动」——命令一条一条地先问。
+  it("提供「放手做」的部署上，缺省按下的就是它，不点也按它发", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeTools).mockResolvedValue({
+      ...TOOL_OFFER,
+      unattended_available: true,
+    });
+    vi.mocked(askCode).mockResolvedValue({
+      report: "跑完了。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    const auto = await screen.findByRole("button", { name: "放手做" });
+    expect(auto).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "改前问我" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await user.type(screen.getByLabelText("要做的事"), "把测试跑绿");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(askCode).mock.calls[0]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[0]?.[5]).toBe("unattended");
+  });
+
+  it("原生路径上缺省按下的是「自动改动」", async () => {
+    mounted();
+
+    expect(
+      await screen.findByRole("button", { name: "自动改动" }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("提供「放手做」的部署上，「按这个计划执行」按画出来的那一档去做", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCodeTools).mockResolvedValue({
+      ...TOOL_OFFER,
+      unattended_available: true,
+    });
+    vi.mocked(askCode).mockResolvedValue({
+      report: "我会改三个文件。",
+      workspace_version: null,
+      run_id: "run_1",
+      status: "completed",
+      stop_reason: "completed",
+    });
+
+    mounted();
+    await screen.findByRole("button", { name: "放手做" });
+    await user.click(screen.getByRole("button", { name: "只做计划" }));
+    await user.type(screen.getByLabelText("要做的事"), "加个功能");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    await user.click(await screen.findByRole("button", { name: "按这个计划执行" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(askCode).mock.calls).toHaveLength(2);
+    });
+    expect(vi.mocked(askCode).mock.calls[1]?.[4]).toBe("act");
+    expect(vi.mocked(askCode).mock.calls[1]?.[5]).toBe("unattended");
+  });
 });
 
 describe("文件夹里的网页在浏览器里打开（ADR-0120）", () => {
