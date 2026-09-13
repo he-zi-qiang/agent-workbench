@@ -1654,6 +1654,19 @@ class CodeSessionService:
             tool_names=tool_names,
         )
 
+    @property
+    def turns_in_flight(self) -> int:
+        """How many coding turns this process is running right now (ADR-0117).
+
+        Read by the browser-input route as the whole of its arbitration: a
+        person may drive the guarded browser only while no turn is, because
+        two operators on one page is the situation ADR-0113 §4 refused to
+        adjudicate. A count rather than a boolean so the refusal can say how
+        many, and so a future per-session rule has the number it would need.
+        """
+
+        return len(self._running)
+
     async def drain_cleanup(self, *, timeout_seconds: float) -> None:
         """Wait for turns in flight, so a deploy does not cut one in half.
 

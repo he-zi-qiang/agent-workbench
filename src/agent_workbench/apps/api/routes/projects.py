@@ -25,6 +25,7 @@ from agent_workbench.apps.api.state import dependencies_of
 from agent_workbench.domain.identifiers import Identifier
 from agent_workbench.domain.project_files import (
     DirectoryExistsError,
+    ProjectFileExistsError,
     ProjectPathError,
 )
 from agent_workbench.ports.project_files import (
@@ -155,6 +156,15 @@ class WriteProjectFileRequest(BaseModel):
     #: text anyway; a binary upload is a different endpoint with a different
     #: content type, not a flag on this one.
     content: str
+
+
+class MoveProjectFileRequest(BaseModel):
+    """Where a file is and where it goes, both relative to the project root."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1024)
+    new_path: str = Field(min_length=1, max_length=1024)
 
 
 class ProjectListResponse(BaseModel):
@@ -447,6 +457,41 @@ async def write_file(
     except ProjectPathError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    return ProjectFileEntryView(
+        path=entry.path,
+        kind=entry.kind,
+        size_bytes=entry.size_bytes,
+        modified_at=entry.modified_at,
+    )
+
+
+@router.post("/{project_id}/file/move", response_model=ProjectFileEntryView)
+async def move_file(
+    project_id: str, body: MoveProjectFileRequest, request: Request
+) -> ProjectFileEntryView:
+    """Rename one file, or move it under another directory (ADR-0116).
+
+    The person's half of `project_move`: the same store method the tool uses,
+    with the same refusals. A destination that is already taken is 409 rather
+    than replaced -- a move that landed on a file would be a delete nobody
+    asked for -- and a source that is not there is the store's `NotFoundError`,
+    which the application's own table maps to 404.
+    """
+
+    dependencies = dependencies_of(request)
+    store = await dependencies.projects.open_files(
+        dependencies.principals.resolve(request), project_id
+    )
+    try:
+        entry = await store.move(body.path, body.new_path)
+    except ProjectPathError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)
+        ) from error
+    except ProjectFileExistsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(error)
         ) from error
     return ProjectFileEntryView(
         path=entry.path,

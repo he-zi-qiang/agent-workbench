@@ -292,6 +292,10 @@ WebSocket，不引入新的推流通道**——那会给这套东西加第二种
 
 - **不做人对浏览器的直接操作。** 回流是只读的。人要动手就自己开浏览器。允许人从
   面板里点，就要在两个操作者之间做仲裁，那是另一条 ADR。
+  > **2026-09-13，[ADR-0117](./0117-a-person-may-drive-the-browser-while-no-turn-is.md) 按这一条
+  > 自己开出的条件翻案**：仲裁规则是「有编码回合在跑时页面归模型，其余时候归人」，人的输入经
+  > `POST /v1/browser/input` 作为一次 `browser_interact` 送进去，回合在跑时 409。§3.6 的帧路由本身
+  > 仍然只读，`tests/architecture/test_browser_forward_is_read_only.py` 继续钉着它。
 - **不做持久化 profile。** 没有 cookie 存续、没有登录态复用。一个会话一个上下文，
   结束即弃。带登录态的验证要先有一条关于凭据从哪来的 ADR。
 - **不把浏览器给 Chat。** 只给 Code 会话与 Task 图节点，`audience` 照 `web` 的样子

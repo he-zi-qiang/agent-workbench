@@ -58,9 +58,11 @@ export function PreviewPanel({
   files,
   identity,
   onCollapse,
+  onDeleteFile,
   onDownload,
   onFaults,
   onOpen,
+  onRenameFile,
   onReport,
   onWrote,
   orphanRuns,
@@ -93,6 +95,12 @@ export function PreviewPanel({
   identity: PrincipalIdentity;
   /** 把这一栏收起来。收起是折叠，不是关闭：它记得住。 */
   onCollapse: () => void;
+  /**
+   * 删掉、改名此刻打开的那个项目文件（ADR-0116 给人用的那一头）。可选：只有
+   * 项目目录里的文件有这两件事可做，会话产出走「下载」。
+   */
+  onDeleteFile?: (file: OpenedProjectFile) => void;
+  onRenameFile?: (file: OpenedProjectFile) => void;
   onDownload: () => void;
   onOpen: (file: WorkspaceEntryView) => void;
   /**
@@ -174,6 +182,34 @@ export function PreviewPanel({
                     >
                       下载
                     </button>
+                  )}
+                  {/* 项目目录里的文件给「重命名」和「删除」，而不是「下载」
+                      （2026-09-13）：这两件是读者对自己硬盘上的文件本来就能做、
+                      而这一栏此前一件也做不了的事——用户的原话是「文件夹中的
+                      文件也不可以删除」。走的是和 `project_move` /
+                      `project_delete` 同一个 store，所以拒绝的口径也一样：
+                      目录不删，目标不覆盖。 */}
+                  {projectFile === null ? null : (
+                    <>
+                      {onRenameFile === undefined ? null : (
+                        <button
+                          className="aw-button"
+                          onClick={() => onRenameFile(projectFile)}
+                          type="button"
+                        >
+                          重命名
+                        </button>
+                      )}
+                      {onDeleteFile === undefined ? null : (
+                        <button
+                          className="aw-button"
+                          onClick={() => onDeleteFile(projectFile)}
+                          type="button"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </>
                   )}
                 </header>
                 {projectFile !== null ? (

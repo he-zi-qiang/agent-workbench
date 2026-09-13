@@ -15,6 +15,7 @@ import {
   createCodeSession,
   decideCodeApproval,
   deleteCodeSession,
+  deleteProjectFile,
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
@@ -25,6 +26,7 @@ import {
   getCodeWorkspaceFileText,
   listCodeSessions,
   listProjectFiles,
+  moveProjectFile,
   putCodeWorkspaceFile,
   readProjectFile,
   renameCodeSession,
@@ -55,6 +57,16 @@ vi.mock("../../api/client", async () => ({
   createCodeSession: vi.fn(),
   decideCodeApproval: vi.fn(),
   deleteCodeSession: vi.fn(() => Promise.resolve({ session_id: "ses_code_1" })),
+  // 项目文件的删与改名（2026-09-13）。默认都成功，各自的用例再改。
+  deleteProjectFile: vi.fn(() => Promise.resolve()),
+  moveProjectFile: vi.fn((_identity, _projectId, _path, newPath: string) =>
+    Promise.resolve({
+      path: newPath,
+      kind: "file" as const,
+      size_bytes: 12,
+      modified_at: "2026-09-13T00:00:00Z",
+    }),
+  ),
   getCodeApprovals: vi.fn(() => Promise.resolve({ approvals: [] })),
   getCodeHistory: vi.fn(() => Promise.resolve({ messages: [] })),
   getCodeWorkspace: vi.fn(() => Promise.resolve({ files: [] })),
@@ -4037,5 +4049,160 @@ describe("起始屏上的「放手做」", () => {
     expect(
       screen.queryByRole("button", { name: "放手做" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+
+describe("项目文件的删与改名（给人用的那一头）", () => {
+  // 用户的原话：「文件夹中的文件也不可以删除」。ADR-0116 给了模型两件工具，而
+  // 右栏里打开一个文件之后，人自己一件也做不了。
+  function withOneFile() {
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "这个文件夹里的",
+          last_activity_at: "2026-08-22T09:00:00Z",
+          project_id: PROJECT.project_id,
+        },
+      ],
+    });
+    vi.mocked(listProjectFiles).mockResolvedValue({
+      path: "",
+      entries: [
+        {
+          path: "notes.txt",
+          kind: "file",
+          size_bytes: 12,
+          modified_at: "2026-08-22T00:00:00Z",
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(readProjectFile).mockResolvedValue({
+      path: "notes.txt",
+      text: "hello notes",
+      size_bytes: 12,
+      is_text: true,
+      modified_at: "2026-08-22T00:00:00Z",
+    });
+  }
+
+  it("删除先问一句，答应了才删，删完那一栏不再显示它", async () => {
+    withOneFile();
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    await within(pane).findByText("hello notes");
+    await user.click(within(pane).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(deleteProjectFile)).toHaveBeenCalled();
+    });
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("notes.txt"));
+    expect(vi.mocked(deleteProjectFile).mock.calls[0]?.[1]).toBe(
+      PROJECT.project_id,
+    );
+    expect(vi.mocked(deleteProjectFile).mock.calls[0]?.[2]).toBe("notes.txt");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "文件 notes.txt" }),
+      ).not.toBeInTheDocument();
+    });
+    confirm.mockRestore();
+  });
+
+  it("不答应就什么也不删", async () => {
+    withOneFile();
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    await within(pane).findByText("hello notes");
+    await user.click(within(pane).getByRole("button", { name: "删除" }));
+
+    expect(vi.mocked(deleteProjectFile)).not.toHaveBeenCalled();
+    expect(within(pane).getByText("hello notes")).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it("重命名问新路径，改完那一栏跟着换到新路径", async () => {
+    withOneFile();
+    const user = userEvent.setup();
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("docs/notes.txt");
+
+    mounted();
+    await user.click(await screen.findByRole("button", { name: /notes\.txt/ }));
+    const pane = await screen.findByRole("complementary", { name: "预览" });
+    await within(pane).findByText("hello notes");
+    await user.click(within(pane).getByRole("button", { name: "重命名" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(moveProjectFile)).toHaveBeenCalled();
+    });
+    expect(prompt).toHaveBeenCalledWith(expect.any(String), "notes.txt");
+    expect(vi.mocked(moveProjectFile).mock.calls[0]?.[2]).toBe("notes.txt");
+    expect(vi.mocked(moveProjectFile).mock.calls[0]?.[3]).toBe("docs/notes.txt");
+    await screen.findByRole("region", { name: "文件 docs/notes.txt" });
+    prompt.mockRestore();
+  });
+});
+
+describe("右栏收起之后叫得回来", () => {
+  // 实测（2026-09-13）：一段只读了目录、什么也没写的项目会话，收起右栏之后没有
+  // 任何看得见的东西能把它叫回来——那颗「工作区 N」开关只在会话产出过文件时
+  // 出现，而 `aw.code.panel.v2` 记着那次收起，刷新也不放。
+  it("没有产出文件的项目会话也有那颗开关，收起再点一下就回来", async () => {
+    vi.mocked(listCodeSessions).mockResolvedValue({
+      sessions: [
+        {
+          session_id: SESSION,
+          title: "这个文件夹里的",
+          last_activity_at: "2026-08-22T09:00:00Z",
+          project_id: PROJECT.project_id,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    mounted();
+    await screen.findByRole("complementary", { name: "预览" });
+    const toggle = await screen.findByRole("button", { name: "文件夹" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(toggle);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("complementary", { name: "预览" }),
+      ).not.toBeInTheDocument();
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
+    await screen.findByRole("complementary", { name: "预览" });
+  });
+});
+
+describe("一台部署只画三档", () => {
+  // 用户：「四种权限有交叉请取舍」。第三档永远是这台部署允许的最自动的那一档：
+  // 命令跑进 runner 容器的部署上是「放手做」，「自动改动」不画；原生路径上反过来。
+  it("提供「放手做」的部署上没有「自动改动」", async () => {
+    vi.mocked(getCodeTools).mockResolvedValue({
+      ...TOOL_OFFER,
+      unattended_available: true,
+    });
+
+    mounted();
+    await screen.findByRole("button", { name: "放手做" });
+    expect(
+      screen.queryByRole("button", { name: "自动改动" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "只做计划" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改前问我" })).toBeInTheDocument();
   });
 });

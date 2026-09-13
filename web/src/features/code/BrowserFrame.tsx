@@ -19,12 +19,23 @@
  * 实时范式，而已有的那一种服务的正是同一形状的需求。
  */
 
+import type React from "react";
 import { useEffect, useRef, useState } from "react";
-import { fetchBrowserFrame } from "../../api/client";
+import {
+  ApiError,
+  fetchBrowserFrame,
+  sendBrowserInput,
+  type BrowserInputAction,
+} from "../../api/client";
 import type { PrincipalIdentity } from "../../api/types";
 
-/** 两次取帧之间隔多久。 */
+/**
+ * 两次取帧之间隔多久：没人在操作时一秒一张（ADR-095 的形状）；读者把焦点放进
+ * 画面之后四张一秒——一个在按方向键的人要看见自己按下去的结果，一秒一张等于
+ * 每一步都在猜（ADR-0117）。
+ */
 const POLL_MS = 1000;
+const POLL_MS_FOCUSED = 250;
 
 type Frame =
   | { kind: "loading" }
@@ -45,6 +56,30 @@ export function BrowserFrame({ identity }: Props) {
   // 上一帧的 object URL，拿到新的之后要撤销——一秒一张，不撤销就是一分钟六十
   // 个 blob 挂在文档上。
   const previous = useRef<string | null>(null);
+  // 读者的焦点在不在画面里（决定取帧的节奏，也决定滚轮归谁），一次输入是不是
+  // 还在路上，以及服务端上一次为什么拒绝——模型在跑的那一轮里它答 409，那句话
+  // 要画出来，而不是让点击悄悄丢掉（ADR-0117）。
+  const [focused, setFocused] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const send = async (actions: readonly BrowserInputAction[]) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await sendBrowserInput(identity, actions);
+      setRefusal(null);
+    } catch (cause) {
+      setRefusal(
+        cause instanceof ApiError && cause.status === 409
+          ? "模型正在操作这个页面；等这一轮结束再点。"
+          : cause instanceof ApiError && cause.status === 403
+            ? "这个身份没有 mcp:browser，动不了它。"
+            : "这一次输入没送进去。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -88,13 +123,16 @@ export function BrowserFrame({ identity }: Props) {
     };
 
     void tick();
-    const timer = window.setInterval(() => void tick(), POLL_MS);
+    const timer = window.setInterval(
+      () => void tick(),
+      focused ? POLL_MS_FOCUSED : POLL_MS,
+    );
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       revoke();
     };
-  }, [identity]);
+  }, [focused, identity]);
 
   if (frame.kind === "loading") {
     return <p className="aw-code-workspace-empty">正在取画面……</p>;
@@ -123,10 +161,87 @@ export function BrowserFrame({ identity }: Props) {
 
   return (
     <div className="aw-browser-frame">
-      <img alt="浏览器当前画面" src={frame.url} />
-      <p className="aw-code-value">
-        只读：这里看得到模型在做什么，但点不动它。
+      {/* 可以点、可以按键（ADR-0117）。`role="application"`：这一块吞掉方向键
+          和空格，读屏器的表格导航在它里面不成立，这是那个 role 的本意。坐标从
+          画面像素换算到浏览器视口像素——画面就是视口的截图，所以是等比。 */}
+      <div
+        aria-label="浏览器画面，点击或按键会送进模型的浏览器"
+        className={`aw-browser-stage${busy ? " is-busy" : ""}`}
+        onBlur={() => setFocused(false)}
+        onClick={(event) => {
+          const image = event.currentTarget.querySelector("img");
+          if (image === null) return;
+          const rect = image.getBoundingClientRect();
+          const scaleX = (image.naturalWidth || VIEWPORT.width) / (rect.width || VIEWPORT.width);
+          const scaleY =
+            (image.naturalHeight || VIEWPORT.height) / (rect.height || VIEWPORT.height);
+          event.currentTarget.focus();
+          void send([
+            {
+              kind: "click",
+              x: Math.max(0, Math.round((event.clientX - rect.left) * scaleX)),
+              y: Math.max(0, Math.round((event.clientY - rect.top) * scaleY)),
+            },
+          ]);
+        }}
+        onFocus={() => setFocused(true)}
+        onKeyDown={(event) => {
+          const key = keyNameOf(event);
+          if (key === null) return;
+          event.preventDefault();
+          void send([{ kind: "key", text: key }]);
+        }}
+        onWheel={(event) => {
+          if (!focused) return;
+          void send([{ kind: "scroll", delta_y: Math.round(event.deltaY) }]);
+        }}
+        role="application"
+        tabIndex={0}
+      >
+        <img alt="浏览器当前画面" src={frame.url} />
+      </div>
+      <p className="aw-code-value" role="status">
+        {refusal ??
+          (focused
+            ? "键盘和点击正送进模型的浏览器。"
+            : "点一下画面就能操作它；模型在跑的那一轮里它不接受。")}
       </p>
     </div>
   );
+}
+
+/**
+ * 浏览器那一侧视口的大小（`apps/browser_mcp/session.py` 的 `VIEWPORT`），只在画面
+ * 还没量出自己多大时当兜底用——jsdom 下永远是这种情况。
+ */
+const VIEWPORT = { width: 1280, height: 800 } as const;
+
+/**
+ * 一次键盘事件对应到 Playwright 的键名，送不进去的返回 null。
+ *
+ * 单字符原样送（字母、数字、标点），空格送 `Space`，方向键、回车、Esc、Tab、退格、
+ * 删除照 `KeyboardEvent.key` 的拼法——Playwright 认的正是这一套。带 Ctrl/Meta 的
+ * 组合不送：那多半是读者自己浏览器的快捷键（刷新、复制），不该被吞。
+ */
+function keyNameOf(event: React.KeyboardEvent): string | null {
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  const key = event.key;
+  if (key === " ") return "Space";
+  if (key.length === 1) return key;
+  const named = new Set([
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Enter",
+    "Escape",
+    "Tab",
+    "Backspace",
+    "Delete",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+  ]);
+  return named.has(key) ? key : null;
 }

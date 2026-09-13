@@ -463,6 +463,23 @@ export async function deleteProjectFile(
   );
 }
 
+/**
+ * 给项目里的一个文件改名，或挪到另一个目录（ADR-0116 的 `move`，给人用的那一头）。
+ * 目标必须为空——服务端不会覆盖已有文件，撞上是 409。
+ */
+export async function moveProjectFile(
+  identity: PrincipalIdentity,
+  projectId: string,
+  path: string,
+  newPath: string,
+): Promise<ProjectFileEntryView> {
+  return apiRequest(
+    identity,
+    `/v1/projects/${encodeURIComponent(projectId)}/file/move`,
+    { method: "POST", body: { path, new_path: newPath } },
+  );
+}
+
 export async function setSessionProject(
   identity: PrincipalIdentity,
   sessionId: string,
@@ -802,6 +819,29 @@ export async function fetchBrowserFrame(
   return fetch("/v1/browser/frame", {
     cache: "no-store",
     headers: identityHeaders(identity),
+  });
+}
+
+/** 送进模型那个浏览器的一次输入：一个视口坐标上的点击、一个按键或一次滚动。 */
+export type BrowserInputAction =
+  | { kind: "click"; x: number; y: number }
+  | { kind: "key"; text: string }
+  | { kind: "type"; text: string }
+  | { kind: "scroll"; delta_y: number };
+
+/**
+ * 把人的输入送进模型的浏览器（ADR-0117）。
+ *
+ * 只在没有回合在跑的时候被接受：模型正在驱动那个页面时服务端答 409，面板把这
+ * 句话画出来而不是让点击悄悄丢掉。
+ */
+export async function sendBrowserInput(
+  identity: PrincipalIdentity,
+  actions: readonly BrowserInputAction[],
+): Promise<{ done: string[] }> {
+  return apiRequest(identity, "/v1/browser/input", {
+    method: "POST",
+    body: { actions },
   });
 }
 

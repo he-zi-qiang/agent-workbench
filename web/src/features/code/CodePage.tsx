@@ -65,6 +65,7 @@ import {
   createCodeSession,
   decideCodeApproval,
   deleteCodeSession,
+  deleteProjectFile,
   downloadCodeWorkspaceFile,
   getCodeApprovals,
   getCodeHistory,
@@ -75,6 +76,7 @@ import {
   listCodeSessions,
   listProjectFiles,
   listProjects,
+  moveProjectFile,
   newIdempotencyKey,
   putCodeWorkspaceFile,
   renameCodeSession,
@@ -123,7 +125,7 @@ import { CodeTurn } from "./CodeTurn";
 import { fileKey as workspaceFileKey } from "./FilePreview";
 import type { OpenedFile } from "./FilePreview";
 import { TurnUsage, sumTurnUsage } from "../../components/TurnUsage";
-import { PreviewPanel } from "./PreviewPanel";
+import { PreviewPanel, type OpenedProjectFile } from "./PreviewPanel";
 import { pageAmong, parentOf } from "./previewIntent";
 import { buildTurnBlocks, projectWritesIn } from "./turnBlocks";
 import { useCodeStream } from "./useCodeStream";
@@ -210,19 +212,40 @@ const PERMISSIONS: ReadonlyArray<{
   {
     value: "ask",
     label: "改前问我",
-    hint: "这一轮可以改文件，但每次写入都会停下来等你允许",
+    hint: "这一轮每一次写入、每一条命令都先问你",
   },
   {
     value: "act",
     label: "自动改动",
-    hint: "这一轮可以直接改文件；只有不可撤销的操作才会停下来问你",
+    hint: "这一轮写入不问，命令先问你",
   },
   {
     value: "auto",
     label: "放手做",
-    hint: "这一轮不再停下来问你；只有会毁掉工作的几种命令例外，你事后看记录",
+    hint: "这一轮写入和命令都不问，只有会毁掉工作的几种命令例外，你事后看记录",
   },
 ];
+
+/**
+ * 一台部署只画三档（2026-09-13，用户：「四种权限有交叉请取舍」）。
+ *
+ * 四档各有各的问题（分别对应 Claude Code 的 plan / default / acceptEdits /
+ * bypass），但读者看到的是四句都以「这一轮……」开头、后两句都说「只有……例外」
+ * 的话——分不清「自动改动」和「放手做」差在哪，是这四档并排的代价。取舍的
+ * 规矩：第三档永远是「这台部署允许的最自动的那一档」。命令跑进 runner 容器的
+ * 部署上它是「放手做」，「自动改动」不画——正是那一档在这条路上产生了十张审批卡；
+ * 原生路径上「放手做」不存在，第三档就是「自动改动」。于是每一台部署都是
+ * 只读 / 都问 / 最自动三档，而不是四档里挑。
+ */
+function offeredPermissions(unattendedOffered: boolean) {
+  return PERMISSIONS.filter((choice) =>
+    choice.value === "auto"
+      ? unattendedOffered
+      : choice.value === "act"
+        ? !unattendedOffered
+        : true,
+  );
+}
 
 /** The three answers, and the one that is not always offered. */
 const DECISIONS: { decision: ApprovalDecision; label: string }[] = [
@@ -373,6 +396,55 @@ export function CodePage() {
       setPanelTab("preview");
     },
     [setPanelChoice],
+  );
+  // 删掉、改名右栏里打开的那个项目文件（2026-09-13，用户：「文件夹中的文件也
+  // 不可以删除」）。走的是 `project_delete` / `project_move` 同一个 store，所以
+  // 拒绝的口径也一样：目录不删，目标不覆盖。成功之后目录树按项目键失效重取，
+  // 打开的那个文件跟着关掉（删）或换成新路径（改名）。`window.confirm` 而不是
+  // 自己的对话框，理由和删除会话那一处相同。
+  const deleteOpenedFile = useCallback(
+    async (file: OpenedProjectFile) => {
+      if (
+        !window.confirm(
+          `删除 ${file.path}？这会删掉磁盘上的真实文件，没有回收站。`,
+        )
+      ) {
+        return;
+      }
+      try {
+        await deleteProjectFile(identity, file.projectId, file.path);
+        setOpenProjectFile(null);
+        await queries.invalidateQueries({
+          queryKey: ["project-files", identity, file.projectId],
+        });
+      } catch (cause) {
+        setFault({ scope: sessionId ?? null, text: describe(cause) });
+      }
+    },
+    [identity, queries, sessionId],
+  );
+  const renameOpenedFile = useCallback(
+    async (file: OpenedProjectFile) => {
+      const target = window
+        .prompt("新的路径（相对项目根，可以带目录）", file.path)
+        ?.trim();
+      if (target === undefined || target === "" || target === file.path) return;
+      try {
+        const entry = await moveProjectFile(
+          identity,
+          file.projectId,
+          file.path,
+          target,
+        );
+        setOpenProjectFile(entry);
+        await queries.invalidateQueries({
+          queryKey: ["project-files", identity, file.projectId],
+        });
+      } catch (cause) {
+        setFault({ scope: sessionId ?? null, text: describe(cause) });
+      }
+    },
+    [identity, queries, sessionId],
   );
   // 起始屏选中的项目（ADR-074）。只在「还没有会话」时用得上——会话一旦存在，
   // 归属就在会话行上，读它比读这个 state 可靠：刷新页面之后 state 没了，行还在。
@@ -1579,12 +1651,10 @@ export function CodePage() {
           className="aw-segmented aw-code-permission"
           role="group"
         >
-          {PERMISSIONS.filter(
-            // 第四档只在部署提供的时候画（ADR-0116）。两份答案都还没到时也不画：
-            // 一颗在下一帧消失的按钮，和一颗按下去换来 422 的按钮，教给读者的
-            // 都是错的规则。
-            (choice) => choice.value !== "auto" || unattendedOffered,
-          ).map((choice) => (
+          {/* 三档，不是四档：`offeredPermissions` 说了为什么。两份「提不提供
+              放手做」的答案都还没到时按不提供画——一颗在下一帧消失的按钮，和
+              一颗按下去换来 422 的按钮，教给读者的都是错的规则。 */}
+          {offeredPermissions(unattendedOffered).map((choice) => (
             <button
               aria-pressed={permission === choice.value}
               className={permission === choice.value ? "is-active" : ""}
@@ -1887,7 +1957,12 @@ export function CodePage() {
               收起来之后，这颗按钮就是把那一栏叫回来的地方——所以它是一个
               带 `aria-expanded` 的开关，不是一个只会打开的按钮。展开着的时候
               再点一下是收起：一个点开了就再也不管用的控件，读者会以为它坏了。 */}
-          {files.length === 0 ? null : (
+          {files.length === 0 && projectRoot === null ? null : (
+            // 有目录的会话也画这颗开关（2026-09-13）。此前它只在会话产出过文件
+            // 时出现，于是一段只读了目录、什么也没写的项目会话，读者收起右栏
+            // 之后没有任何看得见的东西能把它叫回来——`aw.code.panel.v2` 记着
+            // 那次收起，刷新也不放；唯一的路是 ⋮ 菜单里的「看这个文件夹」。
+            // 实测里这正是「预览不见了」的样子。
             <button
               aria-controls="aw-code-panel"
               aria-expanded={panelShown}
@@ -1900,12 +1975,12 @@ export function CodePage() {
                   return;
                 }
                 setPanelChoice(true);
-                setPanelTab("workspace");
+                setPanelTab(files.length > 0 ? "workspace" : "directory");
               }}
               type="button"
             >
               <PanelRightOpen aria-hidden size={15} />
-              工作区 {files.length}
+              {files.length > 0 ? `工作区 ${String(files.length)}` : "文件夹"}
             </button>
           )}
           {/* 「工作区 N」那颗留着，没有被这颗 ⋮ 吃掉：它是一个带 `aria-expanded`
@@ -2097,6 +2172,8 @@ export function CodePage() {
             }
             files={files}
             identity={identity}
+            onDeleteFile={(file) => void deleteOpenedFile(file)}
+            onRenameFile={(file) => void renameOpenedFile(file)}
             onCollapse={() => {
               setPanelChoice(false);
             }}

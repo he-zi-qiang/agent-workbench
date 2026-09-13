@@ -10017,3 +10017,24 @@ p.aw-code-step-thought {
 .aw-browser-frame p {
   margin-top: 8px;
 }
+
+
+/* 画面可以操作了（ADR-0117）：点一下就有焦点，焦点在里面时方向键和空格归它。
+ * 焦点环是它唯一的状态提示——「现在按键会送进去」这件事，读者要能一眼看出来，
+ * 而不是按了没反应再去猜。`is-busy` 把光标换成等待，一次输入在路上时再点不排队。 */
+.aw-browser-stage {
+  border-radius: 4px;
+  cursor: crosshair;
+  display: block;
+  outline: none;
+}
+
+.aw-browser-stage:focus-visible,
+.aw-browser-stage:focus {
+  outline: 2px solid var(--aw-accent, #4f8cff);
+  outline-offset: 2px;
+}
+
+.aw-browser-stage.is-busy {
+  cursor: progress;
+}

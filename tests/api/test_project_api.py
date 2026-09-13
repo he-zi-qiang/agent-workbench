@@ -847,3 +847,60 @@ def test_a_taken_name_is_409_and_a_bad_name_is_400(tmp_path: Path) -> None:
 
     assert _run(world, scenario) == (409, 400, 400)
     assert not (tmp_path.parent / "escape").exists()
+
+
+def test_moving_a_file_renames_it_and_refuses_to_land_on_another(
+    tmp_path: Path,
+) -> None:
+    """ADR-0116, the person's half of `project_move`.
+
+    Same store method as the tool, same refusals: a destination that is taken
+    is 409 and nothing moves; a source that is not there is 404.
+    """
+
+    world = _World()
+
+    async def scenario(client: httpx.AsyncClient) -> tuple[Any, Any, Any, Any, Any]:
+        project_id = (await _new_project(client)).json()["project_id"]
+        await client.patch(
+            f"/v1/projects/{project_id}",
+            json={"root_path": str(tmp_path)},
+            headers=_headers(),
+        )
+        for path, content in (("a.md", "# a\n"), ("b.md", "# b\n")):
+            await client.put(
+                f"/v1/projects/{project_id}/file",
+                json={"path": path, "content": content},
+                headers=_headers(),
+            )
+        moved = await client.post(
+            f"/v1/projects/{project_id}/file/move",
+            json={"path": "a.md", "new_path": "docs/renamed.md"},
+            headers=_headers(),
+        )
+        landed = await client.post(
+            f"/v1/projects/{project_id}/file/move",
+            json={"path": "docs/renamed.md", "new_path": "b.md"},
+            headers=_headers(),
+        )
+        missing = await client.post(
+            f"/v1/projects/{project_id}/file/move",
+            json={"path": "ghost.md", "new_path": "c.md"},
+            headers=_headers(),
+        )
+        read = await client.get(
+            f"/v1/projects/{project_id}/file",
+            params={"path": "docs/renamed.md"},
+            headers=_headers(),
+        )
+        return (
+            moved.status_code,
+            moved.json()["path"],
+            landed.status_code,
+            missing.status_code,
+            read.json()["text"],
+        )
+
+    assert _run(world, scenario) == (200, "docs/renamed.md", 409, 404, "# a\n")
+    assert (tmp_path / "b.md").read_text() == "# b\n"
+    assert not (tmp_path / "a.md").exists()

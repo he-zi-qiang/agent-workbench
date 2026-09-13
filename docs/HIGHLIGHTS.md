@@ -77,6 +77,14 @@ Agent**、**导出必须由人批准**、**跨进程恢复**。被拒的那次�
 | 第七十九批（搜索不是尺子，**Windows 本机**） | 4122※※※ | **3458**※W | 1408※※※ | 863※※※ |
 | 第八十一批（runner 容器 + 浏览器接线，**Windows 本机**） | 4122※※※ | **3469**※W | 1408※※※ | 863※※※ |
 | 第八十四批（按记录作答 / 放手做 / 删与改名，**Windows 本机 + Linux 容器**） | 4122※※※ | **3573**※W / **3681**※L | 1408※※※ | **956** |
+| 第八十五批（人操作浏览器 / 右栏删改名 / 三档，**只重测前端**） | 4122※※※ | 3573※W / 3681※L | 1408※※※ | **964** |
+
+**第八十五批那一行只重测了前端一列**（2026-09-13）：`964 passed`，60 个文件（第八十四批 956，+8 全是本批的：
+`BrowserFrame.test.tsx` 三条、`CodePage.test.tsx` 五条）。离线那一列**照抄**——本批只跑了它碰到的目录：
+Windows 本机 `540 passed`（browser input API、system capabilities、code API、browser MCP、architecture、
+code session、runtime），Linux 容器 `200 passed`（`test_project_api.py`、`test_project_file_store.py`、
+`test_project_tools.py`、`test_browser_mcp_server.py`、`test_browser_input_api.py`，含本批新增的 11 条）。
+没有重跑离线全集，所以那两个数不是本批的。
 
 **第八十四批那一行重测了离线与前端两列，离线在两个平台上各跑了一次**（2026-09-13）。Windows（※W）：
 `3573 passed / 166 failed / 811 skipped`——干净 `main` 在同一台机器上是 153 个失败，多出的 13 条全是本批
@@ -204,11 +212,11 @@ Qdrant。能说的只有「`src/` 只改了一段 docstring、五个目录里没
 | 后端，真实 PostgreSQL + Qdrant（本机，空载重跑） | `4122 passed / 12 skipped`（14 分 50 秒）※※——**第六十八批那棵树的数，此后没重测（※※※）** |
 | 后端，不起任何外部服务（本机） | `3515 passed / 806 skipped`（1 分 36 秒） |
 | 后端，CI 那组服务型目录（`contracts`/`persistence`/`api`/`vector`/`e2e`） | `1408 passed / 2 skipped`（13 分 19 秒）※——**同上，此后没重测** |
-| 前端 Vitest（本机 58 个文件） | `917 passed` |
+| 前端 Vitest（本机 60 个文件） | `964 passed`（2026-09-13，第八十五批那棵树；上表逐批的数在它旁边） |
 | 前端 Playwright（本机，桌面 + 移动视口 Chromium） | `6 passed` |
 
-第二、四、五行实测于 **2026-09-05**、第七十六批那棵树（`agent工作台` 上一次 `ruff` / `pyright` /
-`pytest` 全绿的那次跑，1 分 36 秒）；第一、三行仍是 **2026-09-01** 晚第六十八批那棵树上的数
+第四行实测于 **2026-09-13**（第八十五批那棵树，行内已注明）；第二、五行实测于 **2026-09-05**、第七十六批
+那棵树（`agent工作台` 上一次 `ruff` / `pyright` / `pytest` 全绿的那次跑，1 分 36 秒）；第一、三行仍是 **2026-09-01** 晚第六十八批那棵树上的数
 （机器空载；第一行同一棵树上还有一次带负载的红跑，※※）。第七十六批**只**对着真实 PostgreSQL
 跑了它自己新增或改动的契约（`test_chat_release.py`、`test_conversation_store.py`、
 `test_chat_turn_store.py`、`test_worker_presence.py`，181 + 8 条全过），没有重跑整组服务型目录
